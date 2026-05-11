@@ -7,9 +7,10 @@ import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
 import { mockRepairOrders } from "@/lib/mockData";
 import { RepairOrder, RepairItem } from "@/types";
+type RepairOrderStatus = RepairOrder["status"];
 import { formatDate, formatCurrency } from "@/lib/utils";
 
-const statusColors = {
+const statusColors: Record<RepairOrderStatus, { badge: string; label: string }> = {
   pending: { badge: "bg-yellow-100 text-yellow-800", label: "รอดำเนิน" },
   "in-progress": { badge: "bg-blue-100 text-blue-800", label: "กำลังซ่อม" },
   completed: { badge: "bg-green-100 text-green-800", label: "เสร็จสิ้น" },
@@ -19,7 +20,7 @@ const statusColors = {
   },
 };
 
-const statusColorLabels = {
+const statusColorLabels: Record<"th" | "en", Record<RepairOrderStatus, string>> = {
   th: {
     pending: "รอดำเนิน",
     "in-progress": "กำลังซ่อม",
@@ -43,7 +44,7 @@ export default function OrdersPage() {
   const [formData, setFormData] = useState<{
     customerName: string;
     description: string;
-    status: "pending" | "in-progress" | "completed" | "ready-for-pickup";
+    status: RepairOrderStatus;
     items: RepairItem[];
   }>({
     customerName: "",
@@ -122,9 +123,9 @@ export default function OrdersPage() {
     {
       key: "status",
       label: t("orders.status", language),
-      render: (status: string) => (
-        <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[status as keyof typeof statusColors].badge}`}>
-          {statusColorLabels[language][status as keyof typeof statusColorLabels.th]}
+      render: (status: RepairOrderStatus) => (
+        <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[status].badge}`}>
+          {statusColorLabels[language][status]}
         </span>
       ),
       width: "120px",
@@ -236,7 +237,7 @@ export default function OrdersPage() {
             </label>
             <select
               value={formData.status}
-              onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+              onChange={(e) => setFormData({ ...formData, status: e.target.value as RepairOrderStatus })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="pending">{statusColorLabels[language].pending}</option>
