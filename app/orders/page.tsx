@@ -40,11 +40,16 @@ export default function OrdersPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    customerName: string;
+    description: string;
+    status: "pending" | "in-progress" | "completed" | "ready-for-pickup";
+    items: RepairItem[];
+  }>({
     customerName: "",
     description: "",
-    status: "pending" as const,
-    items: [] as RepairItem[],
+    status: "pending",
+    items: [],
   });
   const [itemInput, setItemInput] = useState({
     name: "",
