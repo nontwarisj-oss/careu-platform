@@ -1,17 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import supabase from "@/lib/supabase";
 import { useLanguage } from "@/lib/languageContext";
 import { t } from "@/lib/translations";
 import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
-import { mockCustomers } from "@/lib/mockData";
 import { Customer } from "@/types";
 import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
 
+type CustomerRow = {
+  id: string;
+  branch_id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+type BranchRow = {
+  id: string;
+};
+
+const mapCustomerRow = (customer: CustomerRow): Customer => ({
+  id: customer.id,
+  name: customer.name,
+  phone: customer.phone,
+  email: customer.email ?? "",
+  address: customer.address ?? "",
+  createdAt: new Date(customer.created_at),
+  totalSpent: 0,
+});
+
 export default function CustomersPage() {
   const { language } = useLanguage();
-  const [customers, setCustomers] = useState<Customer[]>(mockCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [formData, setFormData] = useState({
@@ -21,18 +48,71 @@ export default function CustomersPage() {
     address: "",
   });
 
-  const handleAddCustomer = () => {
-    if (formData.name && formData.phone && formData.address) {
-      const newCustomer: Customer = {
-        id: String(customers.length + 1),
-        ...formData,
-        createdAt: new Date(),
-        totalSpent: 0,
-      };
-      setCustomers([...customers, newCustomer]);
-      setFormData({ name: "", phone: "", email: "", address: "" });
-      setIsAddModalOpen(false);
+  const fetchCustomers = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, branch_id, name, phone, email, address, notes, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErrorMessage(error.message);
+      setCustomers([]);
+      setIsLoading(false);
+      return;
     }
+
+    setCustomers(((data ?? []) as CustomerRow[]).map(mapCustomerRow));
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void fetchCustomers();
+  }, [fetchCustomers]);
+
+  const handleAddCustomer = async () => {
+    if (!formData.name || !formData.phone || !formData.address) {
+      return;
+    }
+
+    setErrorMessage(null);
+
+    const { data: branches, error: branchError } = await supabase
+      .from("branches")
+      .select("id")
+      .limit(1);
+
+    if (branchError) {
+      setErrorMessage(branchError.message);
+      return;
+    }
+
+    const firstBranch = (branches?.[0] ?? null) as BranchRow | null;
+
+    if (!firstBranch) {
+      setErrorMessage("No branch found. Please seed at least one branch before adding customers.");
+      return;
+    }
+
+    const { error } = await supabase.from("customers").insert({
+      branch_id: firstBranch.id,
+      name: formData.name,
+      phone: formData.phone,
+      email: formData.email || null,
+      address: formData.address,
+      notes: null,
+    });
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    setFormData({ name: "", phone: "", email: "", address: "" });
+    setIsAddModalOpen(false);
+    await fetchCustomers();
   };
 
   const columns = [
@@ -88,26 +168,38 @@ export default function CustomersPage() {
         </button>
       </div>
 
+      {errorMessage && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
       {/* Customers Table */}
-      <Table
-        columns={columns}
-        data={customers}
-        onEdit={(customer) => {
-          setSelectedCustomer(customer);
-          setFormData({
-            name: customer.name,
-            phone: customer.phone,
-            email: customer.email || "",
-            address: customer.address,
-          });
-        }}
-        onDelete={(customer) => {
-          if (confirm(t("common.confirm", language))) {
-            setCustomers(customers.filter((c) => c.id !== customer.id));
-          }
-        }}
-        emptyMessage={t("customers.noCustomers", language)}
-      />
+      {isLoading ? (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center">
+          <p className="text-gray-500">{language === "th" ? "กำลังโหลดข้อมูล..." : "Loading..."}</p>
+        </div>
+      ) : (
+        <Table
+          columns={columns}
+          data={customers}
+          onEdit={(customer) => {
+            setSelectedCustomer(customer);
+            setFormData({
+              name: customer.name,
+              phone: customer.phone,
+              email: customer.email || "",
+              address: customer.address,
+            });
+          }}
+          onDelete={(customer) => {
+            if (confirm(t("common.confirm", language))) {
+              setCustomers(customers.filter((c) => c.id !== customer.id));
+            }
+          }}
+          emptyMessage={t("customers.noCustomers", language)}
+        />
+      )}
 
       {/* Add/Edit Customer Modal */}
       <Modal
