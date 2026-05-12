@@ -1,278 +1,149 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
-import { useLanguage } from "@/lib/languageContext";
-import { t } from "@/lib/translations";
-import { Table } from "@/components/Table";
-import { Modal } from "@/components/Modal";
-import { Customer } from "@/types";
-import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
 
-type CustomerRow = {
+type Customer = {
   id: string;
-  branch_id: string;
   name: string;
   phone: string;
-  email: string | null;
-  address: string | null;
-  notes: string | null;
-  created_at: string;
 };
 
-type BranchRow = {
+type Order = {
   id: string;
+  customer_name: string;
+  item_name: string;
+  price: number;
+  status: string;
 };
 
-const mapCustomerRow = (customer: CustomerRow): Customer => ({
-  id: customer.id,
-  name: customer.name,
-  phone: customer.phone,
-  email: customer.email ?? "",
-  address: customer.address ?? "",
-  createdAt: new Date(customer.created_at),
-  totalSpent: 0,
-});
-
-export default function CustomersPage() {
-  const { language } = useLanguage();
+export default function OrdersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [formData, setFormData] = useState({
-    name: "",
-    phone: "",
-    email: "",
-    address: "",
-  });
+  const [orders, setOrders] = useState<Order[]>([]);
 
-  const fetchCustomers = useCallback(async () => {
-    setIsLoading(true);
-    setErrorMessage(null);
-
-    const { data, error } = await supabase
-      .from("customers")
-      .select("id, branch_id, name, phone, email, address, notes, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setCustomers([]);
-      setIsLoading(false);
-      return;
-    }
-
-    setCustomers(((data ?? []) as CustomerRow[]).map(mapCustomerRow));
-    setIsLoading(false);
-  }, []);
+  const [customerId, setCustomerId] = useState("");
+  const [itemName, setItemName] = useState("");
+  const [price, setPrice] = useState("");
 
   useEffect(() => {
-    void fetchCustomers();
-  }, [fetchCustomers]);
+    fetchCustomers();
+    fetchOrders();
+  }, []);
 
-  const handleAddCustomer = async () => {
-    if (!formData.name || !formData.phone || !formData.address) {
-      return;
-    }
+  async function fetchCustomers() {
+    const { data } = await supabase
+      .from("customers")
+      .select("id,name,phone");
 
-    setIsSubmitting(true);
-    setErrorMessage(null);
+    setCustomers(data || []);
+  }
 
-    const { data: branches, error: branchError } = await supabase
-      .from("branches")
-      .select("id")
-      .limit(1);
+  async function fetchOrders() {
+    const { data } = await supabase
+      .from("orders")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-    if (branchError) {
-      setErrorMessage(branchError.message);
-      setIsSubmitting(false);
-      return;
-    }
+    setOrders(data || []);
+  }
 
-    const firstBranch = (branches?.[0] ?? null) as BranchRow | null;
+  async function handleCreateOrder() {
+    if (!customerId || !itemName || !price) return;
 
-    if (!firstBranch) {
-      setErrorMessage("No branch found. Please seed at least one branch before adding customers.");
-      setIsSubmitting(false);
-      return;
-    }
+    const customer = customers.find((c) => c.id === customerId);
 
-    const { error } = await supabase.from("customers").insert({
-      branch_id: firstBranch.id,
-      name: formData.name,
-      phone: formData.phone,
-      email: formData.email || null,
-      address: formData.address,
-      notes: null,
+    const { error } = await supabase.from("orders").insert({
+      customer_id: customerId,
+      customer_name: customer?.name || "",
+      item_name: itemName,
+      price: Number(price),
+      status: "pending",
     });
 
     if (error) {
-      setErrorMessage(error.message);
-      setIsSubmitting(false);
+      alert(error.message);
       return;
     }
 
-    setFormData({ name: "", phone: "", email: "", address: "" });
-    setIsAddModalOpen(false);
-    setIsSubmitting(false);
-    await fetchCustomers();
-  };
+    setCustomerId("");
+    setItemName("");
+    setPrice("");
 
-  const columns = [
-    {
-      key: "name",
-      label: t("customers.name", language),
-      width: "180px",
-    },
-    {
-      key: "phone",
-      label: t("customers.phone", language),
-      width: "140px",
-      render: (phone: string) => formatPhoneNumber(phone),
-    },
-    {
-      key: "email",
-      label: t("customers.email", language),
-      width: "180px",
-    },
-    {
-      key: "address",
-      label: t("customers.address", language),
-      width: "200px",
-    },
-    {
-      key: "lastOrderDate",
-      label: t("customers.lastOrder", language),
-      width: "120px",
-      render: (date: Date | undefined) => (date ? formatDate(date, language) : "-"),
-    },
-    {
-      key: "totalSpent",
-      label: t("customers.totalSpent", language),
-      width: "120px",
-      render: (amount: number) => formatCurrency(amount),
-    },
-  ];
+    fetchOrders();
+  }
 
   return (
-    <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8">
-      {/* Page Header */}
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
-            {t("customers.title", language)}
-          </h1>
+    <div className="p-8">
+      <h1 className="text-3xl font-bold mb-6">
+        คำสั่งซ่อม
+      </h1>
+
+      <div className="bg-white p-6 rounded-xl border mb-8">
+        <div className="grid gap-4">
+
+          <select
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
+            className="border p-3 rounded-lg"
+          >
+            <option value="">เลือกลูกค้า</option>
+
+            {customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>
+                {customer.name} ({customer.phone})
+              </option>
+            ))}
+          </select>
+
+          <input
+            type="text"
+            placeholder="รายการซ่อม"
+            value={itemName}
+            onChange={(e) => setItemName(e.target.value)}
+            className="border p-3 rounded-lg"
+          />
+
+          <input
+            type="number"
+            placeholder="ราคา"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className="border p-3 rounded-lg"
+          />
+
+          <button
+            onClick={handleCreateOrder}
+            className="bg-blue-600 text-white p-3 rounded-lg"
+          >
+            บันทึกคำสั่งซ่อม
+          </button>
+
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          disabled={isSubmitting}
-          className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
-        >
-          + {t("customers.addCustomer", language)}
-        </button>
       </div>
 
-      {errorMessage && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {errorMessage}
-        </div>
-      )}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="text-left p-4">ลูกค้า</th>
+              <th className="text-left p-4">งาน</th>
+              <th className="text-left p-4">ราคา</th>
+              <th className="text-left p-4">สถานะ</th>
+            </tr>
+          </thead>
 
-      {/* Customers Table */}
-      {isLoading ? (
-        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center">
-          <p className="text-gray-500">{language === "th" ? "กำลังโหลดข้อมูล..." : "Loading..."}</p>
-        </div>
-      ) : (
-        <Table
-          columns={columns}
-          data={customers}
-          onEdit={(customer) => {
-            setSelectedCustomer(customer);
-            setFormData({
-              name: customer.name,
-              phone: customer.phone,
-              email: customer.email || "",
-              address: customer.address,
-            });
-          }}
-          onDelete={(customer) => {
-            if (confirm(t("common.confirm", language))) {
-              setCustomers(customers.filter((c) => c.id !== customer.id));
-            }
-          }}
-          emptyMessage={t("customers.noCustomers", language)}
-        />
-      )}
-
-      {/* Add/Edit Customer Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => {
-          setIsAddModalOpen(false);
-          setSelectedCustomer(null);
-          setFormData({ name: "", phone: "", email: "", address: "" });
-        }}
-        title={selectedCustomer ? t("customers.edit", language) : t("customers.addCustomer", language)}
-        onSubmit={handleAddCustomer}
-      >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("customers.name", language)}
-            </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder={language === "th" ? "กรอกชื่อ" : "Enter name"}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("customers.phone", language)}
-            </label>
-            <input
-              type="tel"
-              value={formData.phone}
-              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="081-234-5678"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("customers.email", language)}
-            </label>
-            <input
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="email@example.com"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("customers.address", language)}
-            </label>
-            <textarea
-              value={formData.address}
-              onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              rows={3}
-              placeholder={language === "th" ? "กรอกที่อยู่" : "Enter address"}
-            />
-          </div>
-        </div>
-      </Modal>
+          <tbody>
+            {orders.map((order) => (
+              <tr key={order.id} className="border-t">
+                <td className="p-4">{order.customer_name}</td>
+                <td className="p-4">{order.item_name}</td>
+                <td className="p-4">฿{order.price}</td>
+                <td className="p-4">{order.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

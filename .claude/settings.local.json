@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm run *)",
+      "Bash(pnpm install *)",
+      "Bash(git -C c:/Users/tnpba/careu-platform status)",
+      "Bash(git -C c:/Users/tnpba/careu-platform diff --stat)",
+      "Bash(git -C c:/Users/tnpba/careu-platform log --oneline -5)",
+      "Bash(git -C c:/Users/tnpba/careu-platform diff package.json)",
+      "Bash(git -C c:/Users/tnpba/careu-platform add app/customers/page.tsx lib/supabase.ts package.json pnpm-lock.yaml)",
+      "Bash(git -C c:/Users/tnpba/careu-platform commit -m ' *)",
+      "Bash(git -C c:/Users/tnpba/careu-platform push origin main)",
+      "Bash(git -C c:/Users/tnpba/careu-platform pull --rebase origin main)",
+      "Bash(git -C c:/Users/tnpba/careu-platform rebase --abort)",
+      "Bash(git -C c:/Users/tnpba/careu-platform log --oneline origin/main -3)",
+      "Bash(git -C c:/Users/tnpba/careu-platform show --stat origin/main)",
+      "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:lib/supabase.ts)",
+      "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:package.json)",
+      "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:app/customers/page.tsx)",
+      "Bash(git -c core.editor=true -C c:/Users/tnpba/careu-platform rebase --continue)"
+    ]
+  }
+}
