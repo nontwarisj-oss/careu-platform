@@ -1,368 +1,217 @@
 "use client";
 
-import { useState } from "react";
-import { useLanguage } from "@/lib/languageContext";
-import { t } from "@/lib/translations";
-import { Table } from "@/components/Table";
-import { Modal } from "@/components/Modal";
-import { mockRepairOrders } from "@/lib/mockData";
-import { RepairOrder, RepairItem } from "@/types";
-type RepairOrderStatus = RepairOrder["status"];
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { useCallback, useEffect, useState } from "react";
+import supabase from "@/lib/supabase";
+import { formatCurrency } from "@/lib/utils";
 
-const statusColors: Record<RepairOrderStatus, { badge: string; label: string }> = {
-  pending: { badge: "bg-yellow-100 text-yellow-800", label: "รอดำเนิน" },
-  "in-progress": { badge: "bg-blue-100 text-blue-800", label: "กำลังซ่อม" },
-  completed: { badge: "bg-green-100 text-green-800", label: "เสร็จสิ้น" },
-  "ready-for-pickup": {
-    badge: "bg-purple-100 text-purple-800",
-    label: "พร้อมรับ",
-  },
+type Customer = {
+  id: string;
+  name: string;
+  phone: string;
 };
 
-const statusColorLabels: Record<"th" | "en", Record<RepairOrderStatus, string>> = {
-  th: {
-    pending: "รอดำเนิน",
-    "in-progress": "กำลังซ่อม",
-    completed: "เสร็จสิ้น",
-    "ready-for-pickup": "พร้อมรับ",
-  },
-  en: {
-    pending: "Pending",
-    "in-progress": "In Progress",
-    completed: "Completed",
-    "ready-for-pickup": "Ready",
-  },
+type Order = {
+  id: string;
+  customer_id: string | null;
+  customer_name: string;
+  item_name: string;
+  price: number;
+  status: string;
+  created_at: string;
 };
+
+const STATUS_OPTIONS = ["pending", "in-progress", "completed", "ready-for-pickup"] as const;
 
 export default function OrdersPage() {
-  const { language } = useLanguage();
-  const [orders, setOrders] = useState<RepairOrder[]>(mockRepairOrders);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(null);
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [formData, setFormData] = useState<{
-    customerName: string;
-    description: string;
-    status: RepairOrderStatus;
-    items: RepairItem[];
-  }>({
-    customerName: "",
-    description: "",
-    status: "pending",
-    items: [],
-  });
-  const [itemInput, setItemInput] = useState({
-    name: "",
-    description: "",
-    price: 0,
-    quantity: 1,
-  });
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddOrder = () => {
-    if (formData.customerName && formData.items.length > 0) {
-      const totalPrice = formData.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const newOrder: RepairOrder = {
-        id: `ORD${String(orders.length + 1).padStart(3, "0")}`,
-        customerId: "1",
-        customerName: formData.customerName,
-        description: formData.description,
-        items: formData.items,
-        status: formData.status,
-        createdAt: new Date(),
-        totalPrice,
-      };
-      setOrders([...orders, newOrder]);
-      setFormData({
-        customerName: "",
-        description: "",
-        status: "pending",
-        items: [],
-      });
-      setIsAddModalOpen(false);
+  const [customerId, setCustomerId] = useState("");
+  const [itemName, setItemName] = useState("");
+  const [price, setPrice] = useState("");
+  const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>("pending");
+
+  const fetchCustomers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, name, phone")
+      .order("name", { ascending: true });
+
+    if (error) {
+      setErrorMessage(error.message);
+      setCustomers([]);
+      return;
     }
-  };
 
-  const handleAddItem = () => {
-    if (itemInput.name && itemInput.price > 0) {
-      const newItem: RepairItem = {
-        id: String(formData.items.length + 1),
-        ...itemInput,
-      };
-      setFormData({
-        ...formData,
-        items: [...formData.items, newItem],
-      });
-      setItemInput({ name: "", description: "", price: 0, quantity: 1 });
+    setCustomers((data ?? []) as Customer[]);
+  }, []);
+
+  const fetchOrders = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, customer_id, customer_name, item_name, price, status, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErrorMessage(error.message);
+      setOrders([]);
+      return;
     }
-  };
 
-  const handleRemoveItem = (id: string) => {
-    setFormData({
-      ...formData,
-      items: formData.items.filter((item) => item.id !== id),
+    setOrders((data ?? []) as Order[]);
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      setIsLoading(true);
+      setErrorMessage(null);
+      await Promise.all([fetchCustomers(), fetchOrders()]);
+      setIsLoading(false);
+    })();
+  }, [fetchCustomers, fetchOrders]);
+
+  const handleCreateOrder = async () => {
+    if (!customerId || !itemName.trim() || !price) {
+      return;
+    }
+
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      setErrorMessage("Price must be a non-negative number");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    const customer = customers.find((c) => c.id === customerId);
+
+    const { error } = await supabase.from("orders").insert({
+      customer_id: customerId,
+      customer_name: customer?.name ?? "",
+      item_name: itemName.trim(),
+      price: numericPrice,
+      status,
     });
-  };
 
-  const columns = [
-    {
-      key: "id",
-      label: t("orders.orderID", language),
-      width: "100px",
-    },
-    {
-      key: "customerName",
-      label: t("orders.customerName", language),
-      width: "150px",
-    },
-    {
-      key: "description",
-      label: t("orders.description", language),
-      width: "200px",
-    },
-    {
-      key: "status",
-      label: t("orders.status", language),
-      render: (status: RepairOrderStatus) => (
-        <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[status].badge}`}>
-          {statusColorLabels[language][status]}
-        </span>
-      ),
-      width: "120px",
-    },
-    {
-      key: "totalPrice",
-      label: t("orders.totalPrice", language),
-      render: (price: number) => formatCurrency(price),
-      width: "100px",
-    },
-    {
-      key: "createdAt",
-      label: t("orders.createdDate", language),
-      render: (date: Date) => formatDate(date, language),
-      width: "110px",
-    },
-  ];
+    if (error) {
+      setErrorMessage(error.message);
+      setIsSubmitting(false);
+      return;
+    }
+
+    setCustomerId("");
+    setItemName("");
+    setPrice("");
+    setStatus("pending");
+    setIsSubmitting(false);
+    await fetchOrders();
+  };
 
   return (
     <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8">
-      {/* Page Header */}
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
-            {t("orders.title", language)}
-          </h1>
-        </div>
-        <button
-          onClick={() => {
-            setIsAddModalOpen(true);
-            setSelectedOrder(null);
-          }}
-          className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium"
-        >
-          + {t("orders.newOrder", language)}
-        </button>
+      <div className="mb-8">
+        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
+          คำสั่งซ่อม
+        </h1>
       </div>
 
-      {/* Orders Table */}
-      <Table
-        columns={columns}
-        data={orders}
-        onRowClick={(order) => {
-          setSelectedOrder(order);
-          setIsDetailModalOpen(true);
-        }}
-        onEdit={(order) => {
-          setSelectedOrder(order);
-          setFormData({
-            customerName: order.customerName,
-            description: order.description,
-            status: order.status,
-            items: order.items,
-          });
-          setIsAddModalOpen(true);
-        }}
-        onDelete={(order) => {
-          if (confirm(t("common.confirm", language))) {
-            setOrders(orders.filter((o) => o.id !== order.id));
-          }
-        }}
-        emptyMessage={language === "th" ? "ไม่มีคำสั่งซ่อม" : "No orders"}
-      />
-
-      {/* Add/Edit Order Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => {
-          setIsAddModalOpen(false);
-          setSelectedOrder(null);
-          setFormData({
-            customerName: "",
-            description: "",
-            status: "pending",
-            items: [],
-          });
-        }}
-        title={selectedOrder ? t("orders.description", language) : t("orders.newOrder", language)}
-        onSubmit={handleAddOrder}
-      >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("orders.customerName", language)}
-            </label>
-            <input
-              type="text"
-              value={formData.customerName}
-              onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("orders.description", language)}
-            </label>
-            <textarea
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              rows={2}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {t("orders.status", language)}
-            </label>
-            <select
-              value={formData.status}
-              onChange={(e) => setFormData({ ...formData, status: e.target.value as RepairOrderStatus })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="pending">{statusColorLabels[language].pending}</option>
-              <option value="in-progress">{statusColorLabels[language]["in-progress"]}</option>
-              <option value="completed">{statusColorLabels[language].completed}</option>
-              <option value="ready-for-pickup">{statusColorLabels[language]["ready-for-pickup"]}</option>
-            </select>
-          </div>
-
-          {/* Items Section */}
-          <div className="border-t pt-4">
-            <h4 className="font-medium text-gray-700 mb-3">{t("orders.items", language)}</h4>
-
-            {formData.items.length > 0 && (
-              <div className="mb-4 space-y-2">
-                {formData.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex justify-between items-center p-2 bg-gray-100 rounded"
-                  >
-                    <div>
-                      <p className="font-medium text-sm">{item.name}</p>
-                      <p className="text-xs text-gray-600">
-                        {item.quantity} x {formatCurrency(item.price)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleRemoveItem(item.id)}
-                      className="text-red-600 hover:text-red-800 font-medium text-sm"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="space-y-2 text-sm">
-              <input
-                type="text"
-                placeholder={language === "th" ? "ชื่อสิ่งของ" : "Item name"}
-                value={itemInput.name}
-                onChange={(e) => setItemInput({ ...itemInput, name: e.target.value })}
-                className="w-full px-2 py-1 border border-gray-300 rounded"
-              />
-              <input
-                type="number"
-                placeholder={t("orders.price", language)}
-                value={itemInput.price}
-                onChange={(e) => setItemInput({ ...itemInput, price: parseFloat(e.target.value) })}
-                className="w-full px-2 py-1 border border-gray-300 rounded"
-              />
-              <input
-                type="number"
-                placeholder={t("orders.quantity", language)}
-                value={itemInput.quantity}
-                onChange={(e) => setItemInput({ ...itemInput, quantity: parseInt(e.target.value) })}
-                className="w-full px-2 py-1 border border-gray-300 rounded"
-              />
-              <button
-                onClick={handleAddItem}
-                className="w-full bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition text-sm"
-              >
-                {t("orders.addItem", language)}
-              </button>
-            </div>
-          </div>
+      {errorMessage && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
         </div>
-      </Modal>
-
-      {/* Order Detail Modal */}
-      {selectedOrder && (
-        <Modal
-          isOpen={isDetailModalOpen}
-          onClose={() => setIsDetailModalOpen(false)}
-          title={`${t("orders.orderID", language)}: ${selectedOrder.id}`}
-        >
-          <div className="space-y-4">
-            <div>
-              <p className="text-sm text-gray-600">{t("orders.customerName", language)}</p>
-              <p className="font-medium text-gray-800">{selectedOrder.customerName}</p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-600">{t("orders.description", language)}</p>
-              <p className="font-medium text-gray-800">{selectedOrder.description}</p>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-600">{t("orders.status", language)}</p>
-              <span
-                className={`inline-block px-3 py-1 rounded-full text-xs font-medium ${
-                  statusColors[selectedOrder.status as keyof typeof statusColors].badge
-                }`}
-              >
-                {statusColorLabels[language][selectedOrder.status as keyof typeof statusColorLabels.th]}
-              </span>
-            </div>
-
-            <div>
-              <p className="text-sm text-gray-600 mb-2">{t("orders.items", language)}</p>
-              <div className="space-y-2">
-                {selectedOrder.items.map((item) => (
-                  <div key={item.id} className="flex justify-between text-sm p-2 bg-gray-100 rounded">
-                    <div>
-                      <p className="font-medium">{item.name}</p>
-                      <p className="text-gray-600">{item.quantity} x {formatCurrency(item.price)}</p>
-                    </div>
-                    <p className="font-medium">{formatCurrency(item.price * item.quantity)}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t pt-4 flex justify-between font-bold text-lg">
-              <span>{t("orders.totalPrice", language)}</span>
-              <span>{formatCurrency(selectedOrder.totalPrice)}</span>
-            </div>
-
-            <div className="text-sm text-gray-600">
-              {t("orders.createdDate", language)}: {formatDate(selectedOrder.createdAt, language)}
-            </div>
-          </div>
-        </Modal>
       )}
+
+      <div className="bg-white p-6 rounded-xl border mb-8">
+        <div className="grid gap-4">
+          <select
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
+            disabled={isSubmitting}
+            className="border p-3 rounded-lg"
+          >
+            <option value="">เลือกลูกค้า</option>
+            {customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>
+                {customer.name} ({customer.phone})
+              </option>
+            ))}
+          </select>
+
+          <input
+            type="text"
+            placeholder="รายการซ่อม"
+            value={itemName}
+            onChange={(e) => setItemName(e.target.value)}
+            disabled={isSubmitting}
+            className="border p-3 rounded-lg"
+          />
+
+          <input
+            type="number"
+            placeholder="ราคา"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            disabled={isSubmitting}
+            className="border p-3 rounded-lg"
+          />
+
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as (typeof STATUS_OPTIONS)[number])}
+            disabled={isSubmitting}
+            className="border p-3 rounded-lg"
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <button
+            onClick={handleCreateOrder}
+            disabled={isSubmitting || !customerId || !itemName.trim() || !price}
+            className="bg-blue-600 text-white p-3 rounded-lg disabled:opacity-50"
+          >
+            บันทึกคำสั่งซ่อม
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        {isLoading ? (
+          <div className="p-8 text-center text-gray-500">กำลังโหลด...</div>
+        ) : orders.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">ไม่มีคำสั่งซ่อม</div>
+        ) : (
+          <table className="w-full">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="text-left p-4">ลูกค้า</th>
+                <th className="text-left p-4">งาน</th>
+                <th className="text-left p-4">ราคา</th>
+                <th className="text-left p-4">สถานะ</th>
+                <th className="text-left p-4">วันที่</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((order) => (
+                <tr key={order.id} className="border-t">
+                  <td className="p-4">{order.customer_name}</td>
+                  <td className="p-4">{order.item_name}</td>
+                  <td className="p-4">{formatCurrency(order.price)}</td>
+                  <td className="p-4">{order.status}</td>
+                  <td className="p-4">
+                    {new Date(order.created_at).toLocaleDateString("th-TH")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,22 +1,38 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useLanguage } from "@/lib/languageContext";
 import { t } from "@/lib/translations";
 import { StatCard } from "@/components/StatCard";
 import { Table } from "@/components/Table";
-import { mockRepairOrders, mockDailySales } from "@/lib/mockData";
-import { RepairOrder } from "@/types";
+import supabase from "@/lib/supabase";
 import Link from "next/link";
-import { formatDate } from "@/lib/utils";
 
-const statusBadges = {
+type OrderRow = {
+  id: string;
+  customer_name: string;
+  item_name: string;
+  price: number;
+  status: string;
+  created_at: string;
+};
+
+type RecentOrder = {
+  id: string;
+  customerName: string;
+  itemName: string;
+  status: string;
+  price: number;
+};
+
+const statusBadges: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
   "in-progress": "bg-blue-100 text-blue-800",
   completed: "bg-green-100 text-green-800",
   "ready-for-pickup": "bg-purple-100 text-purple-800",
 };
 
-const statusLabels = {
+const statusLabels: Record<"th" | "en", Record<string, string>> = {
   th: {
     pending: "รอดำเนิน",
     "in-progress": "กำลังซ่อม",
@@ -31,23 +47,78 @@ const statusLabels = {
   },
 };
 
+function isToday(iso: string): boolean {
+  const d = new Date(iso);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
 export default function Dashboard() {
   const { language } = useLanguage();
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      setIsLoading(true);
+      setErrorMessage(null);
+      const { data, error } = await supabase
+        .from("orders")
+        .select("id, customer_name, item_name, price, status, created_at")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setErrorMessage(error.message);
+        setOrders([]);
+      } else {
+        setOrders((data ?? []) as OrderRow[]);
+      }
+      setIsLoading(false);
+    })();
+  }, []);
+
+  const todaysOrders = useMemo(() => orders.filter((o) => isToday(o.created_at)), [orders]);
+
+  const stats = useMemo(() => {
+    const dailyRevenue = todaysOrders.reduce((sum, o) => sum + Number(o.price ?? 0), 0);
+    const totalOrders = todaysOrders.length;
+    const completedOrders = todaysOrders.filter((o) => o.status === "completed").length;
+    const pendingOrders = todaysOrders.filter((o) => o.status === "pending").length;
+    return { dailyRevenue, totalOrders, completedOrders, pendingOrders };
+  }, [todaysOrders]);
+
+  const recentOrders: RecentOrder[] = useMemo(
+    () =>
+      orders.slice(0, 5).map((o) => ({
+        id: o.id,
+        customerName: o.customer_name,
+        itemName: o.item_name,
+        status: o.status,
+        price: Number(o.price ?? 0),
+      })),
+    [orders]
+  );
 
   const columns = [
     {
       key: "id",
       label: language === "th" ? "เลขที่" : "Order ID",
-      width: "100px",
+      width: "120px",
+      render: (id: string) => <span className="font-mono text-xs">{id.slice(0, 8)}</span>,
     },
     {
       key: "customerName",
       label: language === "th" ? "ชื่อลูกค้า" : "Customer",
-      width: "150px",
+      width: "180px",
     },
     {
-      key: "description",
-      label: language === "th" ? "รายละเอียด" : "Description",
+      key: "itemName",
+      label: language === "th" ? "รายการ" : "Item",
       width: "200px",
     },
     {
@@ -55,14 +126,16 @@ export default function Dashboard() {
       label: language === "th" ? "สถานะ" : "Status",
       render: (status: string) => (
         <span
-          className={`px-3 py-1 rounded-full text-xs font-medium ${statusBadges[status as keyof typeof statusBadges]}`}
+          className={`px-3 py-1 rounded-full text-xs font-medium ${
+            statusBadges[status] ?? "bg-gray-100 text-gray-700"
+          }`}
         >
-          {statusLabels[language][status as keyof typeof statusLabels.th]}
+          {statusLabels[language][status] ?? status}
         </span>
       ),
     },
     {
-      key: "totalPrice",
+      key: "price",
       label: language === "th" ? "ราคา (บาท)" : "Price (฿)",
       render: (price: number) => `฿${price.toLocaleString()}`,
     },
@@ -80,29 +153,35 @@ export default function Dashboard() {
         </p>
       </div>
 
+      {errorMessage && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-8">
         <StatCard
           title={t("dashboard.dailySales", language)}
-          value={`฿${mockDailySales.totalRevenue.toLocaleString()}`}
+          value={`฿${stats.dailyRevenue.toLocaleString()}`}
           icon="💰"
           color="green"
         />
         <StatCard
           title={t("dashboard.totalOrders", language)}
-          value={mockDailySales.totalOrders}
+          value={stats.totalOrders}
           icon="🔧"
           color="blue"
         />
         <StatCard
           title={t("dashboard.completedToday", language)}
-          value={mockDailySales.completedOrders}
+          value={stats.completedOrders}
           icon="✅"
           color="purple"
         />
         <StatCard
           title={t("dashboard.pendingOrders", language)}
-          value={mockDailySales.pendingOrders}
+          value={stats.pendingOrders}
           icon="⏳"
           color="orange"
         />
@@ -121,62 +200,17 @@ export default function Dashboard() {
             {language === "th" ? "ดูทั้งหมด →" : "View All →"}
           </Link>
         </div>
-        <Table columns={columns} data={mockRepairOrders.slice(0, 5)} />
-      </div>
-
-      {/* Quick Stats Footer */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">
-            {language === "th" ? "สัปดาห์นี้" : "This Week"}
-          </h3>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "รายได้รวม" : "Total Revenue"}
-              </span>
-              <span className="font-bold text-gray-800">฿9,500</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "จำนวนคำสั่งซ่อม" : "Total Orders"}
-              </span>
-              <span className="font-bold text-gray-800">12</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "มูลค่าเฉลี่ย" : "Average"}
-              </span>
-              <span className="font-bold text-gray-800">฿792</span>
-            </div>
+        {isLoading ? (
+          <div className="p-8 text-center text-gray-500">
+            {language === "th" ? "กำลังโหลด..." : "Loading..."}
           </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-4">
-            {language === "th" ? "เดือนนี้" : "This Month"}
-          </h3>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "รายได้รวม" : "Total Revenue"}
-              </span>
-              <span className="font-bold text-gray-800">฿45,230</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "จำนวนคำสั่งซ่อม" : "Total Orders"}
-              </span>
-              <span className="font-bold text-gray-800">58</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">
-                {language === "th" ? "มูลค่าเฉลี่ย" : "Average"}
-              </span>
-              <span className="font-bold text-gray-800">฿780</span>
-            </div>
-          </div>
-        </div>
+        ) : (
+          <Table
+            columns={columns}
+            data={recentOrders}
+            emptyMessage={language === "th" ? "ไม่มีคำสั่งซ่อม" : "No orders yet"}
+          />
+        )}
       </div>
     </div>
   );
