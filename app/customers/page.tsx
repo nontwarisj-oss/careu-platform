@@ -39,6 +39,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [formData, setFormData] = useState({
@@ -77,6 +78,7 @@ export default function CustomersPage() {
       return;
     }
 
+    setIsSubmitting(true);
     setErrorMessage(null);
 
     const { data: branches, error: branchError } = await supabase
@@ -86,6 +88,7 @@ export default function CustomersPage() {
 
     if (branchError) {
       setErrorMessage(branchError.message);
+      setIsSubmitting(false);
       return;
     }
 
@@ -93,6 +96,7 @@ export default function CustomersPage() {
 
     if (!firstBranch) {
       setErrorMessage("No branch found. Please seed at least one branch before adding customers.");
+      setIsSubmitting(false);
       return;
     }
 
@@ -107,11 +111,13 @@ export default function CustomersPage() {
 
     if (error) {
       setErrorMessage(error.message);
+      setIsSubmitting(false);
       return;
     }
 
     setFormData({ name: "", phone: "", email: "", address: "" });
     setIsAddModalOpen(false);
+    setIsSubmitting(false);
     await fetchCustomers();
   };
 
@@ -162,7 +168,8 @@ export default function CustomersPage() {
         </div>
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium"
+          disabled={isSubmitting}
+          className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
         >
           + {t("customers.addCustomer", language)}
         </button>
