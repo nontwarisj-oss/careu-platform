@@ -86,11 +86,12 @@ export default function Dashboard() {
 
   const stats = useMemo(() => {
     const dailyRevenue = todaysOrders.reduce((sum, o) => sum + Number(o.price ?? 0), 0);
-    const totalOrders = todaysOrders.length;
-    const completedOrders = todaysOrders.filter((o) => o.status === "completed").length;
-    const pendingOrders = todaysOrders.filter((o) => o.status === "pending").length;
-    return { dailyRevenue, totalOrders, completedOrders, pendingOrders };
-  }, [todaysOrders]);
+    const todayOrderCount = todaysOrders.length;
+    const totalPending = orders.filter((o) => o.status === "pending").length;
+    const totalInProgress = orders.filter((o) => o.status === "in-progress").length;
+    const totalCompleted = orders.filter((o) => o.status === "completed").length;
+    return { dailyRevenue, todayOrderCount, totalPending, totalInProgress, totalCompleted };
+  }, [orders, todaysOrders]);
 
   const recentOrders: RecentOrder[] = useMemo(
     () =>
@@ -160,7 +161,7 @@ export default function Dashboard() {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-8">
         <StatCard
           title={t("dashboard.dailySales", language)}
           value={`฿${stats.dailyRevenue.toLocaleString()}`}
@@ -169,21 +170,27 @@ export default function Dashboard() {
         />
         <StatCard
           title={t("dashboard.totalOrders", language)}
-          value={stats.totalOrders}
+          value={stats.todayOrderCount}
           icon="🔧"
           color="blue"
         />
         <StatCard
-          title={t("dashboard.completedToday", language)}
-          value={stats.completedOrders}
-          icon="✅"
-          color="purple"
-        />
-        <StatCard
-          title={t("dashboard.pendingOrders", language)}
-          value={stats.pendingOrders}
+          title={t("orders.pending", language)}
+          value={stats.totalPending}
           icon="⏳"
           color="orange"
+        />
+        <StatCard
+          title={t("orders.inProgress", language)}
+          value={stats.totalInProgress}
+          icon="🛠️"
+          color="blue"
+        />
+        <StatCard
+          title={t("orders.completed", language)}
+          value={stats.totalCompleted}
+          icon="✅"
+          color="purple"
         />
       </div>
 

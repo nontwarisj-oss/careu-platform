@@ -1,3 +1,4 @@
+
 -- Orders table aligned with the frontend (app/orders/page.tsx, app/invoices/page.tsx).
 -- One row per order line — price and item_name live on the order itself
 -- (the app does not split orders into separate line-item records).

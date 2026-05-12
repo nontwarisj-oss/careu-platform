@@ -32,7 +32,16 @@ export default function InvoicesPage() {
         setErrorMessage(error.message);
         setInvoices([]);
       } else {
-        setInvoices((data ?? []) as InvoiceRow[]);
+        setInvoices(
+          (data ?? []).map((row) => ({
+            id: String(row.id),
+            customer_name: row.customer_name ?? "",
+            item_name: row.item_name ?? "",
+            price: Number(row.price ?? 0),
+            status: row.status ?? "",
+            created_at: row.created_at,
+          }))
+        );
       }
       setIsLoading(false);
     })();
