@@ -21,6 +21,7 @@ import {
   type ServiceCategoryKey,
 } from "@/lib/pricing";
 import { createSmartOrder } from "@/lib/orderCreate";
+import { normalizePhone } from "@/lib/phone";
 
 type Customer = {
   id: string;
@@ -59,10 +60,6 @@ interface SmartOrderFormProps {
   variant?: "intake" | "manage";
   /** Optional callback after a successful create. */
   onCreated?: (summary: SmartOrderCreatedSummary) => void;
-}
-
-function normalizePhone(value: string): string {
-  return (value ?? "").replace(/\D/g, "");
 }
 
 const NEEDS_QUOTE_TH = "ต้องประเมินราคา";

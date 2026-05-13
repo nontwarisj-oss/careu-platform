@@ -36,10 +36,19 @@ type CustomerStats = {
   latestDate: string | null;
 };
 
+type CustomerSegment = "vip" | "repeat" | "new";
+
 type EnrichedCustomer = Customer & {
   orderCount: number;
   isRepeat: boolean;
+  segment: CustomerSegment;
 };
+
+function classifySegment(orderCount: number): CustomerSegment {
+  if (orderCount >= 5) return "vip";
+  if (orderCount >= 2) return "repeat";
+  return "new";
+}
 
 const mapCustomerRow = (customer: CustomerRow): Customer => ({
   id: customer.id,
@@ -189,6 +198,7 @@ export default function CustomersPage() {
         lastOrderDate: stats?.latestDate ? new Date(stats.latestDate) : undefined,
         orderCount,
         isRepeat: orderCount >= 2,
+        segment: classifySegment(orderCount),
       };
     });
   }, [customers, statsByCustomer]);
@@ -204,12 +214,26 @@ export default function CustomersPage() {
 
   const crmSummary = useMemo(() => {
     const totalCustomers = enrichedCustomers.length;
-    const repeatCustomers = enrichedCustomers.filter((c) => c.isRepeat).length;
+    const newCustomers = enrichedCustomers.filter(
+      (c) => c.segment === "new"
+    ).length;
+    const repeatCustomers = enrichedCustomers.filter(
+      (c) => c.segment === "repeat"
+    ).length;
+    const vipCustomers = enrichedCustomers.filter(
+      (c) => c.segment === "vip"
+    ).length;
     const totalRevenue = enrichedCustomers.reduce(
       (s, c) => s + (c.totalSpent ?? 0),
       0
     );
-    return { totalCustomers, repeatCustomers, totalRevenue };
+    return {
+      totalCustomers,
+      newCustomers,
+      repeatCustomers,
+      vipCustomers,
+      totalRevenue,
+    };
   }, [enrichedCustomers]);
 
   const handleImportFile = async (file: File) => {
@@ -241,7 +265,7 @@ export default function CustomersPage() {
       const json = (await res.json()) as {
         ok?: boolean;
         inserted?: number;
-        duplicates?: number;
+        matchedExisting?: number;
         skipped?: number;
         totalRows?: number;
         error?: string;
@@ -249,10 +273,12 @@ export default function CustomersPage() {
       if (!res.ok || json.error) {
         setSyncMessage(json.error ?? `Sync failed (HTTP ${res.status})`);
       } else {
+        const added = json.inserted ?? 0;
+        const matched = json.matchedExisting ?? 0;
         setSyncMessage(
           language === "th"
-            ? `ซิงค์สำเร็จ • เพิ่ม ${json.inserted ?? 0} • ซ้ำ ${json.duplicates ?? 0} • ข้าม ${json.skipped ?? 0}`
-            : `Synced • added ${json.inserted ?? 0}, duplicates ${json.duplicates ?? 0}, skipped ${json.skipped ?? 0}`
+            ? `ซิงค์ลูกค้าเสร็จแล้ว\nเพิ่มใหม่ ${added} ราย\nอัปเดตลูกค้าเดิม ${matched} ราย`
+            : `Customer sync complete\nAdded ${added} new\nKept ${matched} existing`
         );
         await Promise.all([fetchCustomers(), fetchCustomerStats()]);
       }
@@ -289,12 +315,12 @@ export default function CustomersPage() {
 
     setImportMessage(
       language === "th"
-        ? `นำเข้าสำเร็จ ${result.inserted} ราย • ซ้ำ ${result.duplicates} • ข้าม ${result.skipped}`
-        : `Imported ${result.inserted}, duplicates ${result.duplicates}, skipped ${result.skipped}`
+        ? `นำเข้าเสร็จแล้ว • เพิ่มใหม่ ${result.inserted} ราย • อัปเดตลูกค้าเดิม ${result.matchedExisting} ราย`
+        : `Imported • added ${result.inserted}, kept existing ${result.matchedExisting}`
     );
     setImportPreview([]);
     setIsSubmitting(false);
-    await fetchCustomers();
+    await Promise.all([fetchCustomers(), fetchCustomerStats()]);
   };
 
   const columns = [
@@ -348,26 +374,40 @@ export default function CustomersPage() {
       ),
     },
     {
-      key: "isRepeat",
+      key: "segment",
       label: language === "th" ? "ประเภทลูกค้า" : "Type",
       width: "140px",
-      render: (isRepeat: boolean) => (
-        <span
-          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-            isRepeat
-              ? "bg-green-50 text-green-800 border-green-200"
-              : "bg-gray-50 text-gray-700 border-gray-200"
-          }`}
-        >
-          {isRepeat
-            ? language === "th"
-              ? "ลูกค้าประจำ"
-              : "Repeat"
-            : language === "th"
-            ? "ลูกค้าใหม่"
-            : "New"}
-        </span>
-      ),
+      render: (segment: CustomerSegment) => {
+        const map: Record<
+          CustomerSegment,
+          { th: string; en: string; classes: string }
+        > = {
+          vip: {
+            th: "VIP",
+            en: "VIP",
+            classes:
+              "bg-yellow-50 text-yellow-800 border-yellow-300",
+          },
+          repeat: {
+            th: "ลูกค้าประจำ",
+            en: "Repeat",
+            classes: "bg-green-50 text-green-800 border-green-200",
+          },
+          new: {
+            th: "ลูกค้าใหม่",
+            en: "New",
+            classes: "bg-gray-50 text-gray-700 border-gray-200",
+          },
+        };
+        const tone = map[segment];
+        return (
+          <span
+            className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${tone.classes}`}
+          >
+            {language === "th" ? tone.th : tone.en}
+          </span>
+        );
+      },
     },
   ];
 
@@ -416,7 +456,7 @@ export default function CustomersPage() {
       </div>
 
       {/* CRM summary band */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <p className="text-xs text-gray-500">
             {language === "th" ? "ลูกค้าทั้งหมด" : "Total customers"}
@@ -425,31 +465,47 @@ export default function CustomersPage() {
             {crmSummary.totalCustomers}
           </p>
         </div>
+        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+          <p className="text-xs text-gray-500">
+            {language === "th" ? "ลูกค้าใหม่" : "New"}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-gray-900">
+            {crmSummary.newCustomers}
+          </p>
+        </div>
         <div className="rounded-2xl border border-green-100 bg-green-50 p-4 shadow-sm">
           <p className="text-xs text-green-800">
-            {language === "th" ? "ลูกค้าประจำ (≥ 2 ครั้ง)" : "Repeat customers"}
+            {language === "th" ? "ลูกค้าประจำ" : "Repeat"}
           </p>
           <p className="mt-1 text-2xl font-bold text-green-900">
             {crmSummary.repeatCustomers}
           </p>
         </div>
-        <div className="rounded-2xl border border-yellow-100 bg-yellow-50 p-4 shadow-sm col-span-2 lg:col-span-1">
+        <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 shadow-sm">
           <p className="text-xs text-yellow-800">
-            {language === "th" ? "ยอดใช้จ่ายรวม" : "Total spend"}
+            {language === "th" ? "VIP (≥ 5 ครั้ง)" : "VIP (≥ 5)"}
           </p>
           <p className="mt-1 text-2xl font-bold text-yellow-900">
+            {crmSummary.vipCustomers}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-green-200 bg-gradient-to-br from-green-50 to-yellow-50 p-4 shadow-sm col-span-2 lg:col-span-1">
+          <p className="text-xs text-green-800">
+            {language === "th" ? "ยอดใช้จ่ายรวม" : "Total spend"}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-green-900">
             {formatCurrency(crmSummary.totalRevenue)}
           </p>
         </div>
       </div>
 
       {syncMessage && (
-        <div className="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900 flex items-start justify-between gap-3">
-          <span>{syncMessage}</span>
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900 flex items-start justify-between gap-3">
+          <span className="whitespace-pre-line leading-relaxed">{syncMessage}</span>
           <button
             type="button"
             onClick={() => setSyncMessage(null)}
-            className="text-yellow-800 hover:text-yellow-900"
+            className="text-green-700 hover:text-green-900 -mt-0.5"
             aria-label="dismiss"
           >
             ✕

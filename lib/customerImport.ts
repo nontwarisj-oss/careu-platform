@@ -1,4 +1,5 @@
 import supabase from "@/lib/supabase";
+import { normalizePhone } from "@/lib/phone";
 
 export type ParsedCustomerRow = {
   name: string;
@@ -8,15 +9,17 @@ export type ParsedCustomerRow = {
 };
 
 export type ImportResult = {
+  /** Newly created customer rows. */
   inserted: number;
-  skipped: number;     // rows missing name or phone
-  duplicates: number;  // rows skipped because phone already exists
+  /** Rows skipped because they were missing name or phone. */
+  skipped: number;
+  /** Rows whose phone already exists in the system — kept, not duplicated. */
+  matchedExisting: number;
   error: string | null;
 };
 
-export function normalizePhone(value: string): string {
-  return (value ?? "").replace(/\D/g, "");
-}
+// Re-export so older callers keep working.
+export { normalizePhone };
 
 function splitCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -70,12 +73,18 @@ export function parseCustomersCsv(text: string): ParsedCustomerRow[] {
 }
 
 /**
- * Insert parsed rows into public.customers. Behavior:
- *   - Rows missing name OR phone are skipped (counted in `skipped`).
+ * Insert parsed rows into public.customers. Identity is keyed on the
+ * canonical Thai 10-digit phone (see lib/phone.ts), so the same person never
+ * gets a second row whether the source wrote "081-234-5678", "+66 81 234
+ * 5678", or "812345678".
+ *
+ * Behavior:
+ *   - Rows missing name OR phone are reported as `skipped` and ignored.
  *   - Empty email/address default to "N/A".
  *   - Duplicate phones (against existing customers and within the same
- *     batch) are skipped (counted in `duplicates`). Phone is normalized
- *     to digits-only for comparison.
+ *     batch) are reported as `matchedExisting` and ignored — the original
+ *     row is left untouched; CRM aggregations (visits, totals) are
+ *     computed dynamically by joining /orders elsewhere.
  *   - Surviving rows are inserted with the provided branch_id.
  */
 export async function importCustomerRows(
@@ -93,19 +102,24 @@ export async function importCustomerRows(
 
   const skipped = rows.length - valid.length;
   if (valid.length === 0) {
-    return { inserted: 0, skipped, duplicates: 0, error: null };
+    return { inserted: 0, skipped, matchedExisting: 0, error: null };
   }
 
   const { data: existing, error: fetchError } = await supabase
     .from("customers")
     .select("phone");
   if (fetchError) {
-    return { inserted: 0, skipped, duplicates: 0, error: fetchError.message };
+    return {
+      inserted: 0,
+      skipped,
+      matchedExisting: 0,
+      error: fetchError.message,
+    };
   }
 
   const existingPhones = new Set(
     (existing ?? [])
-      .map((r) => normalizePhone((r as { phone: string | null }).phone ?? ""))
+      .map((r) => normalizePhone((r as { phone: string | null }).phone))
       .filter((p) => p.length > 0)
   );
 
@@ -119,23 +133,34 @@ export async function importCustomerRows(
     return true;
   });
 
-  const duplicates = valid.length - unique.length;
+  const matchedExisting = valid.length - unique.length;
 
   if (unique.length === 0) {
-    return { inserted: 0, skipped, duplicates, error: null };
+    return { inserted: 0, skipped, matchedExisting, error: null };
   }
 
   const payload = unique.map((r) => ({
     ...r,
     branch_id: branchId,
     notes: null,
+    normalized_phone: normalizePhone(r.phone),
   }));
 
-  const { error } = await supabase.from("customers").insert(payload);
+  // Retry without normalized_phone if the migration hasn't been applied yet.
+  let res = await supabase.from("customers").insert(payload);
+  if (
+    res.error &&
+    /column .* does not exist|schema cache/i.test(res.error.message)
+  ) {
+    res = await supabase
+      .from("customers")
+      .insert(payload.map(({ normalized_phone: _drop, ...rest }) => rest));
+  }
+
   return {
-    inserted: error ? 0 : unique.length,
+    inserted: res.error ? 0 : unique.length,
     skipped,
-    duplicates,
-    error: error?.message ?? null,
+    matchedExisting,
+    error: res.error?.message ?? null,
   };
 }

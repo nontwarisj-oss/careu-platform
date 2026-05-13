@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
+import { getBranchById } from "@/lib/brandConfig";
+import { getServiceByCode } from "@/lib/pricing";
 
 type HistoryOrder = {
   id: string;
   item_name: string;
+  service_name: string | null;
+  service_code: string | null;
   price: number;
   status: string;
   created_at: string;
+  branch_id: string | null;
 };
 
 interface CustomerHistoryModalProps {
@@ -52,26 +57,55 @@ export function CustomerHistoryModal({
       setIsLoading(true);
       setErrorMessage(null);
 
-      const { data, error } = await supabase
+      // Try the wide projection (service_name / branch_id) and fall back to
+      // legacy columns if the smart-order migration hasn't been run.
+      type RawRow = {
+        id: string;
+        item_name?: string | null;
+        service_name?: string | null;
+        service_code?: string | null;
+        price: number | string | null;
+        status?: string | null;
+        created_at: string;
+        branch_id?: string | null;
+      };
+      let rawRows: RawRow[] | null = null;
+      const wide = await supabase
         .from("orders")
-        .select("id, item_name, price, status, created_at")
+        .select(
+          "id, item_name, service_name, service_code, price, status, created_at, branch_id"
+        )
         .eq("customer_id", customerId)
         .order("created_at", { ascending: false });
-
-      if (error) {
-        setErrorMessage(error.message);
-        setOrders([]);
+      if (!wide.error) {
+        rawRows = (wide.data ?? []) as unknown as RawRow[];
       } else {
-        setOrders(
-          (data ?? []).map((r) => ({
-            id: String(r.id),
-            item_name: r.item_name ?? "",
-            price: Number(r.price ?? 0),
-            status: r.status ?? "",
-            created_at: r.created_at,
-          }))
-        );
+        const narrow = await supabase
+          .from("orders")
+          .select("id, item_name, price, status, created_at")
+          .eq("customer_id", customerId)
+          .order("created_at", { ascending: false });
+        if (narrow.error) {
+          setErrorMessage(narrow.error.message);
+          setOrders([]);
+          setIsLoading(false);
+          return;
+        }
+        rawRows = (narrow.data ?? []) as unknown as RawRow[];
       }
+
+      setOrders(
+        rawRows.map((r) => ({
+          id: String(r.id),
+          item_name: r.item_name ?? "",
+          service_name: r.service_name ?? null,
+          service_code: r.service_code ?? null,
+          price: Number(r.price ?? 0),
+          status: r.status ?? "",
+          created_at: r.created_at,
+          branch_id: r.branch_id ?? null,
+        }))
+      );
       setIsLoading(false);
     })();
   }, [isOpen, customerId]);
@@ -80,7 +114,30 @@ export function CustomerHistoryModal({
     const totalOrders = orders.length;
     const totalSpent = orders.reduce((s, o) => s + o.price, 0);
     const latestDate = orders[0]?.created_at ?? null;
-    return { totalOrders, totalSpent, latestDate };
+    const latest = orders[0];
+    const latestService = latest
+      ? latest.service_name ??
+        getServiceByCode(latest.service_code ?? undefined)?.nameTh ??
+        latest.item_name
+      : null;
+    const branchCounts = new Map<string, number>();
+    for (const o of orders) {
+      if (!o.branch_id) continue;
+      branchCounts.set(o.branch_id, (branchCounts.get(o.branch_id) ?? 0) + 1);
+    }
+    const branches = Array.from(branchCounts.entries())
+      .map(([id, count]) => ({ id, count, label: getBranchById(id).shortLabel }))
+      .sort((a, b) => b.count - a.count);
+    const segment: "vip" | "repeat" | "new" =
+      totalOrders >= 5 ? "vip" : totalOrders >= 2 ? "repeat" : "new";
+    return {
+      totalOrders,
+      totalSpent,
+      latestDate,
+      latestService,
+      branches,
+      segment,
+    };
   }, [orders]);
 
   if (!isOpen) return null;
@@ -98,12 +155,17 @@ export function CustomerHistoryModal({
               <h2 className="text-xl font-bold truncate">
                 {customerName || "-"}
               </h2>
-              {summary.totalOrders >= 2 && (
+              {summary.segment === "vip" && (
                 <span className="px-2 py-0.5 rounded-full bg-yellow-300 text-green-900 text-[10px] font-bold uppercase tracking-wide">
+                  VIP
+                </span>
+              )}
+              {summary.segment === "repeat" && (
+                <span className="px-2 py-0.5 rounded-full bg-green-300 text-green-900 text-[10px] font-bold uppercase tracking-wide">
                   ลูกค้าประจำ
                 </span>
               )}
-              {summary.totalOrders === 0 && (
+              {summary.segment === "new" && (
                 <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-bold uppercase tracking-wide">
                   ลูกค้าใหม่
                 </span>
@@ -153,8 +215,31 @@ export function CustomerHistoryModal({
                   })
                 : "-"}
             </p>
+            {summary.latestService && (
+              <p className="text-[11px] text-gray-500 mt-1 truncate">
+                บริการ: {summary.latestService}
+              </p>
+            )}
           </div>
         </div>
+
+        {summary.branches.length > 0 && (
+          <div className="px-4 md:px-6 -mt-2 mb-2">
+            <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+              สาขาที่เข้าใช้บริการ
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {summary.branches.map((b) => (
+                <span
+                  key={b.id}
+                  className="px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-800 text-[11px] font-medium"
+                >
+                  {b.label} • {b.count} ครั้ง
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Body */}
         <div className="px-4 md:px-6 pb-6">
@@ -186,6 +271,9 @@ export function CustomerHistoryModal({
                       รายการ
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
+                      สาขา
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">
                       สถานะ
                     </th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700">
@@ -194,28 +282,38 @@ export function CustomerHistoryModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map((o) => (
-                    <tr key={o.id} className="border-b border-gray-100">
-                      <td className="px-4 py-3 text-sm text-gray-700">
-                        {new Date(o.created_at).toLocaleDateString("th-TH")}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-800">
-                        {o.item_name || "-"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            statusBadge[o.status] ?? "bg-gray-100 text-gray-700"
-                          }`}
-                        >
-                          {statusLabelTh[o.status] ?? o.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right font-semibold text-green-700">
-                        {formatCurrency(o.price)}
-                      </td>
-                    </tr>
-                  ))}
+                  {orders.map((o) => {
+                    const label =
+                      o.service_name ??
+                      getServiceByCode(o.service_code ?? undefined)?.nameTh ??
+                      o.item_name ??
+                      "-";
+                    return (
+                      <tr key={o.id} className="border-b border-gray-100">
+                        <td className="px-4 py-3 text-sm text-gray-700">
+                          {new Date(o.created_at).toLocaleDateString("th-TH")}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-800">
+                          {label}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">
+                          {o.branch_id ? getBranchById(o.branch_id).shortLabel : "-"}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              statusBadge[o.status] ?? "bg-gray-100 text-gray-700"
+                            }`}
+                          >
+                            {statusLabelTh[o.status] ?? o.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right font-semibold text-green-700">
+                          {formatCurrency(o.price)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
