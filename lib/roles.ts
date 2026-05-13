@@ -25,7 +25,9 @@ export type PageKey =
   | "intake"
   | "customers"
   | "orders"
-  | "invoices";
+  | "invoices"
+  | "expenses"
+  | "reports";
 
 export type RoleDefinition = {
   role: Role;
@@ -74,7 +76,7 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
     labelTh: "บัญชี",
     labelEn: "Accounting",
     dashboards: ["accounting"],
-    pages: ["dashboard", "invoices", "customers"],
+    pages: ["dashboard", "invoices", "customers", "expenses", "reports"],
     allBranches: true,
     seesFinancials: true,
   },
@@ -83,7 +85,15 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
     labelTh: "ผู้จัดการสาขา",
     labelEn: "Manager",
     dashboards: ["manager", "frontdesk", "production", "accounting"],
-    pages: ["dashboard", "intake", "customers", "orders", "invoices"],
+    pages: [
+      "dashboard",
+      "intake",
+      "customers",
+      "orders",
+      "invoices",
+      "expenses",
+      "reports",
+    ],
     allBranches: false,
     seesFinancials: true,
   },

@@ -27,6 +27,10 @@ const ICON_PATHS = {
     "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z",
   invoices:
     "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
+  expenses:
+    "M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1H6.32c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z",
+  reports:
+    "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14H7v-7h3v7zm4 0h-3V7h3v10zm4 0h-3v-4h3v4z",
 };
 
 const Icon = ({ d }: { d: string }) => (
@@ -58,6 +62,18 @@ const Sidebar: React.FC = () => {
     { href: "/customers", page: "customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
     { href: "/orders", page: "orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
     { href: "/invoices", page: "invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
+    {
+      href: "/expenses",
+      page: "expenses",
+      label: language === "th" ? "ค่าใช้จ่าย" : "Expenses",
+      iconPath: ICON_PATHS.expenses,
+    },
+    {
+      href: "/reports",
+      page: "reports",
+      label: language === "th" ? "รายงาน" : "Reports",
+      iconPath: ICON_PATHS.reports,
+    },
   ];
 
   const navItems = allNavItems.filter((item) => canAccessPage(role, item.page));

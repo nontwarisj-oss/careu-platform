@@ -11,15 +11,29 @@ import {
   sumRevenue,
 } from "@/lib/analytics";
 
+import {
+  filterThisMonthExpenses,
+  sumExpenses,
+  type ExpenseRow,
+} from "@/lib/expenses";
+
 interface ManagerDashboardProps {
   orders: AnalyticsOrder[];
+  expenses: ExpenseRow[];
   branchId: string;
 }
 
-export function ManagerDashboard({ orders, branchId }: ManagerDashboardProps) {
+export function ManagerDashboard({
+  orders,
+  expenses,
+  branchId,
+}: ManagerDashboardProps) {
   const scoped = orders.filter((o) => o.branch_id === branchId || !o.branch_id);
+  const scopedExpenses = expenses.filter((e) => e.branch_id === branchId);
   const todayRevenue = sumRevenue(scoped.filter((o) => isToday(o.created_at)));
   const monthRevenue = sumRevenue(scoped.filter((o) => isThisMonth(o.created_at)));
+  const monthExpense = sumExpenses(filterThisMonthExpenses(scopedExpenses));
+  const monthProfit = monthRevenue - monthExpense;
   const pending = scoped.filter((o) => o.status === "pending").length;
   const inProgress = scoped.filter((o) => o.status === "in-progress").length;
   const completed = scoped.filter((o) => o.status === "completed").length;
@@ -35,9 +49,13 @@ export function ManagerDashboard({ orders, branchId }: ManagerDashboardProps) {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <StatCard label="รายได้วันนี้" value={formatCurrency(todayRevenue)} tone="green" />
         <StatCard label="รายได้เดือนนี้" value={formatCurrency(monthRevenue)} tone="yellow" />
-        <StatCard label="งานในคิว" value={pending + inProgress} tone="blue" />
-        <StatCard label="อัตราเสร็จงาน" value={`${conversion}%`} tone="white" />
-        <StatCard label="งานเสร็จทั้งหมด" value={completed} tone="purple" />
+        <StatCard label="ค่าใช้จ่ายเดือนนี้" value={formatCurrency(monthExpense)} tone="white" />
+        <StatCard
+          label="กำไรเดือนนี้"
+          value={formatCurrency(monthProfit)}
+          tone={monthProfit >= 0 ? "green" : "purple"}
+        />
+        <StatCard label="อัตราเสร็จงาน" value={`${conversion}%`} tone="blue" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

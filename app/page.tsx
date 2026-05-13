@@ -10,6 +10,7 @@ import {
   type AnalyticsOrder,
   filterByBranch,
 } from "@/lib/analytics";
+import type { ExpenseRow } from "@/lib/expenses";
 import {
   DASHBOARD_LABELS,
   getAccessibleDashboards,
@@ -35,6 +36,7 @@ export default function Dashboard() {
   const { role, definition } = useRole();
 
   const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [customerCount, setCustomerCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -100,6 +102,30 @@ export default function Dashboard() {
         .from("customers")
         .select("id", { count: "exact", head: true });
       setCustomerCount(count ?? 0);
+
+      // Expenses (optional — table may not exist yet on older deployments).
+      const expRes = await supabase
+        .from("expenses")
+        .select(
+          "id, expense_date, category, description, amount, branch_id, payment_method, notes, created_by, created_at"
+        )
+        .order("expense_date", { ascending: false });
+      if (!expRes.error) {
+        setExpenses(
+          ((expRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+            id: String(row.id),
+            expense_date: (row.expense_date as string) ?? new Date().toISOString(),
+            category: (row.category as string) ?? "other",
+            description: (row.description as string) ?? null,
+            amount: Number(row.amount ?? 0),
+            branch_id: (row.branch_id as string) ?? null,
+            payment_method: (row.payment_method as string) ?? null,
+            notes: (row.notes as string) ?? null,
+            created_by: (row.created_by as string) ?? null,
+            created_at: (row.created_at as string) ?? new Date().toISOString(),
+          }))
+        );
+      }
 
       setIsLoading(false);
     })();
@@ -185,6 +211,7 @@ export default function Dashboard() {
           dashboard={activeDashboard}
           orders={scopedOrders}
           allOrders={orders}
+          expenses={expenses}
           branchId={branch.id}
           customerCount={customerCount}
         />
@@ -197,12 +224,14 @@ function DashboardView({
   dashboard,
   orders,
   allOrders,
+  expenses,
   branchId,
   customerCount,
 }: {
   dashboard: DashboardKey;
   orders: AnalyticsOrder[];
   allOrders: AnalyticsOrder[];
+  expenses: ExpenseRow[];
   branchId: string;
   customerCount: number;
 }) {
@@ -213,12 +242,22 @@ function DashboardView({
       return <ProductionDashboard orders={orders} />;
     case "accounting":
       // Accounting reads org-wide so they always see consolidated revenue.
-      return <AccountingDashboard orders={allOrders} />;
+      return <AccountingDashboard orders={allOrders} expenses={expenses} />;
     case "manager":
-      return <ManagerDashboard orders={allOrders} branchId={branchId} />;
+      return (
+        <ManagerDashboard
+          orders={allOrders}
+          expenses={expenses}
+          branchId={branchId}
+        />
+      );
     case "executive":
       return (
-        <ExecutiveDashboard orders={allOrders} customerCount={customerCount} />
+        <ExecutiveDashboard
+          orders={allOrders}
+          expenses={expenses}
+          customerCount={customerCount}
+        />
       );
     default:
       return <FrontDeskDashboard orders={orders} customerCount={customerCount} />;

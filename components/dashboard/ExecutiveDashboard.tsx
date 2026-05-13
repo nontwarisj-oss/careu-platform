@@ -6,7 +6,6 @@ import {
   aggregateByBranch,
   aggregateCustomerCohort,
   aggregateTopServices,
-  computeProfit,
   growthPercent,
   isLastMonth,
   isThisMonth,
@@ -15,14 +14,56 @@ import {
   isToday,
   sumRevenue,
 } from "@/lib/analytics";
+import {
+  aggregateExpensesByCategory,
+  computeProfitByBranch,
+  filterLastMonthExpenses,
+  filterThisMonthExpenses,
+  filterTodayExpenses,
+  sumExpenses,
+  type ExpenseRow,
+} from "@/lib/expenses";
+import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
+import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
 
 interface ExecutiveDashboardProps {
   orders: AnalyticsOrder[];
+  expenses: ExpenseRow[];
   customerCount: number;
+}
+
+const TH_MONTHS = [
+  "ม.ค.",
+  "ก.พ.",
+  "มี.ค.",
+  "เม.ย.",
+  "พ.ค.",
+  "มิ.ย.",
+  "ก.ค.",
+  "ส.ค.",
+  "ก.ย.",
+  "ต.ค.",
+  "พ.ย.",
+  "ธ.ค.",
+];
+
+function lastNMonthKeys(n: number): Array<{ year: number; month: number; label: string }> {
+  const now = new Date();
+  const out: Array<{ year: number; month: number; label: string }> = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push({
+      year: d.getFullYear(),
+      month: d.getMonth(),
+      label: TH_MONTHS[d.getMonth()],
+    });
+  }
+  return out;
 }
 
 export function ExecutiveDashboard({
   orders,
+  expenses,
   customerCount,
 }: ExecutiveDashboardProps) {
   const todayRevenue = sumRevenue(orders.filter((o) => isToday(o.created_at)));
@@ -36,11 +77,47 @@ export function ExecutiveDashboard({
   const yearRevenue = sumRevenue(orders.filter((o) => isThisYear(o.created_at)));
   const monthGrowth = growthPercent(monthRevenue, lastMonthRevenue);
 
-  const profit = computeProfit(orders);
+  const todayExpense = sumExpenses(filterTodayExpenses(expenses));
+  const monthExpense = sumExpenses(filterThisMonthExpenses(expenses));
+  const lastMonthExpense = sumExpenses(filterLastMonthExpenses(expenses));
+  const totalExpense = sumExpenses(expenses);
+
+  const totalRevenue = sumRevenue(orders);
+  const netProfit = totalRevenue - totalExpense;
+  const marginPercent =
+    totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0;
+  const monthProfit = monthRevenue - monthExpense;
+
+  const branchProfit = computeProfitByBranch(orders, expenses);
   const branches = aggregateByBranch(orders);
   const maxBranchRevenue = Math.max(1, ...branches.map((b) => b.revenue));
   const topServices = aggregateTopServices(orders, 5);
   const cohort = aggregateCustomerCohort(orders, customerCount);
+  const topExpenseCategories = aggregateExpensesByCategory(expenses)
+    .filter((c) => c.total > 0)
+    .slice(0, 6);
+
+  const trendMonths = lastNMonthKeys(6);
+  const revenueTrend = trendMonths.map((m) => ({
+    label: m.label,
+    value: sumRevenue(
+      orders.filter((o) => {
+        const d = new Date(o.created_at);
+        return d.getFullYear() === m.year && d.getMonth() === m.month;
+      })
+    ),
+  }));
+  const expenseTrend = trendMonths.map((m) => ({
+    label: m.label,
+    value: sumExpenses(
+      expenses.filter((e) => {
+        const d = new Date(
+          e.expense_date.includes("T") ? e.expense_date : `${e.expense_date}T00:00`
+        );
+        return d.getFullYear() === m.year && d.getMonth() === m.month;
+      })
+    ),
+  }));
 
   const pending = orders.filter((o) => o.status === "pending").length;
   const inProgress = orders.filter((o) => o.status === "in-progress").length;
@@ -64,8 +141,8 @@ export function ExecutiveDashboard({
           <KpiHero label="ปีนี้" value={formatCurrency(yearRevenue)} />
           <KpiHero
             label="กำไรสุทธิ"
-            value={formatCurrency(profit.netProfit)}
-            sublabel={`อัตรา ${profit.marginPercent}%`}
+            value={formatCurrency(netProfit)}
+            sublabel={`อัตรา ${marginPercent}%`}
           />
         </div>
       </div>
@@ -74,23 +151,83 @@ export function ExecutiveDashboard({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <KpiCard
           title="รายได้รวมทั้งหมด"
-          value={formatCurrency(profit.revenue)}
+          value={formatCurrency(totalRevenue)}
           tone="green"
         />
         <KpiCard
-          title="ต้นทุนสะสม (แรงงาน + วัตถุดิบ + ค่าใช้จ่ายสาขา)"
-          value={formatCurrency(
-            profit.laborCost + profit.materialCost + profit.branchExpense
-          )}
+          title="ค่าใช้จ่ายรวมทั้งหมด"
+          value={formatCurrency(totalExpense)}
           tone="yellow"
-          hint="กรอกข้อมูลผ่านตาราง branch_expenses + คอลัมน์ labor_cost/material_cost บน orders"
+          hint={`เดือนนี้ ${formatCurrency(monthExpense)} • วันนี้ ${formatCurrency(todayExpense)}`}
         />
         <KpiCard
-          title="กำไรขั้นต้น"
-          value={formatCurrency(profit.grossProfit)}
-          tone="white"
-          hint="ปัจจุบันยังไม่มีต้นทุนกรอกไว้ — ตัวเลขเท่ากับรายได้รวม"
+          title="กำไรเดือนนี้ (ประมาณการ)"
+          value={formatCurrency(monthProfit)}
+          tone={monthProfit >= 0 ? "white" : "yellow"}
+          hint={`รายได้ ${formatCurrency(monthRevenue)} − ค่าใช้จ่าย ${formatCurrency(monthExpense)} • เดือนที่แล้ว ${formatCurrency(lastMonthRevenue - lastMonthExpense)}`}
         />
+      </div>
+
+      {/* Trend charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-gray-900 mb-3">แนวโน้มรายได้ 6 เดือน</h3>
+          <SimpleLineChart data={revenueTrend} />
+        </div>
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-bold text-gray-900 mb-3">แนวโน้มค่าใช้จ่าย 6 เดือน</h3>
+          <SimpleLineChart data={expenseTrend} />
+        </div>
+      </div>
+
+      {/* Branch profit (NEW — uses real expense data) */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-gray-900">กำไรตามสาขา</h3>
+          <span className="text-xs text-gray-500">รายได้ − ค่าใช้จ่าย</span>
+        </div>
+        <ul className="space-y-3">
+          {branchProfit.map((b) => (
+            <li key={b.branchId} className="space-y-1.5">
+              <div className="flex items-center justify-between text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{b.shortLabel}</p>
+                  <p className="text-xs text-gray-500">
+                    รายได้ {formatCurrency(b.revenue)} • ค่าใช้จ่าย{" "}
+                    {formatCurrency(b.expense)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p
+                    className={`font-semibold ${
+                      b.netProfit >= 0 ? "text-green-700" : "text-red-700"
+                    }`}
+                  >
+                    {formatCurrency(b.netProfit)}
+                  </p>
+                  <p className="text-[11px] text-gray-500">
+                    margin {b.marginPercent}%
+                  </p>
+                </div>
+              </div>
+              <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+                <div
+                  className={`h-full bg-gradient-to-r ${
+                    b.netProfit >= 0
+                      ? "from-green-500 to-yellow-400"
+                      : "from-red-500 to-yellow-500"
+                  }`}
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.round((Math.abs(b.netProfit) / Math.max(1, totalRevenue)) * 100)
+                    )}%`,
+                  }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {/* Operations + customers */}
@@ -159,6 +296,23 @@ export function ExecutiveDashboard({
             </li>
           ))}
         </ul>
+      </div>
+
+      {/* Top expense categories */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-gray-900 mb-3">หมวดค่าใช้จ่ายสูงสุด</h3>
+        {topExpenseCategories.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            ยังไม่มีรายการค่าใช้จ่าย — เพิ่มได้ที่หน้า ค่าใช้จ่าย
+          </p>
+        ) : (
+          <SimpleBarChart
+            data={topExpenseCategories.map((c) => ({
+              label: c.labelTh,
+              value: c.total,
+            }))}
+          />
+        )}
       </div>
 
       {/* Top services */}
