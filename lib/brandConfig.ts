@@ -2,7 +2,12 @@ export type BrandKey = "careu" | "ezy";
 
 export type BranchConfig = {
   id: string;
+  /** Short operational label used in selectors/chips — e.g. "C24 Care U - 001". */
+  shortLabel: string;
+  /** Full descriptive name with location — used in details / receipt footer. */
   name: string;
+  /** Operational branch code suffix — e.g. "001". */
+  branchCode: string;
   brand: BrandKey;
   shortName: string;
   receiptName: string;
@@ -16,7 +21,9 @@ export type BranchConfig = {
 export const branches: BranchConfig[] = [
   {
     id: "c24-thonburi-market",
+    shortLabel: "C24 Care U - 001",
     name: "C24 Care U - ตลาดสดธนบุรี",
+    branchCode: "001",
     brand: "careu",
     shortName: "C24 Care U",
     receiptName: "C24 Care U",
@@ -28,7 +35,9 @@ export const branches: BranchConfig[] = [
   },
   {
     id: "ezy-repair-saladaeng",
+    shortLabel: "Ezy Repair - 001",
     name: "Ezy Repair by Care U - BTS ศาลาแดง",
+    branchCode: "001",
     brand: "ezy",
     shortName: "Ezy Repair",
     receiptName: "Ezy Repair by Care U",

@@ -16,6 +16,8 @@ interface NavItem {
 
 const ICON_PATHS = {
   dashboard: "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z",
+  intake:
+    "M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm0 5l4 4h-3v4h-2v-4H8l4-4z",
   customers:
     "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
   orders:
@@ -43,6 +45,11 @@ const Sidebar: React.FC = () => {
 
   const navItems: NavItem[] = [
     { href: "/", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
+    {
+      href: "/intake",
+      label: language === "th" ? "รับงานหน้าร้าน" : "Walk-in intake",
+      iconPath: ICON_PATHS.intake,
+    },
     { href: "/customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
     { href: "/orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
     { href: "/invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
@@ -95,7 +102,7 @@ const Sidebar: React.FC = () => {
             >
               {branches.map((b) => (
                 <option key={b.id} value={b.id} className="text-gray-800">
-                  {b.name}
+                  {b.shortLabel}
                 </option>
               ))}
             </select>

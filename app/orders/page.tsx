@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
+import { OrderDetailModal } from "@/components/OrderDetailModal";
 
 type Customer = {
   id: string;
@@ -76,6 +77,9 @@ export default function OrdersPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   // Future: const [urgentOnly, setUrgentOnly] = useState(false);
+
+  // Detail drawer
+  const [detailOrder, setDetailOrder] = useState<Order | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
@@ -476,9 +480,21 @@ export default function OrdersPage() {
                 {filteredOrders.map((order) => (
                   <tr
                     key={order.id}
-                    className="border-t border-gray-100 hover:bg-green-50/30"
+                    onClick={() => setDetailOrder(order)}
+                    className="border-t border-gray-100 hover:bg-green-50/30 cursor-pointer"
                   >
-                    <td className="p-4 font-medium text-gray-900">{order.customer_name}</td>
+                    <td className="p-4 font-medium text-gray-900">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDetailOrder(order);
+                        }}
+                        className="text-left text-green-800 hover:underline"
+                      >
+                        {order.customer_name}
+                      </button>
+                    </td>
                     <td className="p-4 text-gray-700">{order.item_name}</td>
                     <td className="p-4 font-semibold text-green-700">
                       {formatCurrency(order.price)}
@@ -495,7 +511,11 @@ export default function OrdersPage() {
                         </span>
                         <select
                           value={order.status}
-                          onChange={(e) => void handleUpdateStatus(order.id, e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            void handleUpdateStatus(order.id, e.target.value);
+                          }}
                           className="rounded-lg border border-gray-200 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
                         >
                           {EDITABLE_STATUSES.map((s) => (
@@ -523,6 +543,11 @@ export default function OrdersPage() {
           </div>
         )}
       </div>
+
+      <OrderDetailModal
+        order={detailOrder}
+        onClose={() => setDetailOrder(null)}
+      />
     </div>
   );
 }

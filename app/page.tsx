@@ -184,7 +184,10 @@ export default function Dashboard() {
               {language === "th" ? "สาขาปัจจุบัน" : "Current branch"}
             </p>
             <p className="text-sm font-semibold text-gray-800 truncate max-w-[200px]">
-              {branch.name}
+              {branch.shortLabel}
+            </p>
+            <p className="text-[10px] text-gray-500 truncate max-w-[200px]">
+              {branch.address}
             </p>
           </div>
         </div>
