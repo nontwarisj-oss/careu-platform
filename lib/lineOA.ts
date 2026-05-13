@@ -1,16 +1,13 @@
-// LINE Official Account integration is intentionally a placeholder right now.
-// The real Messaging API call must run on the server (route handler or edge
-// function) because it requires LINE_CHANNEL_ACCESS_TOKEN, which is a secret.
+// Client-side wrapper around /api/line/send.
 //
-// Required env vars (set in Vercel / .env.local, never committed):
+// The real LINE Messaging API call lives in the server route handler at
+// app/api/line/send/route.ts so that LINE_CHANNEL_ACCESS_TOKEN never leaves
+// the server. Never use NEXT_PUBLIC_LINE_* — secrets must stay server-side.
+//
+// Required env vars (set in Vercel / .env.local, see .env.example):
 //   LINE_CHANNEL_ACCESS_TOKEN  — long-lived channel access token
 //   LINE_CHANNEL_SECRET        — channel secret (webhook signature verify)
-//   LINE_OA_ID                 — friend ID / Basic ID of the OA, used for deep links
-//
-// When credentials are provisioned, replace the body of sendToLineOA with a
-// POST to /api/line/send (a new route handler that reads the secrets at runtime
-// and calls https://api.line.me/v2/bot/message/push). Do NOT inline secrets in
-// client code, and never expose them via NEXT_PUBLIC_*.
+//   LINE_OA_ID                 — friend / Basic ID for deep links
 
 export type LineOAResult = {
   ok: boolean;
@@ -18,19 +15,37 @@ export type LineOAResult = {
 };
 
 /**
- * Stub for sending a document/message to a customer via LINE OA.
- * Returns ok=false with a friendly reason until the real integration is wired.
+ * Forwards an outbound message request to the server route. The route is
+ * inert until LINE_CHANNEL_ACCESS_TOKEN is present AND we have the
+ * customer's LINE user id captured via the follow flow.
  */
 export async function sendToLineOA(
   orderId: string,
-  _message: string
+  message: string,
+  to?: string
 ): Promise<LineOAResult> {
   if (!orderId) {
     return { ok: false, reason: "Missing order id" };
   }
-  return {
-    ok: false,
-    reason:
-      "ยังไม่ได้ตั้งค่า LINE OA ในระบบ — โปรดเพิ่ม LINE_CHANNEL_ACCESS_TOKEN และต่อ API endpoint ก่อนใช้งานจริง",
-  };
+  if (typeof window === "undefined") {
+    return {
+      ok: false,
+      reason: "sendToLineOA must be called from the browser",
+    };
+  }
+
+  try {
+    const res = await fetch("/api/line/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId, message, to }),
+    });
+    const json = (await res.json()) as LineOAResult;
+    return { ok: Boolean(json.ok), reason: json.reason };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
 }

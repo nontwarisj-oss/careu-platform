@@ -185,10 +185,33 @@ export default function OrderDocumentPage({
     setTimeout(() => setToast(null), 4500);
   };
 
-  const handleSaveImage = () => {
-    setToast(
-      "ฟังก์ชันบันทึกเป็นรูปภาพกำลังพัฒนา — ระหว่างนี้ใช้ปุ่มพิมพ์แล้วเลือก Save as PDF/Image ได้"
-    );
+  const handleSaveImage = async () => {
+    if (typeof window === "undefined") return;
+    const card = document.getElementById("careu-document-card");
+    if (!card) return;
+    setToast("กำลังสร้างรูปภาพ...");
+    try {
+      const { toJpeg } = await import("html-to-image");
+      const dataUrl = await toJpeg(card as HTMLElement, {
+        pixelRatio: 2,
+        quality: 0.95,
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+      });
+      const link = document.createElement("a");
+      link.download = `careu-${order?.id.slice(0, 8).toUpperCase() ?? "document"}.jpg`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setToast("บันทึกเป็นรูปภาพเรียบร้อย");
+    } catch (err) {
+      setToast(
+        err instanceof Error
+          ? `บันทึกรูปไม่สำเร็จ: ${err.message}`
+          : "บันทึกรูปไม่สำเร็จ"
+      );
+    }
     setTimeout(() => setToast(null), 4000);
   };
 
@@ -363,151 +386,169 @@ export default function OrderDocumentPage({
             </div>
           </section>
 
-          {/* Service */}
+          {/* Service / Job card */}
           <section className="px-6 mt-5">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500">
-              บริการ
-            </p>
-            {categoryLabel && (
-              <p className="text-[11px] text-green-700 font-semibold mt-0.5">
-                {categoryLabel}
-              </p>
-            )}
-            <p className="text-lg font-semibold text-gray-800 mt-0.5 break-words">
-              {serviceLabel}
-              {order.quantity > 1 && (
-                <span className="ml-2 text-sm text-gray-500">
-                  × {order.quantity}
-                </span>
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
+                    รายละเอียดงาน
+                  </p>
+                  {categoryLabel && (
+                    <p className="text-[11px] text-green-700 font-semibold mt-0.5">
+                      {categoryLabel}
+                    </p>
+                  )}
+                  <p className="text-lg font-semibold text-gray-800 mt-0.5 break-words">
+                    {serviceLabel}
+                    {order.quantity > 1 && (
+                      <span className="ml-2 text-sm text-gray-500">
+                        × {order.quantity}
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <p className="text-right text-sm font-semibold text-green-700 whitespace-nowrap">
+                  {formatCurrency(subtotal)}
+                </p>
+              </div>
+              {order.template_text && (
+                <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">
+                  {order.template_text}
+                </p>
               )}
-            </p>
-            {order.template_text && (
-              <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">
-                {order.template_text}
-              </p>
-            )}
-            {order.notes && (
-              <div className="mt-3 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
-                <p className="text-[11px] uppercase tracking-widest text-gray-500">
-                  บันทึก
-                </p>
-                <p className="text-sm text-gray-800 whitespace-pre-wrap">
-                  {order.notes}
-                </p>
-              </div>
-            )}
-            <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
-              ภาพ/วิดีโอ/เอกสารแนบจะปรากฏที่นี่เมื่อระบบ Storage พร้อมใช้งาน
-            </div>
-          </section>
-
-          {/* Price */}
-          <section className="px-6 mt-5 pt-4 border-t border-gray-200">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">
-              สรุปยอด
-            </p>
-            <div className="text-sm space-y-1.5">
-              <div className="flex justify-between">
-                <span className="text-gray-600">
-                  ยอดก่อนส่วนลด ({order.quantity} ×{" "}
-                  {formatCurrency(
-                    subtotal > 0 ? Math.round(subtotal / order.quantity) : 0
-                  )}
-                  )
-                </span>
-                <span className="text-gray-800">{formatCurrency(subtotal)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">ค่างานด่วน</span>
-                <span className="text-gray-800">
-                  {formatCurrency(order.urgent_fee)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">
-                  ส่วนลด{promotionLabel ? ` (${promotionLabel})` : ""}
-                </span>
-                <span className="text-gray-800">
-                  -{formatCurrency(order.discount)}
-                </span>
-              </div>
-              <div className="flex justify-between items-center pt-2 border-t border-gray-200">
-                <span className="text-gray-700 font-medium">ยอดรวมสุทธิ</span>
-                <span className="text-2xl font-bold text-green-700">
-                  {formatCurrency(order.price)}
-                </span>
+              {order.notes && (
+                <div className="mt-3 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-widest text-gray-500">
+                    บันทึก
+                  </p>
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                    {order.notes}
+                  </p>
+                </div>
+              )}
+              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+                ภาพ/วิดีโอ/เอกสารแนบจะปรากฏที่นี่เมื่อระบบ Storage พร้อมใช้งาน
               </div>
             </div>
           </section>
 
-          {/* Payment */}
-          <section className="px-6 mt-5 pt-4 border-t border-gray-200">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">
-              ช่องชำระเงิน
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="rounded-lg border border-dashed border-yellow-300 bg-yellow-50/40 p-3 flex items-center gap-3">
-                <div className="w-24 h-24 flex-shrink-0 grid place-items-center bg-white border border-yellow-300 rounded-md text-[10px] text-gray-400 text-center leading-tight">
-                  QR
-                  <br />
-                  Code
+          {/* Price summary box */}
+          <section className="px-6 mt-4">
+            <div className="rounded-xl border border-green-200 bg-gradient-to-b from-green-50/60 to-white p-4">
+              <p className="text-[10px] uppercase tracking-widest text-green-700 font-semibold mb-2">
+                สรุปยอด
+              </p>
+              <div className="text-sm space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">
+                    ยอดก่อนส่วนลด ({order.quantity} ×{" "}
+                    {formatCurrency(
+                      subtotal > 0 ? Math.round(subtotal / order.quantity) : 0
+                    )}
+                    )
+                  </span>
+                  <span className="text-gray-800">
+                    {formatCurrency(subtotal)}
+                  </span>
                 </div>
-                <div className="text-xs text-gray-600">
-                  <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
-                  <p>สแกนเพื่อชำระ — รูป QR จะอัปโหลดต่อสาขาในเฟสถัดไป</p>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">ค่างานด่วน</span>
+                  <span className="text-gray-800">
+                    {formatCurrency(order.urgent_fee)}
+                  </span>
                 </div>
-              </div>
-              <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700">
-                <p className="font-medium text-gray-800">โอนผ่านบัญชีธนาคาร</p>
-                <p className="mt-1 text-gray-500">
-                  เลขที่บัญชี: <span className="text-gray-700">ระบุภายหลัง</span>
-                </p>
-                <p className="text-gray-500">
-                  ชื่อบัญชี: <span className="text-gray-700">{branch.receiptName}</span>
-                </p>
-                <p className="text-gray-500">
-                  สาขา: <span className="text-gray-700">{branch.shortLabel}</span>
-                </p>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">
+                    ส่วนลด{promotionLabel ? ` (${promotionLabel})` : ""}
+                  </span>
+                  <span className="text-gray-800">
+                    -{formatCurrency(order.discount)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-2 mt-1 border-t border-green-200">
+                  <span className="text-gray-800 font-semibold">ยอดรวมสุทธิ</span>
+                  <span className="text-3xl font-extrabold text-green-700 leading-none">
+                    {formatCurrency(order.price)}
+                  </span>
+                </div>
               </div>
             </div>
+          </section>
 
-            <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                  สถานะการชำระ
-                </p>
-                <span
-                  className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium border ${
-                    paymentBadgeClasses[paymentStatus] ??
-                    "bg-gray-100 text-gray-700 border-gray-300"
-                  }`}
-                >
-                  {formatPaymentStatus(paymentStatus)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 print:hidden">
-                <label className="text-xs text-gray-500">เปลี่ยนสถานะ</label>
-                <select
-                  value={paymentStatus}
-                  onChange={(e) => void handlePaymentChange(e.target.value)}
-                  disabled={paymentSaving}
-                  className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
-                >
-                  {PAYMENT_OPTIONS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="text-sm text-gray-700">
-                ยอดที่ต้องชำระ:{" "}
-                <span className="font-bold text-green-700">
-                  {formatCurrency(
-                    paymentStatus === "paid" ? 0 : order.price
-                  )}
-                </span>
+          {/* Payment box */}
+          <section className="px-6 mt-4">
+            <div className="rounded-xl border border-yellow-200 bg-yellow-50/40 p-4">
+              <p className="text-[10px] uppercase tracking-widest text-yellow-700 font-semibold mb-3">
+                ช่องชำระเงิน
               </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-yellow-300 bg-white p-3 flex items-center gap-3">
+                  <div className="w-24 h-24 flex-shrink-0 grid place-items-center bg-yellow-50 border border-yellow-300 rounded-md text-[10px] text-gray-400 text-center leading-tight">
+                    QR
+                    <br />
+                    Code
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
+                    <p>สแกนเพื่อชำระ — รูป QR จะอัปโหลดต่อสาขาในเฟสถัดไป</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700">
+                  <p className="font-medium text-gray-800">โอนผ่านบัญชีธนาคาร</p>
+                  <p className="mt-1 text-gray-500">
+                    เลขที่บัญชี:{" "}
+                    <span className="text-gray-700">ระบุภายหลัง</span>
+                  </p>
+                  <p className="text-gray-500">
+                    ชื่อบัญชี:{" "}
+                    <span className="text-gray-700">{branch.receiptName}</span>
+                  </p>
+                  <p className="text-gray-500">
+                    สาขา:{" "}
+                    <span className="text-gray-700">{branch.shortLabel}</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
+                    สถานะการชำระ
+                  </p>
+                  <span
+                    className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium border ${
+                      paymentBadgeClasses[paymentStatus] ??
+                      "bg-gray-100 text-gray-700 border-gray-300"
+                    }`}
+                  >
+                    {formatPaymentStatus(paymentStatus)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 print:hidden">
+                  <label className="text-xs text-gray-500">เปลี่ยนสถานะ</label>
+                  <select
+                    value={paymentStatus}
+                    onChange={(e) => void handlePaymentChange(e.target.value)}
+                    disabled={paymentSaving}
+                    className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
+                  >
+                    {PAYMENT_OPTIONS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <p className="text-sm text-gray-700">
+                  ยอดที่ต้องชำระ:{" "}
+                  <span className="font-bold text-green-700">
+                    {formatCurrency(
+                      paymentStatus === "paid" ? 0 : order.price
+                    )}
+                  </span>
+                </p>
+              </div>
             </div>
           </section>
 

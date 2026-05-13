@@ -85,6 +85,11 @@ export async function createSmartOrder(input: SmartOrderInput): Promise<InsertRe
     template_text: input.templateText ?? null,
     customer_type: input.customerType ?? null,
     promotion_code: input.promotionCode ?? null,
+    // Payment + document fields land here once 20260515_payment_columns.sql is
+    // applied. If those columns are missing, the v3 attempt fails on schema
+    // cache and the helper falls back to v2 just like the smart columns.
+    payment_status: "unpaid",
+    document_type: "intake_quote_receipt",
   };
 
   // Tier 3 — full smart schema
