@@ -21,6 +21,7 @@ type Order = {
 };
 
 const STATUS_OPTIONS = ["pending", "in-progress", "completed", "ready-for-pickup"] as const;
+const EDITABLE_STATUSES = ["pending", "in-progress", "completed"] as const;
 
 export default function OrdersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -109,6 +110,24 @@ export default function OrdersPage() {
     setStatus("pending");
     setIsSubmitting(false);
     await fetchOrders();
+  };
+
+  const handleUpdateStatus = async (orderId: string, newStatus: string) => {
+    setErrorMessage(null);
+    const previous = orders;
+    setOrders((curr) =>
+      curr.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+    );
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: newStatus })
+      .eq("id", orderId);
+
+    if (error) {
+      setErrorMessage(error.message);
+      setOrders(previous);
+    }
   };
 
   return (
@@ -202,7 +221,22 @@ export default function OrdersPage() {
                   <td className="p-4">{order.customer_name}</td>
                   <td className="p-4">{order.item_name}</td>
                   <td className="p-4">{formatCurrency(order.price)}</td>
-                  <td className="p-4">{order.status}</td>
+                  <td className="p-4">
+                    <select
+                      value={order.status}
+                      onChange={(e) => handleUpdateStatus(order.id, e.target.value)}
+                      className="border p-2 rounded-lg"
+                    >
+                      {EDITABLE_STATUSES.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                      {!EDITABLE_STATUSES.includes(
+                        order.status as (typeof EDITABLE_STATUSES)[number]
+                      ) && (
+                        <option value={order.status}>{order.status}</option>
+                      )}
+                    </select>
+                  </td>
                   <td className="p-4">
                     {new Date(order.created_at).toLocaleDateString("th-TH")}
                   </td>
