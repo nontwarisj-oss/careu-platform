@@ -130,6 +130,29 @@ export function CustomerHistoryModal({
       .sort((a, b) => b.count - a.count);
     const segment: "vip" | "repeat" | "new" =
       totalOrders >= 5 ? "vip" : totalOrders >= 2 ? "repeat" : "new";
+
+    const avgTicket = totalOrders > 0 ? Math.round(totalSpent / totalOrders) : 0;
+
+    let daysSinceLast: number | null = null;
+    if (latestDate) {
+      const diff = Date.now() - new Date(latestDate).getTime();
+      daysSinceLast = Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+    }
+
+    // Visits per month over the customer's active window (first → most recent
+    // order, minimum one month). Useful as a frequency proxy.
+    let visitsPerMonth = 0;
+    if (totalOrders > 1) {
+      const sorted = [...orders].sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      const firstMs = new Date(sorted[0].created_at).getTime();
+      const lastMs = new Date(sorted[sorted.length - 1].created_at).getTime();
+      const months = Math.max(1, (lastMs - firstMs) / (1000 * 60 * 60 * 24 * 30));
+      visitsPerMonth = Math.round((totalOrders / months) * 10) / 10;
+    }
+
     return {
       totalOrders,
       totalSpent,
@@ -137,6 +160,9 @@ export function CustomerHistoryModal({
       latestService,
       branches,
       segment,
+      avgTicket,
+      daysSinceLast,
+      visitsPerMonth,
     };
   }, [orders]);
 
@@ -223,8 +249,36 @@ export function CustomerHistoryModal({
           </div>
         </div>
 
+        {/* Analytics row */}
+        <div className="px-4 md:px-6 -mt-2 mb-3 grid grid-cols-3 gap-2 text-center">
+          <Metric
+            label="ค่าเฉลี่ยต่อครั้ง"
+            value={
+              summary.avgTicket > 0
+                ? formatCurrency(summary.avgTicket)
+                : "-"
+            }
+          />
+          <Metric
+            label="เข้ารับล่าสุด"
+            value={
+              summary.daysSinceLast === null
+                ? "-"
+                : summary.daysSinceLast === 0
+                ? "วันนี้"
+                : `${summary.daysSinceLast} วันก่อน`
+            }
+          />
+          <Metric
+            label="ความถี่ (ครั้ง/เดือน)"
+            value={
+              summary.visitsPerMonth > 0 ? String(summary.visitsPerMonth) : "-"
+            }
+          />
+        </div>
+
         {summary.branches.length > 0 && (
-          <div className="px-4 md:px-6 -mt-2 mb-2">
+          <div className="px-4 md:px-6 mb-2">
             <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
               สาขาที่เข้าใช้บริการ
             </p>
@@ -320,6 +374,17 @@ export function CustomerHistoryModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3 text-left">
+      <p className="text-[10px] uppercase tracking-widest text-gray-500">
+        {label}
+      </p>
+      <p className="mt-0.5 text-base font-semibold text-gray-800">{value}</p>
     </div>
   );
 }

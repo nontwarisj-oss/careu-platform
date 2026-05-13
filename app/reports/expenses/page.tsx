@@ -20,6 +20,9 @@ import {
 } from "@/components/reports/ReportFilters";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
 import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
+import { getBranchById } from "@/lib/brandConfig";
+import { getCategoryLabel, getPaymentMethodLabel } from "@/lib/expenses";
 
 const TH_MONTHS = [
   "ม.ค.",
@@ -120,11 +123,35 @@ export default function ExpensesReportPage() {
     ),
   }));
 
+  const handleExport = () => {
+    const headers = [
+      "วันที่",
+      "หมวด",
+      "รายละเอียด",
+      "สาขา",
+      "วิธีชำระ",
+      "บันทึก",
+      "จำนวน",
+    ];
+    const rows = scoped.map((e) => ({
+      วันที่: new Date(e.expense_date).toLocaleDateString("th-TH"),
+      หมวด: getCategoryLabel(e.category),
+      รายละเอียด: e.description ?? "",
+      สาขา: e.branch_id ? getBranchById(e.branch_id).shortLabel : "-",
+      วิธีชำระ: getPaymentMethodLabel(e.payment_method),
+      บันทึก: e.notes ?? "",
+      จำนวน: e.amount,
+    }));
+    downloadCsv(buildExportFilename("expenses"), headers, rows);
+  };
+
   return (
     <ReportFrame
       title="รายงานค่าใช้จ่าย"
       description="ค่าใช้จ่ายตามหมวด สาขา และเดือน"
       toolbar={<ReportFilters value={filters} onChange={setFilters} />}
+      onExportCsv={handleExport}
+      exportDisabled={isLoading || scoped.length === 0}
     >
       {errorMessage && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

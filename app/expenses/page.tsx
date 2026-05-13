@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/utils";
 import { useBranch } from "@/lib/branchContext";
 import { branches, getBranchById } from "@/lib/brandConfig";
 import { BrandLogo } from "@/components/BrandLogo";
+import { RouteGuard } from "@/components/RouteGuard";
 import {
   EXPENSE_CATEGORIES,
   PAYMENT_METHODS,
@@ -30,6 +31,14 @@ function todayIso(): string {
 }
 
 export default function ExpensesPage() {
+  return (
+    <RouteGuard page="expenses">
+      <ExpensesPageInner />
+    </RouteGuard>
+  );
+}
+
+function ExpensesPageInner() {
   const { branch } = useBranch();
 
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
@@ -38,6 +47,8 @@ export default function ExpensesPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Form state
   const [expenseDate, setExpenseDate] = useState<string>(todayIso());
@@ -166,6 +177,38 @@ export default function ExpensesPage() {
     }
   };
 
+  const handleSyncFromSheet = async () => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch("/api/sync-expenses", { method: "POST" });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        inserted?: number;
+        matchedExisting?: number;
+        skipped?: number;
+        totalRows?: number;
+        error?: string;
+      };
+      if (!res.ok || json.error) {
+        setSyncMessage(json.error ?? `Sync failed (HTTP ${res.status})`);
+      } else {
+        const added = json.inserted ?? 0;
+        const matched = json.matchedExisting ?? 0;
+        const skip = json.skipped ?? 0;
+        setSyncMessage(
+          `ซิงค์ค่าใช้จ่ายเสร็จแล้ว\nเพิ่มใหม่ ${added} รายการ\nมีอยู่แล้ว ${matched} รายการ${
+            skip > 0 ? `\nข้าม ${skip} รายการ (ขาดข้อมูล)` : ""
+          }`
+        );
+        await fetchExpenses();
+      }
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Sync failed");
+    }
+    setIsSyncing(false);
+  };
+
   const handleDelete = async (row: ExpenseRow) => {
     if (typeof window !== "undefined" && !window.confirm("ลบรายการนี้?")) return;
     const { error } = await supabase.from("expenses").delete().eq("id", row.id);
@@ -212,21 +255,45 @@ export default function ExpensesPage() {
             บันทึก/แก้ไขค่าใช้จ่ายของแต่ละสาขา ระบบจะนำไปคำนวณกำไรอัตโนมัติ
           </p>
         </div>
-        <div className="flex items-center gap-3 bg-white rounded-2xl border border-green-100 shadow-sm px-4 py-2">
-          <BrandLogo size="sm" variant="onLight" />
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500">
-              สาขาที่เลือก
-            </p>
-            <p className="text-sm font-semibold text-gray-800 truncate max-w-[200px]">
-              {branch.shortLabel}
-            </p>
-            <p className="text-[10px] text-gray-500 truncate max-w-[200px]">
-              {branch.address}
-            </p>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSyncFromSheet()}
+            disabled={isSyncing}
+            className="bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white font-medium px-4 py-2 rounded-lg text-sm"
+          >
+            {isSyncing ? "กำลังซิงค์..." : "ซิงค์จาก Google Sheet"}
+          </button>
+          <div className="flex items-center gap-3 bg-white rounded-2xl border border-green-100 shadow-sm px-4 py-2">
+            <BrandLogo size="sm" variant="onLight" />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-gray-500">
+                สาขาที่เลือก
+              </p>
+              <p className="text-sm font-semibold text-gray-800 truncate max-w-[200px]">
+                {branch.shortLabel}
+              </p>
+              <p className="text-[10px] text-gray-500 truncate max-w-[200px]">
+                {branch.address}
+              </p>
+            </div>
           </div>
         </div>
       </div>
+
+      {syncMessage && (
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900 flex items-start justify-between gap-3">
+          <span className="whitespace-pre-line leading-relaxed">{syncMessage}</span>
+          <button
+            type="button"
+            onClick={() => setSyncMessage(null)}
+            className="text-green-700 hover:text-green-900 -mt-0.5"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {errorMessage && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

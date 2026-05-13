@@ -26,6 +26,7 @@ import {
   type ReportFilterState,
 } from "@/components/reports/ReportFilters";
 import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
 
 const TH_MONTHS = [
   "ม.ค.",
@@ -191,11 +192,32 @@ export default function ProfitReportPage() {
     return { label: m.label, value: rev - exp };
   });
 
+  const handleExport = () => {
+    const headers = ["สาขา", "รายได้", "ค่าใช้จ่าย", "กำไรสุทธิ", "อัตรากำไร %"];
+    const rows = branchProfit.map((b) => ({
+      สาขา: b.shortLabel,
+      รายได้: b.revenue,
+      ค่าใช้จ่าย: b.expense,
+      กำไรสุทธิ: b.netProfit,
+      "อัตรากำไร %": b.marginPercent,
+    }));
+    rows.push({
+      สาขา: "รวมในช่วงที่เลือก",
+      รายได้: window.revenue,
+      ค่าใช้จ่าย: window.expense,
+      กำไรสุทธิ: window.net,
+      "อัตรากำไร %": window.margin,
+    });
+    downloadCsv(buildExportFilename("profit"), headers, rows);
+  };
+
   return (
     <ReportFrame
       title="รายงานกำไร"
       description="กำไรสุทธิ อัตรากำไร และกำไรตามสาขา"
       toolbar={<ReportFilters value={filters} onChange={setFilters} />}
+      onExportCsv={handleExport}
+      exportDisabled={isLoading}
     >
       {isLoading ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">

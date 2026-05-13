@@ -60,6 +60,11 @@ export default function OrderDocumentPage({
   const [orderBranchId, setOrderBranchId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [laborCost, setLaborCost] = useState<number | null>(null);
+  const [materialCost, setMaterialCost] = useState<number | null>(null);
+  const [laborInput, setLaborInput] = useState<string>("");
+  const [materialInput, setMaterialInput] = useState<string>("");
+  const [costSaving, setCostSaving] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -70,7 +75,7 @@ export default function OrderDocumentPage({
       // page renders on any migration state (legacy / intake-extension / smart /
       // smart+payment).
       const wide =
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method";
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost";
       let raw: Record<string, unknown> | null = null;
 
       const tryFetch = async (cols: string) =>
@@ -117,6 +122,18 @@ export default function OrderDocumentPage({
       }
 
       setOrderBranchId((raw.branch_id as string | null) ?? null);
+      const labor =
+        raw.labor_cost !== null && raw.labor_cost !== undefined
+          ? Number(raw.labor_cost)
+          : null;
+      const material =
+        raw.material_cost !== null && raw.material_cost !== undefined
+          ? Number(raw.material_cost)
+          : null;
+      setLaborCost(labor);
+      setMaterialCost(material);
+      setLaborInput(labor !== null ? String(labor) : "");
+      setMaterialInput(material !== null ? String(material) : "");
 
       setOrder({
         id: String(raw.id),
@@ -213,6 +230,40 @@ export default function OrderDocumentPage({
       );
     }
     setTimeout(() => setToast(null), 4000);
+  };
+
+  const handleSaveCosts = async () => {
+    if (!order) return;
+    const labor = laborInput.trim() === "" ? null : Number(laborInput);
+    const material = materialInput.trim() === "" ? null : Number(materialInput);
+    if (labor !== null && (!Number.isFinite(labor) || labor < 0)) {
+      setToast("ค่าแรงต้องเป็นตัวเลขมากกว่าหรือเท่ากับ 0");
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    if (material !== null && (!Number.isFinite(material) || material < 0)) {
+      setToast("ค่าวัสดุต้องเป็นตัวเลขมากกว่าหรือเท่ากับ 0");
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    setCostSaving(true);
+    const { error } = await supabase
+      .from("orders")
+      .update({ labor_cost: labor, material_cost: material })
+      .eq("id", order.id);
+    if (error) {
+      setToast(
+        /column .* does not exist|schema cache/i.test(error.message)
+          ? "ต้องรัน migration 20260516_rbac_finance.sql ก่อน"
+          : error.message
+      );
+    } else {
+      setLaborCost(labor);
+      setMaterialCost(material);
+      setToast("บันทึกต้นทุนเรียบร้อย");
+    }
+    setCostSaving(false);
+    setTimeout(() => setToast(null), 3000);
   };
 
   const handlePaymentChange = async (next: string) => {
@@ -472,6 +523,66 @@ export default function OrderDocumentPage({
                     {formatCurrency(order.price)}
                   </span>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Cost breakdown — internal use, hidden from print */}
+          <section className="px-6 mt-4 print:hidden">
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+                    ต้นทุนภายใน (ไม่แสดงในเอกสารลูกค้า)
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    บันทึกค่าแรงและค่าวัสดุเพื่อให้แดชบอร์ดคำนวณกำไรรายงานนี้
+                  </p>
+                </div>
+                {laborCost !== null && materialCost !== null && (
+                  <p className="text-sm font-semibold text-green-700 whitespace-nowrap">
+                    กำไรงานนี้:{" "}
+                    {formatCurrency(
+                      order.price - (laborCost ?? 0) - (materialCost ?? 0)
+                    )}
+                  </p>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <label className="block">
+                  <span className="block text-[11px] text-gray-500 mb-1">
+                    ค่าแรงช่าง
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={laborInput}
+                    onChange={(e) => setLaborInput(e.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] text-gray-500 mb-1">
+                    ค่าวัสดุ
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={materialInput}
+                    onChange={(e) => setMaterialInput(e.target.value)}
+                    placeholder="0"
+                    className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveCosts()}
+                  disabled={costSaving}
+                  className="rounded-lg bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white text-sm font-semibold py-2"
+                >
+                  {costSaving ? "กำลังบันทึก..." : "บันทึกต้นทุน"}
+                </button>
               </div>
             </div>
           </section>

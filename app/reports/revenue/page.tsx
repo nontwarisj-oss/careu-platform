@@ -22,6 +22,8 @@ import {
 } from "@/components/reports/ReportFilters";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
 import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
+import { getBranchById } from "@/lib/brandConfig";
 
 const TH_MONTHS = [
   "ม.ค.",
@@ -137,11 +139,37 @@ export default function RevenueReportPage() {
     ),
   }));
 
+  const handleExport = () => {
+    const headers = [
+      "วันที่",
+      "เลขที่ใบงาน",
+      "สาขา",
+      "บริการ",
+      "หมวด",
+      "สถานะ",
+      "การชำระ",
+      "ยอด",
+    ];
+    const rows = rangeOrders.map((o) => ({
+      วันที่: new Date(o.created_at).toLocaleDateString("th-TH"),
+      เลขที่ใบงาน: `#${o.id.slice(0, 8).toUpperCase()}`,
+      สาขา: o.branch_id ? getBranchById(o.branch_id).shortLabel : "-",
+      บริการ: o.service_name ?? "-",
+      หมวด: o.service_category ?? "-",
+      สถานะ: o.status,
+      การชำระ: o.payment_status ?? "unpaid",
+      ยอด: o.price,
+    }));
+    downloadCsv(buildExportFilename("revenue"), headers, rows);
+  };
+
   return (
     <ReportFrame
       title="รายงานรายได้"
       description="ภาพรวมยอดขาย รายวัน/สัปดาห์/เดือน/ปี และอัตราการเติบโต"
       toolbar={<ReportFilters value={filters} onChange={setFilters} />}
+      onExportCsv={handleExport}
+      exportDisabled={isLoading || rangeOrders.length === 0}
     >
       {isLoading ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">

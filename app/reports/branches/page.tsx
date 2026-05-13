@@ -14,6 +14,7 @@ import {
 } from "@/lib/expenses";
 import { ReportFrame } from "@/components/reports/ReportFrame";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
 
 export default function BranchesReportPage() {
   const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
@@ -84,10 +85,24 @@ export default function BranchesReportPage() {
   const expenseByBranch = aggregateExpensesByBranch(expenses);
   const profit = computeProfitByBranch(orders, expenses);
 
+  const handleExport = () => {
+    const headers = ["สาขา", "รายได้", "ค่าใช้จ่าย", "กำไรสุทธิ", "อัตรากำไร %"];
+    const rows = profit.map((b) => ({
+      สาขา: b.shortLabel,
+      รายได้: b.revenue,
+      ค่าใช้จ่าย: b.expense,
+      กำไรสุทธิ: b.netProfit,
+      "อัตรากำไร %": b.marginPercent,
+    }));
+    downloadCsv(buildExportFilename("branches"), headers, rows);
+  };
+
   return (
     <ReportFrame
       title="รายงานสาขา"
       description="เปรียบเทียบสาขา: รายได้ ค่าใช้จ่าย และกำไร"
+      onExportCsv={handleExport}
+      exportDisabled={isLoading}
     >
       {isLoading ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">

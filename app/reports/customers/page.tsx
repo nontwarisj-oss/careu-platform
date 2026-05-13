@@ -5,6 +5,7 @@ import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { ReportFrame } from "@/components/reports/ReportFrame";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
 
 type Customer = { id: string; name: string; phone: string };
 type OrderLite = {
@@ -100,10 +101,24 @@ export default function CustomersReportPage() {
     return { vip, repeat, neu, newThisMonth, totalSpend, top };
   }, [customers, orders]);
 
+  const handleExport = () => {
+    const headers = ["ชื่อ", "เบอร์", "ครั้ง", "ยอดใช้จ่าย", "ครั้งล่าสุด"];
+    const rows = stats.top.map((c) => ({
+      ชื่อ: c.name,
+      เบอร์: c.phone,
+      ครั้ง: c.visits,
+      ยอดใช้จ่าย: c.spend,
+      ครั้งล่าสุด: c.latest ? new Date(c.latest).toLocaleDateString("th-TH") : "",
+    }));
+    downloadCsv(buildExportFilename("customers-top"), headers, rows);
+  };
+
   return (
     <ReportFrame
       title="รายงานลูกค้า"
       description="กลุ่มลูกค้า ใหม่/ประจำ/VIP และลูกค้ารายใหญ่"
+      onExportCsv={handleExport}
+      exportDisabled={isLoading || stats.top.length === 0}
     >
       {isLoading ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">
