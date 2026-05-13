@@ -10,6 +10,7 @@ import {
   DEFAULT_ROLE,
   ROLE_DEFINITIONS,
   getRoleDefinition,
+  normalizeRole,
   type Role,
   type RoleDefinition,
 } from "@/lib/roles";
@@ -32,9 +33,13 @@ export const RoleProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(STORAGE_KEY) as Role | null;
-    if (stored && stored in ROLE_DEFINITIONS) {
-      setRoleState(stored);
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (!stored) return;
+    // Legacy codes (frontdesk, manager, …) survive a redeploy by being
+    // translated to the new enterprise codes via normalizeRole.
+    const normalized = normalizeRole(stored);
+    if (normalized in ROLE_DEFINITIONS) {
+      setRoleState(normalized);
     }
   }, []);
 

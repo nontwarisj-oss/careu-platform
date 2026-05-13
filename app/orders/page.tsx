@@ -9,6 +9,7 @@ import {
   SmartOrderForm,
   type SmartOrderCreatedSummary,
 } from "@/components/SmartOrderForm";
+import { useAuth } from "@/lib/authContext";
 
 type Order = {
   id: string;
@@ -52,6 +53,7 @@ function endOfDay(d: Date): Date {
 }
 
 export default function OrdersPage() {
+  const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -103,6 +105,8 @@ export default function OrdersPage() {
   const handleUpdateStatus = async (orderId: string, newStatus: string) => {
     setErrorMessage(null);
     const previous = orders;
+    const previousStatus =
+      previous.find((o) => o.id === orderId)?.status ?? null;
     setOrders((curr) =>
       curr.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
     );
@@ -115,6 +119,23 @@ export default function OrdersPage() {
     if (error) {
       setErrorMessage(error.message);
       setOrders(previous);
+      return;
+    }
+    // Best-effort audit — table may not exist yet on un-migrated DBs.
+    const auditRes = await supabase.from("order_audit_log").insert({
+      order_id: orderId,
+      action: "status_changed",
+      before_value: previousStatus,
+      after_value: newStatus,
+      changed_by: user?.uid ?? null,
+    });
+    if (
+      auditRes.error &&
+      !/column .* does not exist|schema cache|relation .* does not exist/i.test(
+        auditRes.error.message
+      )
+    ) {
+      console.warn("[orders] audit write failed", auditRes.error.message);
     }
   };
 

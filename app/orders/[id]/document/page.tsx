@@ -17,6 +17,7 @@ import {
 } from "@/lib/customerMessage";
 import { getCustomerTypeByCode } from "@/lib/pricing";
 import { sendToLineOA } from "@/lib/lineOA";
+import { useAuth } from "@/lib/authContext";
 
 type RouteParams = { id: string };
 
@@ -53,6 +54,29 @@ export default function OrderDocumentPage({
 }) {
   const { id: orderId } = use(params);
   const { branch: currentBranch } = useBranch();
+  const { user } = useAuth();
+
+  const writeAudit = async (
+    action: "status_changed" | "payment_changed" | "cost_updated" | "sync_pushed",
+    before: string | null,
+    after: string | null
+  ) => {
+    const res = await supabase.from("order_audit_log").insert({
+      order_id: orderId,
+      action,
+      before_value: before,
+      after_value: after,
+      changed_by: user?.uid ?? null,
+    });
+    if (
+      res.error &&
+      !/column .* does not exist|schema cache|relation .* does not exist/i.test(
+        res.error.message
+      )
+    ) {
+      console.warn("[order-document] audit write failed", res.error.message);
+    }
+  };
 
   const [order, setOrder] = useState<DocumentOrder | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -265,6 +289,11 @@ export default function OrderDocumentPage({
       setLaborCost(labor);
       setMaterialCost(material);
       setToast("บันทึกต้นทุนเรียบร้อย");
+      void writeAudit(
+        "cost_updated",
+        `labor=${laborCost ?? "-"} material=${materialCost ?? "-"}`,
+        `labor=${labor ?? "-"} material=${material ?? "-"}`
+      );
     }
     setCostSaving(false);
     setTimeout(() => setToast(null), 3000);
@@ -288,6 +317,7 @@ export default function OrderDocumentPage({
       } else {
         setSheetSyncStatus("success");
         setToast("ซิงค์ไป Google Sheet เรียบร้อย");
+        void writeAudit("sync_pushed", null, "front_desk_tab");
       }
     } catch (err) {
       setSheetSyncStatus("failed");
@@ -318,6 +348,7 @@ export default function OrderDocumentPage({
       setTimeout(() => setToast(null), 5000);
     } else {
       setToast("บันทึกสถานะการชำระเรียบร้อย");
+      void writeAudit("payment_changed", previous, next);
       setTimeout(() => setToast(null), 2500);
     }
     setPaymentSaving(false);

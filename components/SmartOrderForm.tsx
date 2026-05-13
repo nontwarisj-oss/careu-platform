@@ -23,6 +23,8 @@ import {
 import { fetchPricingCatalog } from "@/lib/pricingDb";
 import { createSmartOrder } from "@/lib/orderCreate";
 import { normalizePhone } from "@/lib/phone";
+import { generateJobIdCandidate, normalizeJobId } from "@/lib/jobId";
+import { useAuth } from "@/lib/authContext";
 
 type Customer = {
   id: string;
@@ -70,6 +72,7 @@ export function SmartOrderForm({
   onCreated,
 }: SmartOrderFormProps) {
   const { branch } = useBranch();
+  const { user } = useAuth();
 
   // ---- Customer ----------------------------------------------------------
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -99,6 +102,23 @@ export function SmartOrderForm({
   // ---- Misc --------------------------------------------------------------
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<STATUS>("pending");
+
+  // ---- Job ID -----------------------------------------------------------
+  // Default to auto-generate on mount, with a pre-filled preview the staff
+  // can override. Toggling to manual clears the input so the operator must
+  // type a real id (and uniqueness is enforced server-side).
+  const [autoJobId, setAutoJobId] = useState(true);
+  const [jobIdInput, setJobIdInput] = useState<string>(() =>
+    generateJobIdCandidate()
+  );
+  const handleRegenerateJobId = () => {
+    setJobIdInput(generateJobIdCandidate());
+  };
+  const handleToggleAutoJobId = (next: boolean) => {
+    setAutoJobId(next);
+    if (next) setJobIdInput(generateJobIdCandidate());
+    else setJobIdInput("");
+  };
 
   // ---- UI state ----------------------------------------------------------
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -265,6 +285,8 @@ export function SmartOrderForm({
     setManualDiscount("");
     setNotes("");
     setStatus("pending");
+    setAutoJobId(true);
+    setJobIdInput(generateJobIdCandidate());
     setErrorMessage(null);
   };
 
@@ -342,7 +364,19 @@ export function SmartOrderForm({
       return;
     }
 
-    const { orderId, error } = await createSmartOrder({
+    // Validate manual job id before hitting the network.
+    if (!autoJobId) {
+      const normalized = normalizeJobId(jobIdInput);
+      if (!normalized) {
+        setErrorMessage(
+          "Job ID ที่กรอกไม่ถูกต้อง — ใช้เฉพาะตัวอักษร/ตัวเลข/_-./ ไม่เกิน 32 ตัว"
+        );
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
+    const { orderId, jobId, error } = await createSmartOrder({
       customerId: resolvedCustomer.id,
       customerName: resolvedCustomer.name,
       customerType,
@@ -361,6 +395,9 @@ export function SmartOrderForm({
       total,
       notes: notes.trim() || null,
       status,
+      jobId: autoJobId ? jobIdInput : jobIdInput,
+      autoJobId,
+      createdBy: user?.uid ?? null,
     });
 
     if (error || !orderId) {
@@ -368,6 +405,8 @@ export function SmartOrderForm({
       setIsSubmitting(false);
       return;
     }
+    // Keep silent variable usage so future panels can show the assigned id.
+    void jobId;
 
     // Fire-and-forget Google Sheet sync. Order is already safely in Supabase
     // at this point — sync failure must NOT block the staff workflow. The
@@ -761,6 +800,50 @@ export function SmartOrderForm({
           placeholder="บันทึกเพิ่มเติม (เช่น สีด้าย, รหัสตู้รับ)"
           className="mt-3 w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
         />
+      </section>
+
+      {/* 5 — Job ID */}
+      <section className={sectionClass}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-bold uppercase tracking-widest text-green-700">
+            5 • Job ID
+          </p>
+          <label className="flex items-center gap-2 text-xs text-gray-700">
+            <input
+              type="checkbox"
+              checked={autoJobId}
+              onChange={(e) => handleToggleAutoJobId(e.target.checked)}
+              className="w-4 h-4 accent-green-700"
+            />
+            สร้างอัตโนมัติ
+          </label>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={jobIdInput}
+            onChange={(e) => setJobIdInput(e.target.value)}
+            readOnly={autoJobId}
+            placeholder={autoJobId ? "" : "เช่น 260513-A3F2 หรือ JOB-001"}
+            className={`flex-1 rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm ${
+              autoJobId ? "bg-gray-50 text-gray-600" : "bg-white text-gray-900"
+            }`}
+          />
+          {autoJobId && (
+            <button
+              type="button"
+              onClick={handleRegenerateJobId}
+              className="px-3 rounded-xl border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
+            >
+              สุ่มใหม่
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-[11px] text-gray-500">
+          {autoJobId
+            ? "ระบบสร้างอัตโนมัติในรูปแบบ YYMMDD-XXXX — แตะ \"สุ่มใหม่\" ถ้าต้องการเปลี่ยน"
+            : "กรอกเอง — ระบบจะเช็คว่าไม่ซ้ำใบงานเดิมก่อนบันทึก"}
+        </p>
       </section>
 
       <button

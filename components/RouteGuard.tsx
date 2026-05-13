@@ -3,6 +3,7 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { useRole } from "@/lib/roleContext";
+import { useAuth } from "@/lib/authContext";
 import { canAccessPage, type PageKey } from "@/lib/roles";
 
 interface RouteGuardProps {
@@ -24,6 +25,19 @@ interface RouteGuardProps {
  */
 export function RouteGuard({ page, children, silent }: RouteGuardProps) {
   const { role, definition } = useRole();
+  const { authRequired, user, isLoading } = useAuth();
+
+  // While AuthProvider is still resolving /me, render a neutral skeleton so
+  // the role-restricted page doesn't flash for unauthorized users.
+  if (authRequired && isLoading) {
+    return silent ? null : (
+      <div className="p-8 text-center text-gray-500">กำลังตรวจสอบสิทธิ์...</div>
+    );
+  }
+
+  // Strict mode + signed out → AuthProvider redirects to /login; render
+  // nothing in the gap.
+  if (authRequired && !user) return null;
 
   if (canAccessPage(role, page)) {
     return <>{children}</>;

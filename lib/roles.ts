@@ -1,17 +1,19 @@
-// Role-based access foundation. The frontend uses these constants as the
-// single source of truth right now so we can preview each role without
-// touching auth. Once Supabase Auth lands, public.roles + public.users +
-// public.user_branch_access (see 20260516_rbac_finance.sql) become
-// authoritative and this file will hydrate from them.
+// Enterprise role taxonomy. These codes match public.roles (seeded by
+// 20260520_auth_audit.sql) and are the values stored in `users.role` and
+// the session cookie.
+//
+// Branch scoping rule of thumb:
+//   all_branches = true   →  CEO, AREA_MANAGER, ACCOUNTANT
+//   all_branches = false  →  every other role is pinned to users.branch_id
 
 export type Role =
-  | "frontdesk"
-  | "technician"
-  | "qc"
-  | "accounting"
-  | "manager"
-  | "executive"
-  | "admin";
+  | "CEO"
+  | "AREA_MANAGER"
+  | "BRANCH_MANAGER"
+  | "FRONT_DESK"
+  | "TECHNICIAN"
+  | "ACCOUNTANT"
+  | "FRANCHISE_OWNER";
 
 export type DashboardKey =
   | "frontdesk"
@@ -28,7 +30,8 @@ export type PageKey =
   | "invoices"
   | "expenses"
   | "reports"
-  | "pricing";
+  | "pricing"
+  | "admin";
 
 export type RoleDefinition = {
   role: Role;
@@ -45,46 +48,28 @@ export type RoleDefinition = {
 };
 
 export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
-  frontdesk: {
-    role: "frontdesk",
-    labelTh: "พนักงานหน้าร้าน",
-    labelEn: "Front desk",
-    dashboards: ["frontdesk"],
-    pages: ["dashboard", "intake", "customers", "orders"],
-    allBranches: false,
-    seesFinancials: false,
-  },
-  technician: {
-    role: "technician",
-    labelTh: "ช่างซ่อม",
-    labelEn: "Technician",
-    dashboards: ["production"],
-    pages: ["dashboard", "orders"],
-    allBranches: false,
-    seesFinancials: false,
-  },
-  qc: {
-    role: "qc",
-    labelTh: "QC",
-    labelEn: "QC",
-    dashboards: ["production"],
-    pages: ["dashboard", "orders"],
-    allBranches: false,
-    seesFinancials: false,
-  },
-  accounting: {
-    role: "accounting",
-    labelTh: "บัญชี",
-    labelEn: "Accounting",
-    dashboards: ["accounting"],
-    pages: ["dashboard", "invoices", "customers", "expenses", "reports"],
+  CEO: {
+    role: "CEO",
+    labelTh: "CEO",
+    labelEn: "CEO",
+    dashboards: ["executive", "manager", "accounting", "production", "frontdesk"],
+    pages: ["*"],
     allBranches: true,
     seesFinancials: true,
   },
-  manager: {
-    role: "manager",
+  AREA_MANAGER: {
+    role: "AREA_MANAGER",
+    labelTh: "ผู้จัดการเขต",
+    labelEn: "Area manager",
+    dashboards: ["manager", "executive", "accounting", "production", "frontdesk"],
+    pages: ["*"],
+    allBranches: true,
+    seesFinancials: true,
+  },
+  BRANCH_MANAGER: {
+    role: "BRANCH_MANAGER",
     labelTh: "ผู้จัดการสาขา",
-    labelEn: "Manager",
+    labelEn: "Branch manager",
     dashboards: ["manager", "frontdesk", "production", "accounting"],
     pages: [
       "dashboard",
@@ -99,29 +84,56 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
     allBranches: false,
     seesFinancials: true,
   },
-  executive: {
-    role: "executive",
-    labelTh: "ผู้บริหาร (CEO)",
-    labelEn: "Executive",
-    dashboards: ["executive", "manager", "accounting", "production", "frontdesk"],
-    pages: ["*"],
+  FRONT_DESK: {
+    role: "FRONT_DESK",
+    labelTh: "พนักงานหน้าร้าน",
+    labelEn: "Front desk",
+    dashboards: ["frontdesk"],
+    pages: ["dashboard", "intake", "customers", "orders"],
+    allBranches: false,
+    seesFinancials: false,
+  },
+  TECHNICIAN: {
+    role: "TECHNICIAN",
+    labelTh: "ช่างซ่อม",
+    labelEn: "Technician",
+    dashboards: ["production"],
+    pages: ["dashboard", "orders"],
+    allBranches: false,
+    seesFinancials: false,
+  },
+  ACCOUNTANT: {
+    role: "ACCOUNTANT",
+    labelTh: "บัญชี",
+    labelEn: "Accountant",
+    dashboards: ["accounting"],
+    pages: ["dashboard", "invoices", "customers", "expenses", "reports"],
     allBranches: true,
     seesFinancials: true,
   },
-  admin: {
-    role: "admin",
-    labelTh: "ผู้ดูแลระบบ",
-    labelEn: "Admin",
-    dashboards: ["executive", "manager", "accounting", "production", "frontdesk"],
-    pages: ["*"],
-    allBranches: true,
+  FRANCHISE_OWNER: {
+    role: "FRANCHISE_OWNER",
+    labelTh: "เจ้าของแฟรนไชส์",
+    labelEn: "Franchise owner",
+    dashboards: ["manager", "frontdesk", "accounting"],
+    pages: [
+      "dashboard",
+      "orders",
+      "customers",
+      "invoices",
+      "expenses",
+      "reports",
+      "pricing",
+    ],
+    allBranches: false,
     seesFinancials: true,
   },
 };
 
-// Until real auth is wired, default to executive so the user previewing the
-// platform sees everything. Role can be switched live via the sidebar.
-export const DEFAULT_ROLE: Role = "executive";
+// Until LINE login is configured the preview mode defaults to CEO so the
+// platform demos with full access. Once auth is required, this is only
+// used for typing — the real role comes from the session cookie.
+export const DEFAULT_ROLE: Role = "CEO";
 
 export const DASHBOARD_LABELS: Record<DashboardKey, { th: string; en: string }> = {
   frontdesk: { th: "Front Desk", en: "Front Desk" },
@@ -130,6 +142,25 @@ export const DASHBOARD_LABELS: Record<DashboardKey, { th: string; en: string }> 
   manager: { th: "Manager", en: "Manager" },
   executive: { th: "Executive", en: "Executive" },
 };
+
+const LEGACY_ROLE_MAP: Record<string, Role> = {
+  frontdesk: "FRONT_DESK",
+  technician: "TECHNICIAN",
+  qc: "TECHNICIAN",
+  accounting: "ACCOUNTANT",
+  manager: "BRANCH_MANAGER",
+  executive: "CEO",
+  admin: "CEO",
+};
+
+/** Translate an old short code or unknown input to a valid Role. */
+export function normalizeRole(value: string | null | undefined): Role {
+  if (!value) return DEFAULT_ROLE;
+  if (value in ROLE_DEFINITIONS) return value as Role;
+  const mapped = LEGACY_ROLE_MAP[value.toLowerCase()];
+  if (mapped) return mapped;
+  return DEFAULT_ROLE;
+}
 
 export function getRoleDefinition(role: Role): RoleDefinition {
   return ROLE_DEFINITIONS[role] ?? ROLE_DEFINITIONS[DEFAULT_ROLE];

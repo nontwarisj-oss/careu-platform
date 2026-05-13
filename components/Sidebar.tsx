@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useLanguage } from "@/lib/languageContext";
 import { useBranch } from "@/lib/branchContext";
 import { useRole } from "@/lib/roleContext";
+import { useAuth } from "@/lib/authContext";
 import { canAccessPage, type PageKey, type Role } from "@/lib/roles";
 import { t } from "@/lib/translations";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -51,7 +52,20 @@ const Sidebar: React.FC = () => {
   const { language, setLanguage } = useLanguage();
   const { branch, setBranchId, branches } = useBranch();
   const { role, setRole, definition, roles } = useRole();
+  const { user, isAuthenticated, isPreview, signOut } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+
+  // /login renders its own full-screen card — hide the chrome there.
+  if (pathname === "/login") return null;
+
+  // Permission-aware branch list. CEO / AREA_MANAGER / ACCOUNTANT see every
+  // branch; everyone else (front desk, technician, branch manager, franchise
+  // owner) is locked to the branch on their user row.
+  const allowedBranches =
+    isAuthenticated && user && !definition.allBranches
+      ? branches.filter((b) => b.id === (user.branchId ?? branch.id))
+      : branches;
+  const branchSelectDisabled = isAuthenticated && !definition.allBranches;
 
   const allNavItems: NavItem[] = [
     { href: "/", page: "dashboard", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
@@ -120,6 +134,27 @@ const Sidebar: React.FC = () => {
             </div>
           </div>
 
+          {/* Signed-in identity (only in strict auth mode) */}
+          {isAuthenticated && user && (
+            <div className="mt-4 rounded-lg bg-green-950/40 border border-white/10 p-2.5 text-xs">
+              <p className="text-[10px] uppercase tracking-widest text-white/60">
+                {language === "th" ? "เข้าระบบในชื่อ" : "Signed in as"}
+              </p>
+              <p className="font-semibold text-white truncate">{user.name}</p>
+              <p className="text-[10px] text-yellow-200">
+                {language === "th"
+                  ? definition.labelTh
+                  : definition.labelEn}
+              </p>
+              <button
+                onClick={() => void signOut()}
+                className="mt-2 w-full rounded bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold py-1.5"
+              >
+                {language === "th" ? "ออกจากระบบ" : "Sign out"}
+              </button>
+            </div>
+          )}
+
           {/* Branch selector */}
           <div className="mt-4">
             <label className="block text-[10px] uppercase tracking-widest text-white/60 mb-1.5">
@@ -128,49 +163,59 @@ const Sidebar: React.FC = () => {
             <select
               value={branch.id}
               onChange={(e) => setBranchId(e.target.value)}
-              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+              disabled={branchSelectDisabled}
+              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300 disabled:opacity-70 disabled:cursor-not-allowed"
               aria-label={language === "th" ? "เลือกสาขา" : "Select branch"}
             >
-              {branches.map((b) => (
+              {allowedBranches.map((b) => (
                 <option key={b.id} value={b.id} className="text-gray-800">
                   {b.shortLabel}
                 </option>
               ))}
             </select>
+            {branchSelectDisabled && (
+              <p className="mt-1 text-[10px] text-white/60">
+                {language === "th"
+                  ? "บทบาทนี้ถูกล็อกที่สาขาของคุณ"
+                  : "Locked to your assigned branch"}
+              </p>
+            )}
           </div>
 
-          {/* Role selector (preview-mode until auth lands) */}
-          <div className="mt-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-[10px] uppercase tracking-widest text-white/60">
-                {language === "th" ? "บทบาท" : "Role"}
-              </label>
-              <span className="px-1.5 py-0.5 rounded bg-yellow-300/20 text-yellow-200 text-[9px] uppercase tracking-widest font-semibold">
-                {language === "th" ? "พรีวิว" : "Preview"}
-              </span>
+          {/* Role selector — preview mode only (no real session) */}
+          {isPreview && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[10px] uppercase tracking-widest text-white/60">
+                  {language === "th" ? "บทบาท" : "Role"}
+                </label>
+                <span className="px-1.5 py-0.5 rounded bg-yellow-300/20 text-yellow-200 text-[9px] uppercase tracking-widest font-semibold">
+                  {language === "th" ? "พรีวิว" : "Preview"}
+                </span>
+              </div>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as Role)}
+                className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                aria-label={language === "th" ? "เลือกบทบาท" : "Select role"}
+              >
+                {roles.map((r) => (
+                  <option key={r.role} value={r.role} className="text-gray-800">
+                    {language === "th" ? r.labelTh : r.labelEn}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] text-white/60 leading-tight">
+                {language === "th"
+                  ? definition.allBranches
+                    ? "เห็นข้อมูลทุกสาขา"
+                    : "เห็นข้อมูลเฉพาะสาขาที่เลือก"
+                  : definition.allBranches
+                  ? "Sees all branches"
+                  : "Scoped to current branch"}
+              </p>
             </div>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
-              aria-label={language === "th" ? "เลือกบทบาท" : "Select role"}
-            >
-              {roles.map((r) => (
-                <option key={r.role} value={r.role} className="text-gray-800">
-                  {language === "th" ? r.labelTh : r.labelEn}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-[10px] text-white/60 leading-tight">
-              {language === "th"
-                ? definition.allBranches
-                  ? "เห็นข้อมูลทุกสาขา"
-                  : "เห็นข้อมูลเฉพาะสาขาที่เลือก"
-                : definition.allBranches
-                ? "Sees all branches"
-                : "Scoped to current branch"}
-            </p>
-          </div>
+          )}
         </div>
 
         {/* Navigation */}
