@@ -4,12 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { OrderDetailModal } from "@/components/OrderDetailModal";
-
-type Customer = {
-  id: string;
-  name: string;
-  phone: string;
-};
+import {
+  SmartOrderForm,
+  type SmartOrderCreatedSummary,
+} from "@/components/SmartOrderForm";
 
 type Order = {
   id: string;
@@ -21,7 +19,6 @@ type Order = {
   created_at: string;
 };
 
-const STATUS_OPTIONS = ["pending", "in-progress", "completed", "ready-for-pickup"] as const;
 const EDITABLE_STATUSES = ["pending", "in-progress", "completed"] as const;
 const FILTER_STATUSES = ["all", "pending", "in-progress", "completed", "ready-for-pickup"] as const;
 
@@ -41,10 +38,6 @@ const statusBadgeClasses: Record<string, string> = {
   "ready-for-pickup": "border-purple-200 bg-purple-50 text-purple-800",
 };
 
-function normalizePhone(value: string): string {
-  return value.replace(/\D/g, "");
-}
-
 function startOfDay(d: Date): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -58,43 +51,22 @@ function endOfDay(d: Date): Date {
 }
 
 export default function OrdersPage() {
-  const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // New-order form
-  const [customerId, setCustomerId] = useState("");
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [itemName, setItemName] = useState("");
-  const [price, setPrice] = useState("");
-  const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>("pending");
 
   // Filters
   const [orderSearch, setOrderSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
-  // Future: const [urgentOnly, setUrgentOnly] = useState(false);
 
   // Detail drawer
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
 
-  const fetchCustomers = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("customers")
-      .select("id, name, phone")
-      .order("name", { ascending: true });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setCustomers([]);
-      return;
-    }
-
-    setCustomers((data ?? []) as Customer[]);
-  }, []);
+  // Create toast
+  const [createdToast, setCreatedToast] =
+    useState<SmartOrderCreatedSummary | null>(null);
 
   const fetchOrders = useCallback(async () => {
     const { data, error } = await supabase
@@ -115,90 +87,17 @@ export default function OrdersPage() {
     void (async () => {
       setIsLoading(true);
       setErrorMessage(null);
-      await Promise.all([fetchCustomers(), fetchOrders()]);
+      await fetchOrders();
       setIsLoading(false);
     })();
-  }, [fetchCustomers, fetchOrders]);
+  }, [fetchOrders]);
 
-  // ---- Customer typeahead (repeat-customer detection) -----------------------
-  const selectedCustomer = useMemo(
-    () => customers.find((c) => c.id === customerId) ?? null,
-    [customers, customerId]
-  );
-
-  const customerMatches = useMemo(() => {
-    const raw = customerSearch.trim();
-    if (!raw || selectedCustomer) return [];
-    const lower = raw.toLowerCase();
-    const phoneDigits = normalizePhone(raw);
-    const byPhone = phoneDigits.length >= 3;
-    return customers
-      .filter((c) => {
-        if (byPhone && normalizePhone(c.phone).includes(phoneDigits)) return true;
-        return c.name.toLowerCase().includes(lower);
-      })
-      .slice(0, 6);
-  }, [customers, customerSearch, selectedCustomer]);
-
-  const exactPhoneMatch = useMemo(() => {
-    const digits = normalizePhone(customerSearch);
-    if (digits.length < 9) return null;
-    return customers.find((c) => normalizePhone(c.phone) === digits) ?? null;
-  }, [customers, customerSearch]);
-
-  useEffect(() => {
-    if (exactPhoneMatch && !customerId) {
-      setCustomerId(exactPhoneMatch.id);
-    }
-  }, [exactPhoneMatch, customerId]);
-
-  // ---- Summary --------------------------------------------------------------
   const summary = useMemo(() => {
     const pending = orders.filter((o) => o.status === "pending").length;
     const inProgress = orders.filter((o) => o.status === "in-progress").length;
     const completed = orders.filter((o) => o.status === "completed").length;
     return { pending, inProgress, completed, total: orders.length };
   }, [orders]);
-
-  // ---- Submit ---------------------------------------------------------------
-  const handleCreateOrder = async () => {
-    if (!customerId || !itemName.trim() || !price) {
-      return;
-    }
-
-    const numericPrice = Number(price);
-    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
-      setErrorMessage("Price must be a non-negative number");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setErrorMessage(null);
-
-    const customer = customers.find((c) => c.id === customerId);
-
-    const { error } = await supabase.from("orders").insert({
-      customer_id: customerId,
-      customer_name: customer?.name ?? "",
-      item_name: itemName.trim(),
-      price: numericPrice,
-      status,
-    });
-
-    if (error) {
-      setErrorMessage(error.message);
-      setIsSubmitting(false);
-      return;
-    }
-
-    setCustomerId("");
-    setCustomerSearch("");
-    setItemName("");
-    setPrice("");
-    setStatus("pending");
-    setIsSubmitting(false);
-    await fetchOrders();
-  };
 
   const handleUpdateStatus = async (orderId: string, newStatus: string) => {
     setErrorMessage(null);
@@ -218,7 +117,6 @@ export default function OrdersPage() {
     }
   };
 
-  // ---- Filters --------------------------------------------------------------
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
     const fromDate = dateFrom ? startOfDay(new Date(dateFrom)) : null;
@@ -257,12 +155,31 @@ export default function OrdersPage() {
       <div className="mb-8 flex flex-col gap-2 border-l-4 border-yellow-400 pl-4">
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">CareU OPS</p>
         <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900">คำสั่งซ่อม</h1>
-        <p className="text-sm text-gray-600">จัดการงานซ่อม ค้นหา กรองสถานะ และรองรับประวัติลูกค้าในเฟสต่อไป</p>
+        <p className="text-sm text-gray-600">
+          จัดการงานซ่อม ค้นหา กรองสถานะ และสร้างใบงานใหม่จากแคตตาล็อกบริการ
+        </p>
       </div>
 
       {errorMessage && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {errorMessage}
+        </div>
+      )}
+
+      {createdToast && (
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-start justify-between gap-3">
+          <span>
+            บันทึกใบงาน #{createdToast.orderId.slice(0, 8).toUpperCase()} •{" "}
+            {createdToast.customerName} • {formatCurrency(createdToast.total)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setCreatedToast(null)}
+            className="text-green-700 hover:text-green-900"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -286,114 +203,21 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* New-order form */}
-      <div className="bg-white p-5 md:p-6 rounded-2xl border border-green-100 shadow-sm mb-6">
+      {/* Smart form */}
+      <div className="bg-white p-5 md:p-6 rounded-2xl border border-green-100 shadow-sm mb-8">
         <div className="mb-4">
-          <h2 className="text-lg font-bold text-gray-900">เพิ่มคำสั่งซ่อม</h2>
+          <h2 className="text-lg font-bold text-gray-900">สร้างใบงานใหม่</h2>
           <p className="text-xs text-gray-500">
-            ค้นหาลูกค้าด้วยเบอร์โทรหรือชื่อ — ระบบจะตรวจจับลูกค้าซ้ำให้อัตโนมัติ
+            เลือกบริการจากแคตตาล็อก ระบบจะเติมรายละเอียดและคำนวณยอดสุทธิให้อัตโนมัติ
           </p>
         </div>
-
-        <div className="grid gap-4">
-          {/* Customer typeahead */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">ลูกค้า</label>
-            {selectedCustomer ? (
-              <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
-                <div>
-                  <p className="font-medium text-gray-800">{selectedCustomer.name}</p>
-                  <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCustomerId("");
-                    setCustomerSearch("");
-                  }}
-                  className="text-sm text-green-700 hover:text-green-800 font-medium"
-                >
-                  เปลี่ยน
-                </button>
-              </div>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  value={customerSearch}
-                  onChange={(e) => setCustomerSearch(e.target.value)}
-                  disabled={isSubmitting}
-                  placeholder="ค้นหาด้วยเบอร์โทรหรือชื่อลูกค้า"
-                  className="w-full rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
-                />
-                {customerSearch.trim() && customerMatches.length > 0 && (
-                  <div className="mt-2 border border-gray-200 rounded-xl bg-white shadow-sm divide-y divide-gray-100 max-h-56 overflow-y-auto">
-                    {customerMatches.map((c) => (
-                      <button
-                        type="button"
-                        key={c.id}
-                        onClick={() => {
-                          setCustomerId(c.id);
-                          setCustomerSearch("");
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-green-50"
-                      >
-                        <span className="font-medium text-gray-800">{c.name}</span>
-                        <span className="text-sm text-gray-500 ml-2">{c.phone}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {customerSearch.trim() &&
-                  customerMatches.length === 0 &&
-                  customers.length > 0 && (
-                    <p className="mt-2 text-xs text-gray-500">
-                      ไม่พบลูกค้า — เพิ่มลูกค้าใหม่ที่หน้า /customers
-                    </p>
-                  )}
-              </>
-            )}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <input
-              type="text"
-              placeholder="รายการซ่อม"
-              value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-              disabled={isSubmitting}
-              className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
-            />
-            <input
-              type="number"
-              placeholder="ราคา"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              disabled={isSubmitting}
-              className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
-            />
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value as (typeof STATUS_OPTIONS)[number])}
-              disabled={isSubmitting}
-              className="rounded-xl border border-gray-200 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {statusLabels[s] ?? s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            onClick={handleCreateOrder}
-            disabled={isSubmitting || !customerId || !itemName.trim() || !price}
-            className="rounded-xl bg-green-700 p-3 font-semibold text-white transition hover:bg-green-800 disabled:opacity-50"
-          >
-            บันทึกคำสั่งซ่อม
-          </button>
-        </div>
+        <SmartOrderForm
+          variant="manage"
+          onCreated={(summary) => {
+            setCreatedToast(summary);
+            void fetchOrders();
+          }}
+        />
       </div>
 
       {/* Orders table */}

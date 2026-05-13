@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { getBranchById } from "@/lib/brandConfig";
+import {
+  getCategoryByCode,
+  getCustomerTypeByCode,
+  getPromotionByCode,
+  getServiceByCode,
+} from "@/lib/pricing";
 
 export type OrderDetailInput = {
   id: string;
@@ -47,6 +53,15 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
   const [urgent, setUrgent] = useState<boolean>(false);
   const [urgentFee, setUrgentFee] = useState<number>(0);
   const [branchId, setBranchId] = useState<string | null>(null);
+  const [subtotal, setSubtotal] = useState<number | null>(null);
+  const [discount, setDiscount] = useState<number>(0);
+  const [serviceCategory, setServiceCategory] = useState<string | null>(null);
+  const [serviceCode, setServiceCode] = useState<string | null>(null);
+  const [serviceName, setServiceName] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState<number>(1);
+  const [templateText, setTemplateText] = useState<string | null>(null);
+  const [customerType, setCustomerType] = useState<string | null>(null);
+  const [promotionCode, setPromotionCode] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -62,26 +77,72 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
       setUrgent(false);
       setUrgentFee(0);
       setBranchId(null);
+      setSubtotal(null);
+      setDiscount(0);
+      setServiceCategory(null);
+      setServiceCode(null);
+      setServiceName(null);
+      setQuantity(1);
+      setTemplateText(null);
+      setCustomerType(null);
+      setPromotionCode(null);
       setAttachments(null);
 
-      // Try the extended order columns. If they don't exist yet (migration
-      // not applied), silently fall back to the legacy projection.
-      const extended = await supabase
+      // Try the smart-order extended columns. If any are missing (migration not
+      // yet applied), narrow the projection and retry so older databases work.
+      type ExtendedRow = {
+        notes?: string | null;
+        urgent?: boolean | null;
+        urgent_fee?: number | string | null;
+        branch_id?: string | null;
+        subtotal?: number | string | null;
+        discount?: number | string | null;
+        service_category?: string | null;
+        service_code?: string | null;
+        service_name?: string | null;
+        quantity?: number | null;
+        template_text?: string | null;
+        customer_type?: string | null;
+        promotion_code?: string | null;
+      };
+      let extendedRow: ExtendedRow | null = null;
+      const wide = await supabase
         .from("orders")
-        .select("notes, urgent, urgent_fee, branch_id")
+        .select(
+          "notes, urgent, urgent_fee, branch_id, subtotal, discount, service_category, service_code, service_name, quantity, template_text, customer_type, promotion_code"
+        )
         .eq("id", order.id)
         .maybeSingle();
-      if (!extended.error && extended.data) {
-        const row = extended.data as {
-          notes?: string | null;
-          urgent?: boolean | null;
-          urgent_fee?: number | string | null;
-          branch_id?: string | null;
-        };
-        setNotes(row.notes ?? null);
-        setUrgent(Boolean(row.urgent));
-        setUrgentFee(Number(row.urgent_fee ?? 0));
-        setBranchId(row.branch_id ?? null);
+      if (!wide.error && wide.data) {
+        extendedRow = wide.data as ExtendedRow;
+      } else {
+        const narrow = await supabase
+          .from("orders")
+          .select("notes, urgent, urgent_fee, branch_id")
+          .eq("id", order.id)
+          .maybeSingle();
+        if (!narrow.error && narrow.data) {
+          extendedRow = narrow.data as ExtendedRow;
+        }
+      }
+      if (extendedRow) {
+        setNotes(extendedRow.notes ?? null);
+        setUrgent(Boolean(extendedRow.urgent));
+        setUrgentFee(Number(extendedRow.urgent_fee ?? 0));
+        setBranchId(extendedRow.branch_id ?? null);
+        setSubtotal(
+          extendedRow.subtotal !== null && extendedRow.subtotal !== undefined
+            ? Number(extendedRow.subtotal)
+            : null
+        );
+        setDiscount(Number(extendedRow.discount ?? 0));
+        setServiceCategory(extendedRow.service_category ?? null);
+        setServiceCode(extendedRow.service_code ?? null);
+        setServiceName(extendedRow.service_name ?? null);
+        setQuantity(Number(extendedRow.quantity ?? 1));
+        setTemplateText(extendedRow.template_text ?? null);
+        setCustomerType(extendedRow.customer_type ?? null);
+        setPromotionCode(extendedRow.promotion_code ?? null);
       }
 
       // Customer phone — only resolvable when customer_id is present.
@@ -116,7 +177,23 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
   if (!order) return null;
 
   const branchLabel = branchId ? getBranchById(branchId).shortLabel : "-";
-  const subtotal = order.price - (urgent ? urgentFee : 0);
+  const displaySubtotal =
+    subtotal !== null
+      ? subtotal
+      : Math.max(0, order.price + discount - (urgent ? urgentFee : 0));
+  const serviceLabel =
+    serviceName ||
+    getServiceByCode(serviceCode ?? undefined)?.nameTh ||
+    order.item_name ||
+    "-";
+  const categoryLabel =
+    getCategoryByCode(serviceCategory ?? undefined)?.labelTh ?? null;
+  const promotionLabel =
+    promotionCode && promotionCode !== "NONE"
+      ? getPromotionByCode(promotionCode)?.nameTh ?? promotionCode
+      : null;
+  const customerTypeLabel =
+    getCustomerTypeByCode(customerType ?? undefined)?.nameTh ?? null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -155,6 +232,11 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
                 {order.customer_name || "-"}
               </p>
               <p className="text-sm text-gray-600">{customerPhone || "-"}</p>
+              {customerTypeLabel && (
+                <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-800 text-[11px] font-medium">
+                  {customerTypeLabel}
+                </span>
+              )}
             </div>
             <div className="border border-gray-200 rounded-xl p-4">
               <p className="text-xs uppercase tracking-wide text-gray-500">สาขา</p>
@@ -169,13 +251,30 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
           <div className="border border-gray-200 rounded-xl p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-xs uppercase tracking-wide text-gray-500">รายการ</p>
-                <p className="font-semibold text-gray-800 mt-1 break-words">
-                  {order.item_name || "-"}
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  บริการ
                 </p>
+                {categoryLabel && (
+                  <p className="text-[11px] text-green-700 font-semibold mt-0.5">
+                    {categoryLabel}
+                  </p>
+                )}
+                <p className="font-semibold text-gray-800 mt-1 break-words">
+                  {serviceLabel}
+                  {quantity > 1 && (
+                    <span className="ml-1 text-sm text-gray-500">
+                      × {quantity}
+                    </span>
+                  )}
+                </p>
+                {templateText && (
+                  <p className="text-xs text-gray-600 mt-2 whitespace-pre-wrap">
+                    {templateText}
+                  </p>
+                )}
               </div>
               <span
-                className={`px-3 py-1 rounded-full text-xs font-medium ${
+                className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
                   statusBadge[order.status] ?? "bg-gray-100 text-gray-700"
                 }`}
               >
@@ -183,21 +282,29 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
               </span>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 mt-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-sm">
               <div>
-                <p className="text-xs text-gray-500">ราคา</p>
+                <p className="text-xs text-gray-500">ยอดก่อนส่วนลด</p>
                 <p className="font-semibold text-gray-800">
-                  {formatCurrency(subtotal)}
+                  {formatCurrency(displaySubtotal)}
                 </p>
               </div>
               <div>
                 <p className="text-xs text-gray-500">ค่างานด่วน</p>
                 <p className="font-semibold text-gray-800">
-                  {urgent ? formatCurrency(urgentFee) : formatCurrency(0)}
+                  {formatCurrency(urgent ? urgentFee : 0)}
                 </p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">รวม</p>
+                <p className="text-xs text-gray-500">
+                  ส่วนลด{promotionLabel ? ` (${promotionLabel})` : ""}
+                </p>
+                <p className="font-semibold text-gray-800">
+                  -{formatCurrency(discount)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">ยอดรวมสุทธิ</p>
                 <p className="font-bold text-green-700">
                   {formatCurrency(order.price)}
                 </p>

@@ -5,6 +5,11 @@ import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { useBranch } from "@/lib/branchContext";
 import { BrandLogo } from "@/components/BrandLogo";
+import {
+  getCategoryByCode,
+  getPromotionByCode,
+  getServiceByCode,
+} from "@/lib/pricing";
 
 type InvoiceRow = {
   id: string;
@@ -13,25 +18,54 @@ type InvoiceRow = {
   price: number;
   status: string;
   created_at: string;
+  // Smart-order extension fields (nullable — present only when migration is run).
+  subtotal: number | null;
+  discount: number;
+  urgent: boolean;
+  urgent_fee: number;
+  quantity: number;
+  service_category: string | null;
+  service_code: string | null;
+  service_name: string | null;
+  promotion_code: string | null;
+  template_text: string | null;
 };
 
-// Charge breakdown is built from the order row. Until the schema adds
-// discount / urgent_fee columns, these helpers return 0 — the receipt
-// layout already has slots ready so we won't need a template change later.
-function getDiscount(_inv: InvoiceRow): number {
-  return 0;
-}
-
-function getUrgentFee(_inv: InvoiceRow): number {
-  return 0;
-}
-
 function getSubtotal(inv: InvoiceRow): number {
-  return inv.price;
+  if (inv.subtotal !== null) return inv.subtotal;
+  // Reconstruct from legacy total when the smart columns aren't present yet.
+  return Math.max(0, inv.price + inv.discount - inv.urgent_fee);
+}
+
+function getDiscount(inv: InvoiceRow): number {
+  return inv.discount ?? 0;
+}
+
+function getUrgentFee(inv: InvoiceRow): number {
+  return inv.urgent_fee ?? 0;
 }
 
 function getTotal(inv: InvoiceRow): number {
-  return getSubtotal(inv) - getDiscount(inv) + getUrgentFee(inv);
+  // Source of truth is the persisted total stored in `price`.
+  return inv.price;
+}
+
+function getServiceLabel(inv: InvoiceRow): string {
+  if (inv.service_name) return inv.service_name;
+  const lookup = getServiceByCode(inv.service_code ?? undefined);
+  if (lookup) return lookup.nameTh;
+  return inv.item_name || "-";
+}
+
+function getCategoryLabel(inv: InvoiceRow): string | null {
+  return getCategoryByCode(inv.service_category ?? undefined)?.labelTh ?? null;
+}
+
+function getPromotionLabel(inv: InvoiceRow): string | null {
+  if (!inv.promotion_code || inv.promotion_code === "NONE") return null;
+  return (
+    getPromotionByCode(inv.promotion_code)?.nameTh ?? inv.promotion_code
+  );
 }
 
 const statusLabelsTh: Record<string, string> = {
@@ -59,26 +93,54 @@ export default function InvoicesPage() {
       setIsLoading(true);
       setErrorMessage(null);
 
-      const { data, error } = await supabase
+      // Try the smart-order column set first; if any column is missing
+      // (migration not yet applied), retry with the legacy projection.
+      const wideCols =
+        "id, customer_name, item_name, price, status, created_at, subtotal, discount, urgent, urgent_fee, quantity, service_category, service_code, service_name, promotion_code, template_text";
+      let rows: Array<Record<string, unknown>> | null = null;
+      const wide = await supabase
         .from("orders")
-        .select("id, customer_name, item_name, price, status, created_at")
+        .select(wideCols)
         .order("created_at", { ascending: false });
-
-      if (error) {
-        setErrorMessage(error.message);
-        setInvoices([]);
+      if (!wide.error) {
+        rows = (wide.data ?? []) as Array<Record<string, unknown>>;
       } else {
-        setInvoices(
-          (data ?? []).map((row) => ({
-            id: String(row.id),
-            customer_name: row.customer_name ?? "",
-            item_name: row.item_name ?? "",
-            price: Number(row.price ?? 0),
-            status: row.status ?? "",
-            created_at: row.created_at,
-          }))
-        );
+        const narrow = await supabase
+          .from("orders")
+          .select("id, customer_name, item_name, price, status, created_at")
+          .order("created_at", { ascending: false });
+        if (narrow.error) {
+          setErrorMessage(narrow.error.message);
+          setInvoices([]);
+          setIsLoading(false);
+          return;
+        }
+        rows = (narrow.data ?? []) as Array<Record<string, unknown>>;
       }
+
+      setInvoices(
+        rows.map((row) => ({
+          id: String(row.id),
+          customer_name: (row.customer_name as string) ?? "",
+          item_name: (row.item_name as string) ?? "",
+          price: Number(row.price ?? 0),
+          status: (row.status as string) ?? "",
+          created_at: row.created_at as string,
+          subtotal:
+            row.subtotal !== null && row.subtotal !== undefined
+              ? Number(row.subtotal)
+              : null,
+          discount: Number(row.discount ?? 0),
+          urgent: Boolean(row.urgent),
+          urgent_fee: Number(row.urgent_fee ?? 0),
+          quantity: Number(row.quantity ?? 1),
+          service_category: (row.service_category as string) ?? null,
+          service_code: (row.service_code as string) ?? null,
+          service_name: (row.service_name as string) ?? null,
+          promotion_code: (row.promotion_code as string) ?? null,
+          template_text: (row.template_text as string) ?? null,
+        }))
+      );
       setIsLoading(false);
     })();
   }, []);
@@ -173,11 +235,28 @@ export default function InvoicesPage() {
 
                 <div className="border-t border-dashed border-gray-200 my-3" />
 
-                <div className="flex justify-between">
+                <div className="flex justify-between items-start">
                   <span className="text-gray-500">รายการ</span>
-                  <span className="text-gray-800">
-                    {inv.item_name || "-"}
-                  </span>
+                  <div className="text-right max-w-[65%]">
+                    {getCategoryLabel(inv) && (
+                      <p className="text-[11px] text-green-700 font-semibold">
+                        {getCategoryLabel(inv)}
+                      </p>
+                    )}
+                    <p className="text-gray-800 break-words">
+                      {getServiceLabel(inv)}
+                      {inv.quantity > 1 && (
+                        <span className="ml-1 text-gray-500">
+                          × {inv.quantity}
+                        </span>
+                      )}
+                    </p>
+                    {inv.template_text && (
+                      <p className="text-[11px] text-gray-500 mt-0.5 whitespace-pre-wrap">
+                        {inv.template_text}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-500">สถานะ</span>
@@ -201,7 +280,12 @@ export default function InvoicesPage() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-500">ส่วนลด</span>
+                  <span className="text-gray-500">
+                    ส่วนลด
+                    {getPromotionLabel(inv)
+                      ? ` (${getPromotionLabel(inv)})`
+                      : ""}
+                  </span>
                   <span className="text-gray-800">
                     -{formatCurrency(getDiscount(inv))}
                   </span>

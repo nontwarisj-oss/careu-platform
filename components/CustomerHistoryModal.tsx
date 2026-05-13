@@ -90,11 +90,25 @@ export function CustomerHistoryModal({
       <div className="bg-white rounded-2xl shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto border border-green-100">
         {/* Header */}
         <div className="bg-gradient-to-r from-green-700 to-green-600 px-6 py-4 flex items-center justify-between border-b-4 border-yellow-400 rounded-t-2xl">
-          <div className="text-white">
+          <div className="text-white min-w-0">
             <p className="text-[11px] uppercase tracking-widest text-yellow-200 font-semibold">
               ประวัติลูกค้า
             </p>
-            <h2 className="text-xl font-bold">{customerName || "-"}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-bold truncate">
+                {customerName || "-"}
+              </h2>
+              {summary.totalOrders >= 2 && (
+                <span className="px-2 py-0.5 rounded-full bg-yellow-300 text-green-900 text-[10px] font-bold uppercase tracking-wide">
+                  ลูกค้าประจำ
+                </span>
+              )}
+              {summary.totalOrders === 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-white/20 text-white text-[10px] font-bold uppercase tracking-wide">
+                  ลูกค้าใหม่
+                </span>
+              )}
+            </div>
             {customerPhone && (
               <p className="text-sm text-green-100">{customerPhone}</p>
             )}
@@ -149,6 +163,10 @@ export function CustomerHistoryModal({
               {errorMessage}
             </div>
           )}
+
+          <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-3 text-xs text-gray-500 mb-4">
+            ภาพ/วิดีโอ/เอกสารของลูกค้าจะแสดงที่นี่เมื่อระบบ Storage พร้อมใช้งาน
+          </div>
 
           {isLoading ? (
             <div className="p-8 text-center text-gray-500">กำลังโหลด...</div>

@@ -30,6 +30,17 @@ type BranchRow = {
   id: string;
 };
 
+type CustomerStats = {
+  orderCount: number;
+  totalSpent: number;
+  latestDate: string | null;
+};
+
+type EnrichedCustomer = Customer & {
+  orderCount: number;
+  isRepeat: boolean;
+};
+
 const mapCustomerRow = (customer: CustomerRow): Customer => ({
   id: customer.id,
   name: customer.name,
@@ -61,6 +72,9 @@ export default function CustomersPage() {
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [statsByCustomer, setStatsByCustomer] = useState<
+    Record<string, CustomerStats>
+  >({});
 
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
@@ -81,6 +95,37 @@ export default function CustomersPage() {
     setCustomers(((data ?? []) as CustomerRow[]).map(mapCustomerRow));
     setIsLoading(false);
   }, []);
+
+  const fetchCustomerStats = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("customer_id, price, created_at");
+    if (error) return;
+    const map: Record<string, CustomerStats> = {};
+    for (const row of (data ?? []) as Array<{
+      customer_id: string | null;
+      price: number | string | null;
+      created_at: string;
+    }>) {
+      if (!row.customer_id) continue;
+      const cur = map[row.customer_id] ?? {
+        orderCount: 0,
+        totalSpent: 0,
+        latestDate: null,
+      };
+      cur.orderCount += 1;
+      cur.totalSpent += Number(row.price ?? 0);
+      if (!cur.latestDate || new Date(row.created_at) > new Date(cur.latestDate)) {
+        cur.latestDate = row.created_at;
+      }
+      map[row.customer_id] = cur;
+    }
+    setStatsByCustomer(map);
+  }, []);
+
+  useEffect(() => {
+    void fetchCustomerStats();
+  }, [fetchCustomerStats]);
 
   useEffect(() => {
     void fetchCustomers();
@@ -134,14 +179,38 @@ export default function CustomersPage() {
     await fetchCustomers();
   };
 
-  const filteredCustomers = useMemo(() => {
+  const enrichedCustomers = useMemo<EnrichedCustomer[]>(() => {
+    return customers.map((c) => {
+      const stats = statsByCustomer[c.id];
+      const orderCount = stats?.orderCount ?? 0;
+      return {
+        ...c,
+        totalSpent: stats?.totalSpent ?? 0,
+        lastOrderDate: stats?.latestDate ? new Date(stats.latestDate) : undefined,
+        orderCount,
+        isRepeat: orderCount >= 2,
+      };
+    });
+  }, [customers, statsByCustomer]);
+
+  const filteredCustomers = useMemo<EnrichedCustomer[]>(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter((c) => {
+    if (!q) return enrichedCustomers;
+    return enrichedCustomers.filter((c) => {
       const fields = [c.name, c.phone, c.email ?? "", c.address ?? ""];
       return fields.some((f) => f.toLowerCase().includes(q));
     });
-  }, [customers, searchQuery]);
+  }, [enrichedCustomers, searchQuery]);
+
+  const crmSummary = useMemo(() => {
+    const totalCustomers = enrichedCustomers.length;
+    const repeatCustomers = enrichedCustomers.filter((c) => c.isRepeat).length;
+    const totalRevenue = enrichedCustomers.reduce(
+      (s, c) => s + (c.totalSpent ?? 0),
+      0
+    );
+    return { totalCustomers, repeatCustomers, totalRevenue };
+  }, [enrichedCustomers]);
 
   const handleImportFile = async (file: File) => {
     setImportMessage(null);
@@ -185,7 +254,7 @@ export default function CustomersPage() {
             ? `ซิงค์สำเร็จ • เพิ่ม ${json.inserted ?? 0} • ซ้ำ ${json.duplicates ?? 0} • ข้าม ${json.skipped ?? 0}`
             : `Synced • added ${json.inserted ?? 0}, duplicates ${json.duplicates ?? 0}, skipped ${json.skipped ?? 0}`
         );
-        await fetchCustomers();
+        await Promise.all([fetchCustomers(), fetchCustomerStats()]);
       }
     } catch (err) {
       setSyncMessage(err instanceof Error ? err.message : "Sync failed");
@@ -255,6 +324,14 @@ export default function CustomersPage() {
         address && address.trim() ? address : "N/A",
     },
     {
+      key: "orderCount",
+      label: language === "th" ? "ครั้ง" : "Visits",
+      width: "90px",
+      render: (count: number) => (
+        <span className="font-semibold text-gray-800">{count ?? 0}</span>
+      ),
+    },
+    {
       key: "lastOrderDate",
       label: t("customers.lastOrder", language),
       width: "120px",
@@ -264,7 +341,33 @@ export default function CustomersPage() {
       key: "totalSpent",
       label: t("customers.totalSpent", language),
       width: "120px",
-      render: (amount: number) => formatCurrency(amount),
+      render: (amount: number) => (
+        <span className="font-semibold text-green-700">
+          {formatCurrency(amount)}
+        </span>
+      ),
+    },
+    {
+      key: "isRepeat",
+      label: language === "th" ? "ประเภทลูกค้า" : "Type",
+      width: "140px",
+      render: (isRepeat: boolean) => (
+        <span
+          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+            isRepeat
+              ? "bg-green-50 text-green-800 border-green-200"
+              : "bg-gray-50 text-gray-700 border-gray-200"
+          }`}
+        >
+          {isRepeat
+            ? language === "th"
+              ? "ลูกค้าประจำ"
+              : "Repeat"
+            : language === "th"
+            ? "ลูกค้าใหม่"
+            : "New"}
+        </span>
+      ),
     },
   ];
 
@@ -309,6 +412,34 @@ export default function CustomersPage() {
           >
             + {t("customers.addCustomer", language)}
           </button>
+        </div>
+      </div>
+
+      {/* CRM summary band */}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+          <p className="text-xs text-gray-500">
+            {language === "th" ? "ลูกค้าทั้งหมด" : "Total customers"}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-gray-900">
+            {crmSummary.totalCustomers}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-green-100 bg-green-50 p-4 shadow-sm">
+          <p className="text-xs text-green-800">
+            {language === "th" ? "ลูกค้าประจำ (≥ 2 ครั้ง)" : "Repeat customers"}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-green-900">
+            {crmSummary.repeatCustomers}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-yellow-100 bg-yellow-50 p-4 shadow-sm col-span-2 lg:col-span-1">
+          <p className="text-xs text-yellow-800">
+            {language === "th" ? "ยอดใช้จ่ายรวม" : "Total spend"}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-yellow-900">
+            {formatCurrency(crmSummary.totalRevenue)}
+          </p>
         </div>
       </div>
 
