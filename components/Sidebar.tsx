@@ -5,11 +5,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLanguage } from "@/lib/languageContext";
 import { useBranch } from "@/lib/branchContext";
+import { useRole } from "@/lib/roleContext";
+import { canAccessPage, type PageKey, type Role } from "@/lib/roles";
 import { t } from "@/lib/translations";
 import { BrandLogo } from "@/components/BrandLogo";
 
 interface NavItem {
   href: string;
+  page: PageKey;
   label: string;
   iconPath: string;
 }
@@ -41,19 +44,23 @@ const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const { language, setLanguage } = useLanguage();
   const { branch, setBranchId, branches } = useBranch();
+  const { role, setRole, definition, roles } = useRole();
   const [isOpen, setIsOpen] = useState(false);
 
-  const navItems: NavItem[] = [
-    { href: "/", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
+  const allNavItems: NavItem[] = [
+    { href: "/", page: "dashboard", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
     {
       href: "/intake",
+      page: "intake",
       label: language === "th" ? "รับงานหน้าร้าน" : "Walk-in intake",
       iconPath: ICON_PATHS.intake,
     },
-    { href: "/customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
-    { href: "/orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
-    { href: "/invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
+    { href: "/customers", page: "customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
+    { href: "/orders", page: "orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
+    { href: "/invoices", page: "invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
   ];
+
+  const navItems = allNavItems.filter((item) => canAccessPage(role, item.page));
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -106,6 +113,39 @@ const Sidebar: React.FC = () => {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Role selector (preview-mode until auth lands) */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-[10px] uppercase tracking-widest text-white/60">
+                {language === "th" ? "บทบาท" : "Role"}
+              </label>
+              <span className="px-1.5 py-0.5 rounded bg-yellow-300/20 text-yellow-200 text-[9px] uppercase tracking-widest font-semibold">
+                {language === "th" ? "พรีวิว" : "Preview"}
+              </span>
+            </div>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as Role)}
+              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+              aria-label={language === "th" ? "เลือกบทบาท" : "Select role"}
+            >
+              {roles.map((r) => (
+                <option key={r.role} value={r.role} className="text-gray-800">
+                  {language === "th" ? r.labelTh : r.labelEn}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[10px] text-white/60 leading-tight">
+              {language === "th"
+                ? definition.allBranches
+                  ? "เห็นข้อมูลทุกสาขา"
+                  : "เห็นข้อมูลเฉพาะสาขาที่เลือก"
+                : definition.allBranches
+                ? "Sees all branches"
+                : "Scoped to current branch"}
+            </p>
           </div>
         </div>
 
