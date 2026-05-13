@@ -1,11 +1,15 @@
 import supabase from "@/lib/supabase";
-import { generateJobIdCandidate, normalizeJobId } from "@/lib/jobId";
+import { normalizeJobId } from "@/lib/jobId";
+
+export type BusinessType = "care_u" | "ezy_repair";
 
 export type SmartOrderInput = {
   customerId: string;
   customerName: string;
   customerType?: string | null;
   branchId: string;
+  /** Care U = clothing alteration; Ezy Repair = shoes/bags/luggage. */
+  businessType?: BusinessType;
   serviceCategory?: string | null;
   serviceCode?: string | null;
   /** Human-readable service name; lands in item_name when extended columns are missing. */
@@ -20,12 +24,17 @@ export type SmartOrderInput = {
   total: number;
   notes?: string | null;
   status?: string;
-  /** Optional human-readable job id. When omitted we auto-generate. */
+  /**
+   * Manual job id from the staff (Care U). Ignored when businessType is
+   * ezy_repair — that path always generates server-side via the RPC.
+   */
   jobId?: string | null;
-  /** When true and jobId is empty, auto-generate. When false and jobId is empty, leave null. */
-  autoJobId?: boolean;
   /** users.id of the staff member creating this order (for audit log). */
   createdBy?: string | null;
+  /** Optional ISO date string the customer expects to pick up. */
+  dueDate?: string | null;
+  /** Optional technician name / handle assigned at intake. */
+  tech?: string | null;
 };
 
 type InsertResult = {
@@ -33,8 +42,6 @@ type InsertResult = {
   jobId: string | null;
   error: string | null;
 };
-
-const MAX_JOB_ID_ATTEMPTS = 8;
 
 const isMissingColumn = (msg: string | undefined): boolean =>
   !!msg &&
@@ -46,50 +53,78 @@ const isDuplicateJobId = (msg: string | undefined): boolean =>
   !!msg &&
   /duplicate key|orders_job_id_unique_idx|already exists/i.test(msg);
 
-async function jobIdExists(candidate: string): Promise<boolean> {
+async function jobIdExistsScoped(
+  candidate: string,
+  branchId: string,
+  businessType: BusinessType
+): Promise<boolean> {
+  // The new scoped unique index is on (branch_id, business_type, job_id);
+  // check the same triple so manual Care U ids can collide with Ezy ids in
+  // different branches without false positives.
   const res = await supabase
     .from("orders")
     .select("id", { head: true, count: "exact" })
-    .eq("job_id", candidate);
+    .eq("job_id", candidate)
+    .eq("branch_id", branchId)
+    .eq("business_type", businessType);
   if (res.error) {
-    // Column doesn't exist yet → migration not applied. Treat as "free" so
-    // the caller proceeds; the column won't be written either.
-    if (isMissingColumn(res.error.message)) return false;
-    // Any other error → assume not free so we don't double-write.
+    if (isMissingColumn(res.error.message)) {
+      // Fall back to a global check when business_type isn't migrated yet.
+      const legacy = await supabase
+        .from("orders")
+        .select("id", { head: true, count: "exact" })
+        .eq("job_id", candidate);
+      if (legacy.error) {
+        if (isMissingColumn(legacy.error.message)) return false;
+        return true;
+      }
+      return (legacy.count ?? 0) > 0;
+    }
     return true;
   }
   return (res.count ?? 0) > 0;
 }
 
-/** Resolve the final job_id to attempt: manual entry if provided, else auto. */
-async function resolveJobId(input: SmartOrderInput): Promise<{
-  jobId: string | null;
-  error: string | null;
-}> {
+/**
+ * Resolve the final job_id. Care U is manual-only; Ezy Repair always goes
+ * through the server-side RPC so the daily sequence stays correct under
+ * concurrency.
+ */
+async function resolveJobId(
+  input: SmartOrderInput
+): Promise<{ jobId: string | null; error: string | null }> {
+  const businessType: BusinessType = input.businessType ?? "care_u";
+
+  if (businessType === "ezy_repair") {
+    const rpc = await supabase.rpc("generate_ezy_job_id", {
+      p_branch: input.branchId,
+    });
+    if (rpc.error) {
+      // RPC missing → migration not applied. Skip the column entirely.
+      if (isMissingColumn(rpc.error.message)) {
+        return { jobId: null, error: null };
+      }
+      return { jobId: null, error: rpc.error.message };
+    }
+    const generated = typeof rpc.data === "string" ? rpc.data : null;
+    return { jobId: generated, error: null };
+  }
+
+  // Care U — manual entry required.
   const manual = normalizeJobId(input.jobId);
-  if (manual) {
-    if (await jobIdExists(manual)) {
-      return {
-        jobId: null,
-        error: `Job ID "${manual}" ถูกใช้ไปแล้ว — ลองอันใหม่`,
-      };
-    }
-    return { jobId: manual, error: null };
+  if (!manual) {
+    return {
+      jobId: null,
+      error: "Care U ต้องกรอก Job ID เอง (ไม่ใช้การสร้างอัตโนมัติ)",
+    };
   }
-  if (input.autoJobId === false) {
-    return { jobId: null, error: null };
+  if (await jobIdExistsScoped(manual, input.branchId, businessType)) {
+    return {
+      jobId: null,
+      error: `Job ID "${manual}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`,
+    };
   }
-  for (let i = 0; i < MAX_JOB_ID_ATTEMPTS; i++) {
-    const candidate = generateJobIdCandidate();
-    if (!(await jobIdExists(candidate))) {
-      return { jobId: candidate, error: null };
-    }
-  }
-  return {
-    jobId: null,
-    error:
-      "สร้าง Job ID อัตโนมัติไม่สำเร็จ (ชน 8 ครั้งติด) — ลองอีกครั้ง หรือกรอกเอง",
-  };
+  return { jobId: manual, error: null };
 }
 
 async function attempt(
@@ -179,10 +214,15 @@ export async function createSmartOrder(
     document_type: "intake_quote_receipt",
   };
 
+  const businessType: BusinessType = input.businessType ?? "care_u";
+
   const v4 = {
     ...v3,
     job_id: jobId,
     created_by: input.createdBy ?? null,
+    business_type: businessType,
+    due_date: input.dueDate ?? null,
+    tech: input.tech ?? null,
   };
 
   // Tier 4 — auth/audit schema

@@ -9,6 +9,7 @@ import {
 } from "@/lib/session";
 import { isLineLoginConfigured } from "@/lib/lineLogin";
 import supabase from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +34,10 @@ export async function GET() {
 
   // Refresh allowed-branches list from the users row so disabling a user
   // takes effect on their next /me call without waiting for cookie expiry.
-  const userRes = await supabase
+  // Uses the service-role client when available so RLS on profiles (next
+  // phase) cannot lock us out of our own session lookup.
+  const dbClient = getSupabaseAdmin() ?? supabase;
+  const userRes = await dbClient
     .from("users")
     .select("id, display_name, role, branch_id, active, picture_url")
     .eq("id", session.uid)

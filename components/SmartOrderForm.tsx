@@ -21,10 +21,13 @@ import {
   type ServiceItem,
 } from "@/lib/pricing";
 import { fetchPricingCatalog } from "@/lib/pricingDb";
-import { createSmartOrder } from "@/lib/orderCreate";
+import { createSmartOrder, type BusinessType } from "@/lib/orderCreate";
 import { normalizePhone } from "@/lib/phone";
-import { generateJobIdCandidate, normalizeJobId } from "@/lib/jobId";
+import { normalizeJobId } from "@/lib/jobId";
 import { useAuth } from "@/lib/authContext";
+import { useRole } from "@/lib/roleContext";
+import { canChooseAnotherBranch } from "@/lib/permissions";
+import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
 
 type Customer = {
   id: string;
@@ -71,8 +74,10 @@ export function SmartOrderForm({
   variant = "intake",
   onCreated,
 }: SmartOrderFormProps) {
-  const { branch } = useBranch();
+  const { branch, setBranchId } = useBranch();
   const { user } = useAuth();
+  const { role } = useRole();
+  const canOverrideBranch = canChooseAnotherBranch(role);
 
   // ---- Customer ----------------------------------------------------------
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -103,21 +108,27 @@ export function SmartOrderForm({
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<STATUS>("pending");
 
-  // ---- Job ID -----------------------------------------------------------
-  // Default to auto-generate on mount, with a pre-filled preview the staff
-  // can override. Toggling to manual clears the input so the operator must
-  // type a real id (and uniqueness is enforced server-side).
-  const [autoJobId, setAutoJobId] = useState(true);
-  const [jobIdInput, setJobIdInput] = useState<string>(() =>
-    generateJobIdCandidate()
-  );
-  const handleRegenerateJobId = () => {
-    setJobIdInput(generateJobIdCandidate());
-  };
-  const handleToggleAutoJobId = (next: boolean) => {
-    setAutoJobId(next);
-    if (next) setJobIdInput(generateJobIdCandidate());
-    else setJobIdInput("");
+  // ---- Business type + Job ID -----------------------------------------
+  // Care U (clothing alteration) — staff enters job_id manually; server
+  // enforces uniqueness per (branch, business_type).
+  // Ezy Repair (shoes/bags) — job_id is server-generated via the
+  // generate_ezy_job_id RPC and shown read-only after save.
+  const initialBusinessType: BusinessType =
+    branch.brand === "ezy" ? "ezy_repair" : "care_u";
+  const [businessType, setBusinessTypeState] =
+    useState<BusinessType>(initialBusinessType);
+  const [careUJobId, setCareUJobId] = useState<string>("");
+
+  // When the branch's brand changes (owner picks a different branch) and
+  // the staff hasn't manually overridden, follow the branch's brand.
+  const [businessTypeTouched, setBusinessTypeTouched] = useState(false);
+  useEffect(() => {
+    if (businessTypeTouched) return;
+    setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
+  }, [branch.brand, businessTypeTouched]);
+  const setBusinessType = (next: BusinessType) => {
+    setBusinessTypeState(next);
+    setBusinessTypeTouched(true);
   };
 
   // ---- UI state ----------------------------------------------------------
@@ -285,8 +296,9 @@ export function SmartOrderForm({
     setManualDiscount("");
     setNotes("");
     setStatus("pending");
-    setAutoJobId(true);
-    setJobIdInput(generateJobIdCandidate());
+    setCareUJobId("");
+    setBusinessTypeTouched(false);
+    setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
     setErrorMessage(null);
   };
 
@@ -364,12 +376,13 @@ export function SmartOrderForm({
       return;
     }
 
-    // Validate manual job id before hitting the network.
-    if (!autoJobId) {
-      const normalized = normalizeJobId(jobIdInput);
+    // Care U requires a manual job_id. Validate before hitting the network
+    // so the staff get an instant error instead of a round trip.
+    if (businessType === "care_u") {
+      const normalized = normalizeJobId(careUJobId);
       if (!normalized) {
         setErrorMessage(
-          "Job ID ที่กรอกไม่ถูกต้อง — ใช้เฉพาะตัวอักษร/ตัวเลข/_-./ ไม่เกิน 32 ตัว"
+          "Care U ต้องกรอก Job ID เอง — ใช้ตัวอักษร/ตัวเลข/_-./ ไม่เกิน 32 ตัว"
         );
         setIsSubmitting(false);
         return;
@@ -381,6 +394,7 @@ export function SmartOrderForm({
       customerName: resolvedCustomer.name,
       customerType,
       branchId: branch.id,
+      businessType,
       serviceCategory: selectedService.category,
       serviceCode: selectedService.code,
       serviceName: selectedService.nameTh,
@@ -395,8 +409,7 @@ export function SmartOrderForm({
       total,
       notes: notes.trim() || null,
       status,
-      jobId: autoJobId ? jobIdInput : jobIdInput,
-      autoJobId,
+      jobId: businessType === "care_u" ? careUJobId : null,
       createdBy: user?.uid ?? null,
     });
 
@@ -405,7 +418,7 @@ export function SmartOrderForm({
       setIsSubmitting(false);
       return;
     }
-    // Keep silent variable usage so future panels can show the assigned id.
+    // Reserved for a "Job ID assigned" toast once the post-save UX is built.
     void jobId;
 
     // Fire-and-forget Google Sheet sync. Order is already safely in Supabase
@@ -464,6 +477,67 @@ export function SmartOrderForm({
           {errorMessage}
         </div>
       )}
+
+      {/* 0 — Business type + (owner-only) branch override */}
+      <section className={sectionClass}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          0 • ประเภทงาน
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setBusinessType("care_u")}
+            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+              businessType === "care_u"
+                ? "bg-green-700 border-green-700 text-white"
+                : "bg-white border-gray-300 text-gray-700"
+            }`}
+          >
+            Care U
+            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+              เสื้อผ้า / ดัดแปลง
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setBusinessType("ezy_repair")}
+            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+              businessType === "ezy_repair"
+                ? "bg-yellow-500 border-yellow-500 text-white"
+                : "bg-white border-gray-300 text-gray-700"
+            }`}
+          >
+            Ezy Repair
+            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+              รองเท้า / กระเป๋า
+            </span>
+          </button>
+        </div>
+
+        {canOverrideBranch ? (
+          <div className="mt-3">
+            <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1">
+              สาขา (เลือกแทนผู้ใช้งานได้)
+            </label>
+            <select
+              value={branch.id}
+              onChange={(e) => setBranchId(e.target.value)}
+              className="w-full rounded-xl border border-gray-300 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            >
+              {ALL_BRANCHES.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.shortLabel}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <p className="mt-2 text-[11px] text-gray-500">
+            สาขา: <span className="font-medium text-gray-700">{branch.shortLabel}</span>
+            {" "}— ล็อกที่สาขาของคุณ
+          </p>
+        )}
+      </section>
 
       {/* 1 — Customer */}
       <section className={sectionClass}>
@@ -804,46 +878,36 @@ export function SmartOrderForm({
 
       {/* 5 — Job ID */}
       <section className={sectionClass}>
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            5 • Job ID
-          </p>
-          <label className="flex items-center gap-2 text-xs text-gray-700">
-            <input
-              type="checkbox"
-              checked={autoJobId}
-              onChange={(e) => handleToggleAutoJobId(e.target.checked)}
-              className="w-4 h-4 accent-green-700"
-            />
-            สร้างอัตโนมัติ
-          </label>
-        </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={jobIdInput}
-            onChange={(e) => setJobIdInput(e.target.value)}
-            readOnly={autoJobId}
-            placeholder={autoJobId ? "" : "เช่น 260513-A3F2 หรือ JOB-001"}
-            className={`flex-1 rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm ${
-              autoJobId ? "bg-gray-50 text-gray-600" : "bg-white text-gray-900"
-            }`}
-          />
-          {autoJobId && (
-            <button
-              type="button"
-              onClick={handleRegenerateJobId}
-              className="px-3 rounded-xl border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium"
-            >
-              สุ่มใหม่
-            </button>
-          )}
-        </div>
-        <p className="mt-2 text-[11px] text-gray-500">
-          {autoJobId
-            ? "ระบบสร้างอัตโนมัติในรูปแบบ YYMMDD-XXXX — แตะ \"สุ่มใหม่\" ถ้าต้องการเปลี่ยน"
-            : "กรอกเอง — ระบบจะเช็คว่าไม่ซ้ำใบงานเดิมก่อนบันทึก"}
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          5 • Job ID
         </p>
+        {businessType === "care_u" ? (
+          <>
+            <input
+              type="text"
+              value={careUJobId}
+              onChange={(e) => setCareUJobId(e.target.value)}
+              placeholder="เช่น CARE-001 หรือ 0513-A"
+              maxLength={32}
+              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm bg-white text-gray-900"
+            />
+            <p className="mt-2 text-[11px] text-gray-500">
+              Care U: กรอกเองทุกครั้ง — ระบบจะเตือนถ้าซ้ำกับใบงานเดิมในสาขานี้
+            </p>
+          </>
+        ) : (
+          <div className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm">
+            <p className="text-green-800 font-mono">
+              {branch.brand === "ezy"
+                ? "SLM-YYMMDD-NNN (สร้างอัตโนมัติเมื่อบันทึก)"
+                : "AUTO-YYMMDD-NNN"}
+            </p>
+            <p className="mt-1 text-[11px] text-gray-600">
+              Ezy Repair: ระบบสร้าง Job ID ให้อัตโนมัติ — ลำดับรีเซ็ตทุกวัน
+              ไม่ชนระหว่างสาขา
+            </p>
+          </div>
+        )}
       </section>
 
       <button

@@ -1,19 +1,23 @@
-// Enterprise role taxonomy. These codes match public.roles (seeded by
-// 20260520_auth_audit.sql) and are the values stored in `users.role` and
-// the session cookie.
+// Enterprise role taxonomy — 5 canonical codes plus a legacy translator so
+// old sessions / DB rows keep resolving after the rename.
 //
-// Branch scoping rule of thumb:
-//   all_branches = true   →  CEO, AREA_MANAGER, ACCOUNTANT
-//   all_branches = false  →  every other role is pinned to users.branch_id
+// Canonical:
+//   owner          — sees everything across all branches (CEO of the chain)
+//   hq_admin       — manages pricing / promotions / staff / system data
+//   branch_manager — owns one branch's operations + financials
+//   front_staff    — creates orders, prints receipts, no financials
+//   technician     — works assigned jobs, no financials
+//
+// Legacy 7-role codes (CEO, AREA_MANAGER, BRANCH_MANAGER, FRONT_DESK,
+// TECHNICIAN, ACCOUNTANT, FRANCHISE_OWNER) auto-map below — DB audit rows
+// stay valid, old session cookies still decode to a working role.
 
 export type Role =
-  | "CEO"
-  | "AREA_MANAGER"
-  | "BRANCH_MANAGER"
-  | "FRONT_DESK"
-  | "TECHNICIAN"
-  | "ACCOUNTANT"
-  | "FRANCHISE_OWNER";
+  | "owner"
+  | "hq_admin"
+  | "branch_manager"
+  | "front_staff"
+  | "technician";
 
 export type DashboardKey =
   | "frontdesk"
@@ -48,26 +52,26 @@ export type RoleDefinition = {
 };
 
 export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
-  CEO: {
-    role: "CEO",
-    labelTh: "CEO",
-    labelEn: "CEO",
+  owner: {
+    role: "owner",
+    labelTh: "เจ้าของกิจการ",
+    labelEn: "Owner",
     dashboards: ["executive", "manager", "accounting", "production", "frontdesk"],
     pages: ["*"],
     allBranches: true,
     seesFinancials: true,
   },
-  AREA_MANAGER: {
-    role: "AREA_MANAGER",
-    labelTh: "ผู้จัดการเขต",
-    labelEn: "Area manager",
+  hq_admin: {
+    role: "hq_admin",
+    labelTh: "แอดมินสำนักงานใหญ่",
+    labelEn: "HQ admin",
     dashboards: ["manager", "executive", "accounting", "production", "frontdesk"],
     pages: ["*"],
     allBranches: true,
     seesFinancials: true,
   },
-  BRANCH_MANAGER: {
-    role: "BRANCH_MANAGER",
+  branch_manager: {
+    role: "branch_manager",
     labelTh: "ผู้จัดการสาขา",
     labelEn: "Branch manager",
     dashboards: ["manager", "frontdesk", "production", "accounting"],
@@ -84,17 +88,17 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
     allBranches: false,
     seesFinancials: true,
   },
-  FRONT_DESK: {
-    role: "FRONT_DESK",
+  front_staff: {
+    role: "front_staff",
     labelTh: "พนักงานหน้าร้าน",
-    labelEn: "Front desk",
+    labelEn: "Front staff",
     dashboards: ["frontdesk"],
     pages: ["dashboard", "intake", "customers", "orders"],
     allBranches: false,
     seesFinancials: false,
   },
-  TECHNICIAN: {
-    role: "TECHNICIAN",
+  technician: {
+    role: "technician",
     labelTh: "ช่างซ่อม",
     labelEn: "Technician",
     dashboards: ["production"],
@@ -102,38 +106,12 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
     allBranches: false,
     seesFinancials: false,
   },
-  ACCOUNTANT: {
-    role: "ACCOUNTANT",
-    labelTh: "บัญชี",
-    labelEn: "Accountant",
-    dashboards: ["accounting"],
-    pages: ["dashboard", "invoices", "customers", "expenses", "reports"],
-    allBranches: true,
-    seesFinancials: true,
-  },
-  FRANCHISE_OWNER: {
-    role: "FRANCHISE_OWNER",
-    labelTh: "เจ้าของแฟรนไชส์",
-    labelEn: "Franchise owner",
-    dashboards: ["manager", "frontdesk", "accounting"],
-    pages: [
-      "dashboard",
-      "orders",
-      "customers",
-      "invoices",
-      "expenses",
-      "reports",
-      "pricing",
-    ],
-    allBranches: false,
-    seesFinancials: true,
-  },
 };
 
-// Until LINE login is configured the preview mode defaults to CEO so the
-// platform demos with full access. Once auth is required, this is only
-// used for typing — the real role comes from the session cookie.
-export const DEFAULT_ROLE: Role = "CEO";
+// Until LINE login is configured the preview mode defaults to owner so the
+// platform demos with full access. The real role comes from the session
+// once Supabase Auth lands.
+export const DEFAULT_ROLE: Role = "owner";
 
 export const DASHBOARD_LABELS: Record<DashboardKey, { th: string; en: string }> = {
   frontdesk: { th: "Front Desk", en: "Front Desk" },
@@ -143,21 +121,33 @@ export const DASHBOARD_LABELS: Record<DashboardKey, { th: string; en: string }> 
   executive: { th: "Executive", en: "Executive" },
 };
 
+// Legacy code → canonical Role. Covers both the original 7-role names and
+// the very first short-code set so cookies / DB rows from any prior version
+// still resolve to a sensible role.
 const LEGACY_ROLE_MAP: Record<string, Role> = {
-  frontdesk: "FRONT_DESK",
-  technician: "TECHNICIAN",
-  qc: "TECHNICIAN",
-  accounting: "ACCOUNTANT",
-  manager: "BRANCH_MANAGER",
-  executive: "CEO",
-  admin: "CEO",
+  // Pre-pricing 7-role set
+  ceo: "owner",
+  area_manager: "owner",
+  branch_manager: "branch_manager",
+  front_desk: "front_staff",
+  technician: "technician",
+  accountant: "hq_admin",
+  franchise_owner: "branch_manager",
+  // Original short-code set
+  frontdesk: "front_staff",
+  qc: "technician",
+  accounting: "hq_admin",
+  manager: "branch_manager",
+  executive: "owner",
+  admin: "owner",
 };
 
-/** Translate an old short code or unknown input to a valid Role. */
+/** Translate an old code or unknown input to a valid Role. */
 export function normalizeRole(value: string | null | undefined): Role {
   if (!value) return DEFAULT_ROLE;
-  if (value in ROLE_DEFINITIONS) return value as Role;
-  const mapped = LEGACY_ROLE_MAP[value.toLowerCase()];
+  const lower = value.toLowerCase();
+  if (lower in ROLE_DEFINITIONS) return lower as Role;
+  const mapped = LEGACY_ROLE_MAP[lower];
   if (mapped) return mapped;
   return DEFAULT_ROLE;
 }
@@ -168,8 +158,10 @@ export function getRoleDefinition(role: Role): RoleDefinition {
 
 export function canAccessPage(role: Role, page: PageKey): boolean {
   const def = getRoleDefinition(role);
-  return (def.pages as readonly string[]).includes("*") ||
-    (def.pages as readonly string[]).includes(page);
+  return (
+    (def.pages as readonly string[]).includes("*") ||
+    (def.pages as readonly string[]).includes(page)
+  );
 }
 
 export function getAccessibleDashboards(role: Role): DashboardKey[] {

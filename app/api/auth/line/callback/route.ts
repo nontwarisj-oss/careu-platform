@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import supabase from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import {
   encodeSession,
   isSessionConfigured,
@@ -74,10 +75,18 @@ export async function GET(req: Request) {
     return loginFailure("oauth_exchange_failed", url);
   }
 
-  // Upsert by line_user_id. First user ever to log in is bootstrapped as CEO
-  // so the shop owner can run setup without a manual SQL step; subsequent
-  // signups land as FRONT_DESK and a manager promotes them later.
-  const existingRes = await supabase
+  // Upsert by line_user_id. First user ever to log in is bootstrapped as
+  // owner so the shop owner can run setup without a manual SQL step;
+  // subsequent signups land as front_staff and a manager promotes them.
+  //
+  // RLS is enabled on public.profiles — use the service-role admin client
+  // when available so the upsert is not denied. Falls back to the anon
+  // client (which writes only public.users) when the service role is not
+  // yet configured.
+  const adminClient = getSupabaseAdmin();
+  const dbClient = adminClient ?? supabase;
+
+  const existingRes = await dbClient
     .from("users")
     .select("id, display_name, role, branch_id, active")
     .eq("line_user_id", profile.userId)
@@ -91,12 +100,12 @@ export async function GET(req: Request) {
   let user: UserRow | null = existingRes.data as UserRow | null;
 
   if (!user) {
-    const countRes = await supabase
+    const countRes = await dbClient
       .from("users")
       .select("id", { count: "exact", head: true });
     const userCount = countRes.count ?? 0;
-    const bootstrapRole: Role = userCount === 0 ? "CEO" : "FRONT_DESK";
-    const insertRes = await supabase
+    const bootstrapRole: Role = userCount === 0 ? "owner" : "front_staff";
+    const insertRes = await dbClient
       .from("users")
       .insert({
         line_user_id: profile.userId,
@@ -119,7 +128,7 @@ export async function GET(req: Request) {
     user = insertRes.data as UserRow;
   } else {
     if (!user.active) return loginFailure("account_disabled", url);
-    await supabase
+    await dbClient
       .from("users")
       .update({
         display_name: profile.displayName,
@@ -127,6 +136,44 @@ export async function GET(req: Request) {
         last_login_at: new Date().toISOString(),
       })
       .eq("id", user.id);
+  }
+
+  // Mirror into public.profiles (RLS-protected). branch_id is a uuid in
+  // profiles, so resolve via branches.code; if the migration hasn't run yet,
+  // skip silently and let the LINE flow keep working off public.users.
+  if (adminClient) {
+    const branchRes = await adminClient
+      .from("branches")
+      .select("id")
+      .eq("code", user.branch_id ?? defaultBranch.id)
+      .maybeSingle();
+    const branchUuid = (branchRes.data as { id?: string } | null)?.id ?? null;
+
+    const profileUpsert = await adminClient
+      .from("profiles")
+      .upsert(
+        {
+          id: user.id,
+          full_name: user.display_name || profile.displayName,
+          phone: null,
+          line_user_id: profile.userId,
+          role: normalizeRole(user.role ?? DEFAULT_ROLE),
+          branch_id: branchUuid,
+          picture_url: profile.pictureUrl ?? null,
+          last_login_at: new Date().toISOString(),
+          is_active: user.active ?? true,
+        },
+        { onConflict: "id" }
+      );
+    if (
+      profileUpsert.error &&
+      !/relation .* does not exist|schema cache/i.test(profileUpsert.error.message)
+    ) {
+      console.warn(
+        "[auth/line/callback] profiles upsert failed",
+        profileUpsert.error.message
+      );
+    }
   }
 
   const role = normalizeRole(user.role ?? DEFAULT_ROLE);
