@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import supabase from "@/lib/supabase";
 import { appendRow, readGoogleSheetsConfig } from "@/lib/googleSheets";
-import { getBranchById } from "@/lib/brandConfig";
 import {
-  getCategoryByCode,
   getCustomerTypeByCode,
-  getPromotionByCode,
   getServiceByCode,
 } from "@/lib/pricing";
 
@@ -119,12 +116,8 @@ export async function POST(req: Request) {
     timeStyle: "short",
   });
 
-  const branchLabel = raw.branch_id
-    ? getBranchById(raw.branch_id as string).shortLabel
-    : "";
-
   const refId = String(raw.id).slice(0, 8).toUpperCase();
-  const customerType = raw.customer_type
+  const customerTypeLabel = raw.customer_type
     ? getCustomerTypeByCode(raw.customer_type as string)?.nameTh ??
       (raw.customer_type as string)
     : "";
@@ -133,36 +126,39 @@ export async function POST(req: Request) {
     getServiceByCode(raw.service_code as string | undefined)?.nameTh ??
     (raw.item_name as string) ??
     "";
-  const serviceDescription =
-    (raw.template_text as string) ??
-    getCategoryByCode(raw.service_category as string | undefined)?.labelTh ??
-    "";
-  const promotion =
-    raw.promotion_code && raw.promotion_code !== "NONE"
-      ? getPromotionByCode(raw.promotion_code as string)?.nameTh ??
-        (raw.promotion_code as string)
-      : "";
+  const templateText = (raw.template_text as string) ?? "";
+  const detail = templateText
+    ? serviceName
+      ? `${serviceName} — ${templateText}`
+      : templateText
+    : serviceName;
+  const urgentFee = Number(raw.urgent_fee ?? 0);
+  const urgentLabel = raw.urgent
+    ? urgentFee > 0
+      ? `ด่วน +฿${urgentFee}`
+      : "ด่วน"
+    : "";
 
+  // Front_Desk column contract — must match the live sheet exactly:
+  //   A Date | B Job ID | C Customer | D Tel | E History | F Detail
+  //   G QTY  | H Price  | I Pay Status | J Tech | K Job Status
+  //   L วันนัด/ด่วน | M checkbox | N checkbox | O Archive
   const row: Array<string | number> = [
-    dateStr, // Date
-    String(raw.id), // Job ID (full UUID)
-    (raw.customer_name as string) ?? "", // Customer
-    customerPhone ?? "", // Tel
-    customerType, // Customer type
-    Number(raw.quantity ?? 1), // QTY
-    Number(raw.price ?? 0), // Price (net total)
-    PAYMENT_LABEL[(raw.payment_status as string) ?? "unpaid"] ?? "", // Payment Status
-    "", // Tech — not in schema yet
-    STATUS_LABEL[(raw.status as string) ?? "pending"] ?? "", // Job Status
-    "", // Due date — not in schema yet
-    refId, // Ref_ID (short)
-    branchLabel, // Branch
-    serviceName, // Service name
-    serviceDescription, // Service description
-    promotion, // Promotion
-    Number(raw.discount ?? 0), // Discount
-    Number(raw.urgent_fee ?? 0), // Urgent fee
-    Number(raw.price ?? 0), // Total (= net price for now)
+    dateStr,                                                              // A Date
+    refId,                                                                // B Job ID
+    (raw.customer_name as string) ?? "",                                  // C Customer
+    customerPhone ?? "",                                                  // D Tel
+    customerTypeLabel,                                                    // E History (customer type)
+    detail,                                                               // F Detail
+    Number(raw.quantity ?? 1),                                            // G QTY
+    Number(raw.price ?? 0),                                               // H Price (net total)
+    PAYMENT_LABEL[(raw.payment_status as string) ?? "unpaid"] ?? "",      // I Pay Status
+    "",                                                                   // J Tech (filled by staff)
+    STATUS_LABEL[(raw.status as string) ?? "pending"] ?? "",              // K Job Status
+    urgentLabel,                                                          // L วันนัด/ด่วน
+    "",                                                                   // M checkbox
+    "",                                                                   // N checkbox
+    "",                                                                   // O Archive
   ];
 
   try {
