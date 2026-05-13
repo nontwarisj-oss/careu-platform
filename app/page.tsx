@@ -120,9 +120,11 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Dashboard tabs (only when role has more than one) */}
+      {/* Dashboard tabs (only when role has more than one). The flex-nowrap +
+          overflow-x-auto pair keeps every tap target large on a phone instead
+          of squashing into two micro-rows. */}
       {accessible.length > 1 && (
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-4 flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
           {accessible.map((key) => {
             const isActive = key === activeDashboard;
             return (
@@ -130,7 +132,7 @@ export default function Dashboard() {
                 key={key}
                 type="button"
                 onClick={() => setActiveDashboard(key)}
-                className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${
+                className={`shrink-0 px-4 py-2 rounded-full text-sm font-medium border transition min-h-[40px] ${
                   isActive
                     ? "bg-green-700 border-green-700 text-white"
                     : "bg-white border-gray-200 text-gray-700 hover:bg-green-50"

@@ -153,8 +153,11 @@ A `branch_manager` is responsible for one branch end-to-end.
 - Run the **Sync to Google Sheet** button after each pricing change so finance has a CSV-friendly history.
 
 ### Staff
-- Today: SQL-only (`UPDATE public.profiles SET role='branch_manager' WHERE …`).
-- Next phase: `/admin/staff` UI gated on `canManageStaff`.
+- `/admin/staff` (gated on `canManageStaff`) — operational staff management.
+- One row per `public.profiles` user. Editable fields: role, branch_id, is_active.
+- When `role='technician'` the modal also shows a technician_profiles panel (display_name, active flag, skill tags from the canonical SKILL_CATALOG, daily_wage, target_multiplier, productivity_target override). Saving upserts a `technician_profiles` row keyed by `user_id = profiles.id`.
+- Quick "Active / Inactive" pill in the table column toggles `technician_profiles.active` without opening the modal — useful when a tech calls in sick.
+- SQL is still the escape hatch for bulk imports or fixing a corrupt row; the UI is the day-to-day surface.
 
 ### Sheet sync hygiene
 - Hit `/api/debug-sheet?dryRun=1` after any change to credentials or sheet structure.
@@ -381,6 +384,48 @@ This commit ships the **inputs**. A bonus engine consumes them:
 - Branch profit-share = branch_gross_profit × profit_share_pct.
 
 None of those are implemented yet. The `bonus_amount` and `deduction_amount` columns on `technician_payroll_items` are owner-decided overrides; an automated engine plugs in alongside without schema changes.
+
+---
+
+## 9c. Operational UI principles (foundation)
+
+> Status: **foundation only** as of 2026-05-14. The phase deliberately stops at a single new screen (`/admin/staff`) + a shared status/quick-action layer. No full redesign; existing workflows + branch isolation + RLS are unchanged.
+
+### 9c.1 Mobile/tablet priorities
+Front-desk staff use the platform on a tablet at the counter and a phone away from it. Every operational surface must:
+- Render correctly at 360 px wide (test in DevTools at iPhone SE).
+- Use ≥ 44 px tap targets for any primary action (`min-h-[44px]` is the project convention; see `components/QuickActionButton.tsx`).
+- Prefer horizontal scrolling over wrapping when a row of tabs/filters would otherwise squash (`flex gap-2 overflow-x-auto` + `shrink-0`).
+- Keep the most-used screen one tap away — the sidebar groups Operations on top of Finance and Management to enforce that.
+
+### 9c.2 Status vocabulary
+`lib/statusBadges.ts` is the **single source of truth** for every operational status pill. Every screen that renders a status shows it through `components/StatusBadge.tsx` (`OrderStatusBadge`, `PaymentStatusBadge`, `SyncStatusBadge`).
+
+- New status code → add a row in `ORDER_STATUS_BADGES` / `PAYMENT_STATUS_BADGES` first. The rest of the app picks it up automatically.
+- Never inline a per-page palette again. If a screen needs different chroma, it's a new status, not a one-off colour.
+
+### 9c.3 Reusable quick actions
+`components/QuickActionButton.tsx` is the shape for every operational quick action — print receipt, send LINE, mark ready, assign technician, resync sheet. Built-in:
+- Tone palette (`primary`, `secondary`, `danger`, `neutral`) so the storefront has consistent visual hierarchy.
+- 44 px minimum height + `active:scale-[0.98]` for tactile feedback on tablets.
+- `loading` + `disabled` states wired in.
+- `hideOnPrint` defaults to true so print receipts stay clean.
+
+Pages adopt it incrementally — old buttons keep working until they're rewritten in a future commit.
+
+### 9c.4 Admin centre
+`/admin` is the landing page for owner / hq_admin. Today it hosts:
+- `/admin/staff` — the staff management foundation (§4 Staff above).
+- Pointers to `/pricing` and a stubbed "Sync recovery" card that's wired in a future phase (the underlying `lib/recoveryService.ts` exists, the UI doesn't yet).
+
+The route is gated by the `"admin"` page key. `RouteGuard` renders the "ไม่มีสิทธิ์" panel for any role that lacks it.
+
+### 9c.5 What this phase does NOT do
+Deliberate non-goals to keep the foundation focused:
+- No CRM automation, no advanced BI, no franchise automation.
+- No full UI redesign — the storefront keeps its current shape.
+- No customer-facing website / portal.
+- No new tables or migrations (`profiles` + `technician_profiles` are already in place).
 
 ---
 

@@ -59,6 +59,7 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Order form — business type override** | ✅ | ✅ | ✅ | ✅ | n/a |
 | **Audit log (`order_audit_log`)** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
 | **Manage staff (promote / demote / disable)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin` centre + `/admin/staff` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -127,17 +128,17 @@ Cross-branch reads attempted by a branch-locked role are denied at three layers:
 
 ## 5. Sidebar navigation visibility
 
-The sidebar reads `role.pages` and shows only items the role can access. Today's per-role nav set:
+The sidebar reads `role.pages` and shows only items the role can access. Items are grouped operationally so the screens used most often (intake, orders, customers) sit at the top of each role's nav. Today's per-role nav set:
 
-| Role | Visible nav items |
-|---|---|
-| `owner` | Dashboard, Walk-in intake, Customers, Orders, Invoices, Expenses, Reports, Pricing |
-| `hq_admin` | Dashboard, Walk-in intake, Customers, Orders, Invoices, Expenses, Reports, Pricing |
-| `branch_manager` | Dashboard, Walk-in intake, Customers, Orders, Invoices, Expenses, Reports, Pricing |
-| `front_staff` | Dashboard, Walk-in intake, Customers, Orders |
-| `technician` | Dashboard, Orders |
+| Role | Operations | Finance | Management |
+|---|---|---|---|
+| `owner` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre** |
+| `hq_admin` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre** |
+| `branch_manager` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing |
+| `front_staff` | Dashboard, Walk-in intake, Orders, Customers | — | — |
+| `technician` | Dashboard, Orders | — | — |
 
-`canAccessPage(role, page)` is the single source of truth — see [`lib/roles.ts`](../lib/roles.ts).
+`canAccessPage(role, page)` is the single source of truth — see [`lib/roles.ts`](../lib/roles.ts). The new `"admin"` page key gates the `/admin` and `/admin/staff` routes; only `owner` and `hq_admin` have it through their `["*"]` page set.
 
 ---
 
@@ -212,7 +213,8 @@ This document defines the contract. Whenever a permission changes:
 | Date | Change | Commit |
 |---|---|---|
 | 2026-05-13 | Initial 5-role matrix established. | 4805d3b |
+| 2026-05-14 | Added `admin` page key. `/admin` + `/admin/staff` UI surfaces owner / hq_admin staff management (role, branch, active, wage, skills). Sidebar grouped Operations / Finance / Management. | — |
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-14 (operational UI polish phase)

@@ -476,6 +476,33 @@ No schema change required in `20260526`. Hardening here is documentation + the n
 
 The trigger uses `raise exception … using errcode='check_violation'` so the error surfaces as a Postgres CHECK violation to PostgREST clients — friendly to the supabase-js error handler.
 
+## 12c. Operational UI foundation (post-2026-05-14)
+
+Three pieces ship together to standardise the operational surface without touching architecture:
+
+### 12c.1 Status vocabulary
+[`lib/statusBadges.ts`](../lib/statusBadges.ts) is the single source of truth for order status, payment status, and sync status. Every screen reads labels + Tailwind colour classes from this module via the `components/StatusBadge.tsx` wrappers. Adding a new status = update the map once; the whole storefront picks it up. Status helpers (`orderStatusLabel`, `paymentStatusLabel`, `isOverdue`) are pure functions, safe on server and client.
+
+### 12c.2 Quick action shape
+[`components/QuickActionButton.tsx`](../components/QuickActionButton.tsx) is the shared button shape for operational actions — print, send LINE, mark ready, assign technician, resync sheet. Built-in:
+- 44 px minimum tap target (`min-h-[44px]`) for tablet ergonomics.
+- Four tone variants (`primary`, `secondary`, `danger`, `neutral`).
+- `loading` / `disabled` states + `print:hidden` default so printed receipts stay clean.
+
+Pages adopt the component opportunistically; old buttons keep working until rewritten.
+
+### 12c.3 Admin foundation
+- [`app/admin/page.tsx`](../app/admin/page.tsx) — operator landing for owner / hq_admin. Cards link to staff management, pricing, and a stubbed sync-recovery placeholder.
+- [`app/admin/staff/page.tsx`](../app/admin/staff/page.tsx) — single-screen staff management. Reads via [`lib/staffService.ts`](../lib/staffService.ts), which joins `profiles → branches` and embeds the matching `technician_profiles` row when present. Writes go through `updateProfileRole` and `upsertTechnicianProfile`.
+- Gated by the new `"admin"` `PageKey` in `lib/roles.ts`. Branch-locked roles never see the route.
+
+### 12c.4 Navigation grouping
+The sidebar groups nav items into three semantic buckets — **Operations** (Dashboard, Intake, Orders, Customers), **Finance** (Invoices, Expenses, Reports), and **Management** (Pricing, Admin centre). The group label only appears when the role sees more than one group, keeping `front_staff` and `technician` views compact.
+
+The mobile menu button is a 44 px square. Tabs that previously wrapped now scroll horizontally (`overflow-x-auto` + `shrink-0`) so each option remains a real tap target on a phone.
+
+---
+
 ## 13. Security principles
 
 1. **Defense in depth.** UI guards + server route guards + RLS — assume any single layer can fail.
@@ -525,6 +552,8 @@ app/
 │   ├── sync-expenses/route.ts          ← Sheet → DB (Expense_Log)
 │   ├── sync-order-to-sheet/route.ts    ← DB → Sheet (Front_Desk)
 │   └── sync-pricing-to-sheet/route.ts  ← DB → Sheet (Pricing snapshot)
+├── admin/page.tsx                      ← Admin centre landing (owner / hq_admin)
+├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
 ├── customers/page.tsx
 ├── expenses/page.tsx
 ├── intake/page.tsx                     ← walk-in counterpart of /orders
@@ -539,7 +568,9 @@ app/
 components/
 ├── SmartOrderForm.tsx                  ← Care U + Ezy intake
 ├── RouteGuard.tsx                      ← per-page role gate
-├── Sidebar.tsx                         ← nav + auth + branch selector
+├── Sidebar.tsx                         ← grouped operational nav + auth + branch selector
+├── StatusBadge.tsx                     ← OrderStatusBadge / PaymentStatusBadge / SyncStatusBadge
+├── QuickActionButton.tsx               ← shared 44px touch-target action button
 ├── Modal.tsx, Table.tsx, StatCard.tsx
 └── dashboard/, charts/, reports/
 
@@ -577,7 +608,9 @@ lib/
 ├── lineMessaging.ts  ← server-only LINE Messaging API push client
 ├── lineMessageBuilders.ts ← pure Thai-text builders for 4 message kinds
 ├── lineDelivery.ts   ← orchestrator: send + log + per-customer prefs
-└── lineOA.ts         ← browser-side wrappers (sendLineMessage + legacy sendToLineOA)
+├── lineOA.ts         ← browser-side wrappers (sendLineMessage + legacy sendToLineOA)
+├── staffService.ts   ← /admin/staff data layer (fetch profiles, upsert technician_profiles)
+└── statusBadges.ts   ← canonical status / payment / sync vocabulary (labels + colours)
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -592,4 +625,4 @@ supabase/migrations/
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-14 (operational UI polish phase — admin/staff foundation, shared status badges, grouped sidebar)

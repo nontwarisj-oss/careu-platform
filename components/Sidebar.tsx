@@ -11,10 +11,14 @@ import { canAccessPage, type PageKey, type Role } from "@/lib/roles";
 import { t } from "@/lib/translations";
 import { BrandLogo } from "@/components/BrandLogo";
 
+type NavGroup = "ops" | "money" | "admin";
+
 interface NavItem {
   href: string;
   page: PageKey;
-  label: string;
+  group: NavGroup;
+  labelTh: string;
+  labelEn: string;
   iconPath: string;
 }
 
@@ -34,12 +38,20 @@ const ICON_PATHS = {
     "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14H7v-7h3v7zm4 0h-3V7h3v10zm4 0h-3v-4h3v4z",
   pricing:
     "M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z",
+  admin:
+    "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 6c1.4 0 2.5 1.1 2.5 2.5S13.4 12 12 12s-2.5-1.1-2.5-2.5S10.6 7 12 7zm0 13c-2.03-.5-3.96-2.39-4.74-4.61C8.34 14.69 9.46 14 12 14s3.66.69 4.74 1.39C15.96 17.61 14.03 19.5 12 20z",
+};
+
+const GROUP_LABELS: Record<NavGroup, { th: string; en: string }> = {
+  ops: { th: "ปฏิบัติงาน", en: "Operations" },
+  money: { th: "การเงิน", en: "Finance" },
+  admin: { th: "จัดการระบบ", en: "Management" },
 };
 
 const Icon = ({ d }: { d: string }) => (
   <svg
     viewBox="0 0 24 24"
-    className="w-5 h-5"
+    className="w-5 h-5 shrink-0"
     fill="currentColor"
     aria-hidden
   >
@@ -58,57 +70,108 @@ const Sidebar: React.FC = () => {
   // /login renders its own full-screen card — hide the chrome there.
   if (pathname === "/login") return null;
 
-  // Permission-aware branch list. CEO / AREA_MANAGER / ACCOUNTANT see every
-  // branch; everyone else (front desk, technician, branch manager, franchise
-  // owner) is locked to the branch on their user row.
   const allowedBranches =
     isAuthenticated && user && !definition.allBranches
       ? branches.filter((b) => b.id === (user.branchId ?? branch.id))
       : branches;
   const branchSelectDisabled = isAuthenticated && !definition.allBranches;
 
+  // Operational grouping puts the screens used most often (intake, orders) at
+  // the top of each role's nav. Finance and management groups slide down into
+  // less-frequent territory so the storefront workflow stays one tap away.
   const allNavItems: NavItem[] = [
-    { href: "/", page: "dashboard", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
+    {
+      href: "/",
+      page: "dashboard",
+      group: "ops",
+      labelTh: t("nav.dashboard", "th"),
+      labelEn: t("nav.dashboard", "en"),
+      iconPath: ICON_PATHS.dashboard,
+    },
     {
       href: "/intake",
       page: "intake",
-      label: language === "th" ? "รับงานหน้าร้าน" : "Walk-in intake",
+      group: "ops",
+      labelTh: "รับงานหน้าร้าน",
+      labelEn: "Walk-in intake",
       iconPath: ICON_PATHS.intake,
     },
-    { href: "/customers", page: "customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
-    { href: "/orders", page: "orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
-    { href: "/invoices", page: "invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
+    {
+      href: "/orders",
+      page: "orders",
+      group: "ops",
+      labelTh: t("nav.orders", "th"),
+      labelEn: t("nav.orders", "en"),
+      iconPath: ICON_PATHS.orders,
+    },
+    {
+      href: "/customers",
+      page: "customers",
+      group: "ops",
+      labelTh: t("nav.customers", "th"),
+      labelEn: t("nav.customers", "en"),
+      iconPath: ICON_PATHS.customers,
+    },
+    {
+      href: "/invoices",
+      page: "invoices",
+      group: "money",
+      labelTh: t("nav.invoices", "th"),
+      labelEn: t("nav.invoices", "en"),
+      iconPath: ICON_PATHS.invoices,
+    },
     {
       href: "/expenses",
       page: "expenses",
-      label: language === "th" ? "ค่าใช้จ่าย" : "Expenses",
+      group: "money",
+      labelTh: "ค่าใช้จ่าย",
+      labelEn: "Expenses",
       iconPath: ICON_PATHS.expenses,
     },
     {
       href: "/reports",
       page: "reports",
-      label: language === "th" ? "รายงาน" : "Reports",
+      group: "money",
+      labelTh: "รายงาน",
+      labelEn: "Reports",
       iconPath: ICON_PATHS.reports,
     },
     {
       href: "/pricing",
       page: "pricing",
-      label: language === "th" ? "ตั้งราคา" : "Pricing",
+      group: "admin",
+      labelTh: "ตั้งราคา",
+      labelEn: "Pricing",
       iconPath: ICON_PATHS.pricing,
+    },
+    {
+      href: "/admin",
+      page: "admin",
+      group: "admin",
+      labelTh: "ศูนย์จัดการระบบ",
+      labelEn: "Admin centre",
+      iconPath: ICON_PATHS.admin,
     },
   ];
 
   const navItems = allNavItems.filter((item) => canAccessPage(role, item.page));
+
+  // Build grouped sections, preserving operational order within each group.
+  const grouped: Record<NavGroup, NavItem[]> = {
+    ops: navItems.filter((i) => i.group === "ops"),
+    money: navItems.filter((i) => i.group === "money"),
+    admin: navItems.filter((i) => i.group === "admin"),
+  };
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
     <>
-      {/* Mobile Menu Button */}
+      {/* Mobile Menu Button — 44 px touch target */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="md:hidden fixed top-4 left-4 z-40 p-2.5 bg-green-700 text-white rounded-lg shadow-lg ring-1 ring-white/10"
+        className="md:hidden fixed top-3 left-3 z-40 w-11 h-11 flex items-center justify-center bg-green-700 text-white rounded-xl shadow-lg ring-1 ring-white/10 text-lg"
         aria-label="menu"
       >
         {isOpen ? "✕" : "☰"}
@@ -116,12 +179,12 @@ const Sidebar: React.FC = () => {
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:relative h-screen w-64 bg-gradient-to-b from-green-800 via-green-800 to-green-950 text-white shadow-xl transition-transform duration-300 z-30 ${
+        className={`fixed md:relative h-screen w-72 md:w-64 bg-gradient-to-b from-green-800 via-green-800 to-green-950 text-white shadow-xl transition-transform duration-300 z-30 ${
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         } flex flex-col`}
       >
         {/* Brand */}
-        <div className="px-5 py-6 border-b border-white/10">
+        <div className="px-5 py-5 border-b border-white/10">
           <div className="flex items-center gap-3">
             <BrandLogo size="md" variant="onColor" />
             <div className="min-w-0">
@@ -148,7 +211,7 @@ const Sidebar: React.FC = () => {
               </p>
               <button
                 onClick={() => void signOut()}
-                className="mt-2 w-full rounded bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold py-1.5"
+                className="mt-2 w-full rounded bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold py-2"
               >
                 {language === "th" ? "ออกจากระบบ" : "Sign out"}
               </button>
@@ -164,7 +227,7 @@ const Sidebar: React.FC = () => {
               value={branch.id}
               onChange={(e) => setBranchId(e.target.value)}
               disabled={branchSelectDisabled}
-              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300 disabled:opacity-70 disabled:cursor-not-allowed"
+              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2.5 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300 disabled:opacity-70 disabled:cursor-not-allowed"
               aria-label={language === "th" ? "เลือกสาขา" : "Select branch"}
             >
               {allowedBranches.map((b) => (
@@ -196,7 +259,7 @@ const Sidebar: React.FC = () => {
               <select
                 value={role}
                 onChange={(e) => setRole(e.target.value as Role)}
-                className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+                className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2.5 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
                 aria-label={language === "th" ? "เลือกบทบาท" : "Select role"}
               >
                 {roles.map((r) => (
@@ -218,34 +281,53 @@ const Sidebar: React.FC = () => {
           )}
         </div>
 
-        {/* Navigation */}
-        <nav className="px-3 py-5 space-y-1 flex-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setIsOpen(false)}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors border-l-4 ${
-                isActive(item.href)
-                  ? "bg-white/15 border-yellow-300 font-semibold"
-                  : "border-transparent hover:bg-white/10"
-              }`}
-            >
-              <Icon d={item.iconPath} />
-              <span className="text-sm">{item.label}</span>
-            </Link>
-          ))}
+        {/* Navigation — grouped operationally for fast access */}
+        <nav className="px-3 py-3 space-y-4 flex-1 overflow-y-auto">
+          {(Object.keys(grouped) as NavGroup[]).map((group) => {
+            const items = grouped[group];
+            if (items.length === 0) return null;
+            return (
+              <div key={group} className="space-y-0.5">
+                {/* Show group label only when more than one group is visible. */}
+                {Object.values(grouped).filter((g) => g.length > 0).length >
+                  1 && (
+                  <p className="px-3 text-[10px] uppercase tracking-[0.22em] text-white/40 font-semibold mb-1">
+                    {language === "th"
+                      ? GROUP_LABELS[group].th
+                      : GROUP_LABELS[group].en}
+                  </p>
+                )}
+                {items.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setIsOpen(false)}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors border-l-4 min-h-[44px] ${
+                      isActive(item.href)
+                        ? "bg-white/15 border-yellow-300 font-semibold"
+                        : "border-transparent hover:bg-white/10"
+                    }`}
+                  >
+                    <Icon d={item.iconPath} />
+                    <span className="text-sm">
+                      {language === "th" ? item.labelTh : item.labelEn}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Language Selector */}
-        <div className="p-5 border-t border-white/10">
+        <div className="p-4 border-t border-white/10">
           <p className="text-[10px] uppercase tracking-widest text-white/60 mb-2">
             {language === "th" ? "ภาษา" : "Language"}
           </p>
           <div className="flex gap-2">
             <button
               onClick={() => setLanguage("th")}
-              className={`flex-1 py-1.5 rounded text-xs font-semibold transition ${
+              className={`flex-1 py-2 rounded text-xs font-semibold transition ${
                 language === "th"
                   ? "bg-yellow-300 text-green-900"
                   : "bg-white/10 hover:bg-white/20"
@@ -255,7 +337,7 @@ const Sidebar: React.FC = () => {
             </button>
             <button
               onClick={() => setLanguage("en")}
-              className={`flex-1 py-1.5 rounded text-xs font-semibold transition ${
+              className={`flex-1 py-2 rounded text-xs font-semibold transition ${
                 language === "en"
                   ? "bg-yellow-300 text-green-900"
                   : "bg-white/10 hover:bg-white/20"

@@ -10,6 +10,11 @@ import {
   type SmartOrderCreatedSummary,
 } from "@/components/SmartOrderForm";
 import { useAuth } from "@/lib/authContext";
+import { OrderStatusBadge } from "@/components/StatusBadge";
+import {
+  ORDER_STATUS_FLOW,
+  orderStatusLabel,
+} from "@/lib/statusBadges";
 
 type Order = {
   id: string;
@@ -21,24 +26,10 @@ type Order = {
   created_at: string;
 };
 
-const EDITABLE_STATUSES = ["pending", "in-progress", "completed"] as const;
-const FILTER_STATUSES = ["all", "pending", "in-progress", "completed", "ready-for-pickup"] as const;
+const EDITABLE_STATUSES = ORDER_STATUS_FLOW;
+const FILTER_STATUSES = ["all", ...ORDER_STATUS_FLOW] as const;
 
 type FilterStatus = (typeof FILTER_STATUSES)[number];
-
-const statusLabels: Record<string, string> = {
-  pending: "รอดำเนิน",
-  "in-progress": "กำลังซ่อม",
-  completed: "เสร็จสิ้น",
-  "ready-for-pickup": "พร้อมรับ",
-};
-
-const statusBadgeClasses: Record<string, string> = {
-  pending: "border-yellow-200 bg-yellow-50 text-yellow-800",
-  "in-progress": "border-blue-200 bg-blue-50 text-blue-800",
-  completed: "border-green-200 bg-green-50 text-green-800",
-  "ready-for-pickup": "border-purple-200 bg-purple-50 text-purple-800",
-};
 
 function startOfDay(d: Date): Date {
   const x = new Date(d);
@@ -257,7 +248,9 @@ export default function OrdersPage() {
               value={orderSearch}
               onChange={(e) => setOrderSearch(e.target.value)}
               placeholder="ค้นหาลูกค้า / งาน / เลขที่"
-              className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 col-span-2"
+              aria-label="ค้นหาคำสั่งซ่อม"
+              autoComplete="off"
+              className="rounded-xl border border-gray-200 px-3 py-3 text-base sm:text-sm outline-none focus:ring-2 focus:ring-green-500 col-span-2"
             />
             <select
               value={statusFilter}
@@ -266,7 +259,7 @@ export default function OrdersPage() {
             >
               {FILTER_STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s === "all" ? "ทุกสถานะ" : statusLabels[s] ?? s}
+                  {s === "all" ? "ทุกสถานะ" : orderStatusLabel(s)}
                 </option>
               ))}
             </select>
@@ -348,14 +341,7 @@ export default function OrdersPage() {
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
-                        <span
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                            statusBadgeClasses[order.status] ??
-                            "border-gray-200 bg-gray-50 text-gray-700"
-                          }`}
-                        >
-                          {statusLabels[order.status] ?? order.status}
-                        </span>
+                        <OrderStatusBadge status={order.status} />
                         <select
                           value={order.status}
                           onClick={(e) => e.stopPropagation()}
@@ -363,18 +349,19 @@ export default function OrdersPage() {
                             e.stopPropagation();
                             void handleUpdateStatus(order.id, e.target.value);
                           }}
-                          className="rounded-lg border border-gray-200 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                          className="rounded-lg border border-gray-200 px-2 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 min-h-[40px]"
+                          aria-label="เปลี่ยนสถานะ"
                         >
                           {EDITABLE_STATUSES.map((s) => (
                             <option key={s} value={s}>
-                              {statusLabels[s] ?? s}
+                              {orderStatusLabel(s)}
                             </option>
                           ))}
                           {!EDITABLE_STATUSES.includes(
                             order.status as (typeof EDITABLE_STATUSES)[number]
                           ) && (
                             <option value={order.status}>
-                              {statusLabels[order.status] ?? order.status}
+                              {orderStatusLabel(order.status)}
                             </option>
                           )}
                         </select>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { formatCurrency } from "@/lib/utils";
 import { type AnalyticsOrder } from "@/lib/analytics";
 import { getServiceByCode } from "@/lib/pricing";
+import { OrderStatusBadge } from "@/components/StatusBadge";
 
 interface ProductionDashboardProps {
   orders: AnalyticsOrder[];
@@ -84,21 +85,8 @@ export function ProductionDashboard({ orders }: ProductionDashboardProps) {
                       </span>
                     </p>
                   </div>
-                  <span
-                    className={`whitespace-nowrap text-xs font-semibold px-2 py-1 rounded-full border ${
-                      o.status === "in-progress"
-                        ? "bg-blue-50 border-blue-200 text-blue-800"
-                        : o.status === "pending"
-                        ? "bg-yellow-50 border-yellow-200 text-yellow-800"
-                        : "bg-gray-50 border-gray-200 text-gray-700"
-                    }`}
-                  >
-                    {o.status === "in-progress"
-                      ? "กำลังซ่อม"
-                      : o.status === "pending"
-                      ? "รอดำเนิน"
-                      : o.status}
-                  </span>
+                  <OrderStatusBadge status={o.status} />
+                  <span className="sr-only">{o.status}</span>
                 </Link>
               );
             })}
