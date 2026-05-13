@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { RouteGuard } from "@/components/RouteGuard";
 import { useLanguage } from "@/lib/languageContext";
+import { useRole } from "@/lib/roleContext";
+import { canManagePricing } from "@/lib/permissions";
 import { formatCurrency } from "@/lib/utils";
-import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
+import { branches as ALL_BRANDCONFIG } from "@/lib/brandConfig";
+import supabase from "@/lib/supabase";
 import { SERVICE_CATEGORIES, type ServiceCategoryKey } from "@/lib/pricing";
 import {
   closeServicePrice,
@@ -16,30 +19,35 @@ import {
   type ServicePriceRow,
 } from "@/lib/pricingDb";
 
-type PriceType = "fixed" | "estimate_required";
+type PricingType = "fixed" | "estimate_required";
+type BusinessType = "care_u" | "ezy_repair";
 
 type FormState = {
   service_code: string;
   category: ServiceCategoryKey | "";
-  service_name: string;
-  description_template: string;
+  business_type: BusinessType;
+  display_name: string;
+  description: string;
   base_price: string;
-  price_type: PriceType;
+  pricing_type: PricingType;
   urgent_fee_default: string;
-  active: boolean;
-  branch_id: string;
+  sort_order: string;
+  is_active: boolean;
+  branch_id: string;     // branches.id (uuid) or "" for global
   brand_id: string;
 };
 
 const EMPTY_FORM: FormState = {
   service_code: "",
   category: "",
-  service_name: "",
-  description_template: "",
+  business_type: "care_u",
+  display_name: "",
+  description: "",
   base_price: "",
-  price_type: "fixed",
-  urgent_fee_default: "0",
-  active: true,
+  pricing_type: "fixed",
+  urgent_fee_default: "30",
+  sort_order: "0",
+  is_active: true,
   branch_id: "",
   brand_id: "",
 };
@@ -49,22 +57,26 @@ const BRAND_OPTIONS: Array<{ id: string; label: string }> = [
   { id: "ezy", label: "Ezy Repair" },
 ];
 
+type BranchOption = { id: string; code: string; label: string };
+
 function rowToForm(row: ServicePriceRow): FormState {
   return {
     service_code: row.service_code,
     category: row.category as ServiceCategoryKey,
-    service_name: row.service_name,
-    description_template: row.description_template ?? "",
+    business_type: row.business_type,
+    display_name: row.display_name,
+    description: row.description ?? "",
     base_price:
       row.base_price === null || row.base_price === undefined
         ? ""
         : String(row.base_price),
-    price_type: row.price_type,
+    pricing_type: row.pricing_type,
     urgent_fee_default:
       row.urgent_fee_default === null || row.urgent_fee_default === undefined
-        ? "0"
+        ? "30"
         : String(row.urgent_fee_default),
-    active: row.active,
+    sort_order: String(row.sort_order ?? 0),
+    is_active: row.is_active,
     branch_id: row.branch_id ?? "",
     brand_id: row.brand_id ?? "",
   };
@@ -74,24 +86,26 @@ function formToInput(form: FormState): ServicePriceInput {
   return {
     service_code: form.service_code,
     category: form.category || "special",
-    service_name: form.service_name,
-    description_template: form.description_template || null,
+    business_type: form.business_type,
+    display_name: form.display_name,
+    description: form.description || null,
     base_price:
-      form.price_type === "estimate_required"
+      form.pricing_type === "estimate_required"
         ? null
         : form.base_price.trim() === ""
         ? null
         : Number(form.base_price),
-    price_type: form.price_type,
-    urgent_fee_default: Number(form.urgent_fee_default || 0),
-    active: form.active,
+    pricing_type: form.pricing_type,
+    urgent_fee_default: Number(form.urgent_fee_default || 30),
+    sort_order: Number(form.sort_order || 0),
+    is_active: form.is_active,
     branch_id: form.branch_id || null,
     brand_id: form.brand_id || null,
   };
 }
 
 function isCurrentlyEffective(row: ServicePriceRow): boolean {
-  if (!row.active) return false;
+  if (!row.is_active) return false;
   if (row.effective_to) return new Date(row.effective_to) > new Date();
   return true;
 }
@@ -106,8 +120,12 @@ export default function PricingPage() {
 
 function PricingPageInner() {
   const { language } = useLanguage();
+  const { role } = useRole();
+  const canEdit = canManagePricing(role);
+
   const [rows, setRows] = useState<ServicePriceRow[]>([]);
   const [fallbackOnly, setFallbackOnly] = useState<string[]>([]);
+  const [branchOptions, setBranchOptions] = useState<BranchOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -126,10 +144,33 @@ function PricingPageInner() {
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    const res = await fetchPricingCatalog({});
-    setRows(res.rows);
-    setFallbackOnly(res.fallbackOnly);
-    setError(res.error);
+    const [catalog, branchRes] = await Promise.all([
+      fetchPricingCatalog({}),
+      supabase
+        .from("branches")
+        .select("id, code, short_code, name")
+        .order("code", { ascending: true }),
+    ]);
+    setRows(catalog.rows);
+    setFallbackOnly(catalog.fallbackOnly);
+    setError(catalog.error);
+    if (!branchRes.error && branchRes.data) {
+      const opts: BranchOption[] = (
+        branchRes.data as Array<{
+          id: string;
+          code: string;
+          short_code: string | null;
+          name: string;
+        }>
+      ).map((b) => ({
+        id: b.id,
+        code: b.code,
+        label:
+          ALL_BRANDCONFIG.find((bc) => bc.id === b.code)?.shortLabel ??
+          (b.short_code ? `${b.short_code} • ${b.name}` : b.name),
+      }));
+      setBranchOptions(opts);
+    }
     setIsLoading(false);
   }, []);
 
@@ -139,8 +180,7 @@ function PricingPageInner() {
 
   const visibleRows = useMemo(() => {
     // Pick the most recent row per (service_code, branch_id, brand_id) tuple
-    // so the table reads like a catalog and not a version log. The "history"
-    // button (future) can surface older rows.
+    // so the table reads like a catalog and not a version log.
     const byKey = new Map<string, ServicePriceRow>();
     for (const row of rows) {
       const key = `${row.service_code}__${row.branch_id ?? ""}__${row.brand_id ?? ""}`;
@@ -162,14 +202,15 @@ function PricingPageInner() {
       list = list.filter(
         (r) =>
           r.service_code.toLowerCase().includes(q) ||
-          r.service_name.toLowerCase().includes(q)
+          r.display_name.toLowerCase().includes(q)
       );
     }
-    list.sort((a, b) =>
-      a.category === b.category
-        ? a.service_code.localeCompare(b.service_code)
-        : a.category.localeCompare(b.category)
-    );
+    list.sort((a, b) => {
+      if (a.category !== b.category) return a.category.localeCompare(b.category);
+      if ((a.sort_order ?? 0) !== (b.sort_order ?? 0))
+        return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+      return a.service_code.localeCompare(b.service_code);
+    });
     return list;
   }, [rows, showInactive, categoryFilter, search]);
 
@@ -187,6 +228,7 @@ function PricingPageInner() {
   }, [rows, fallbackOnly]);
 
   const handleOpenAdd = () => {
+    if (!canEdit) return;
     setEditingRow(null);
     setForm(EMPTY_FORM);
     setSaveMode("quick");
@@ -194,6 +236,7 @@ function PricingPageInner() {
   };
 
   const handleOpenEdit = (row: ServicePriceRow) => {
+    if (!canEdit) return;
     setEditingRow(row);
     setForm(rowToForm(row));
     setSaveMode("quick");
@@ -209,9 +252,9 @@ function PricingPageInner() {
   const validate = (f: FormState): string | null => {
     if (!f.service_code.trim()) return "service_code ห้ามว่าง";
     if (!f.category) return "เลือกหมวดบริการ";
-    if (!f.service_name.trim()) return "service_name ห้ามว่าง";
+    if (!f.display_name.trim()) return "display_name ห้ามว่าง";
     if (
-      f.price_type === "fixed" &&
+      f.pricing_type === "fixed" &&
       (f.base_price.trim() === "" || Number.isNaN(Number(f.base_price)))
     ) {
       return "ราคาแบบ Fixed ต้องระบุตัวเลข";
@@ -271,11 +314,12 @@ function PricingPageInner() {
   };
 
   const handleDisable = async (row: ServicePriceRow) => {
+    if (!canEdit) return;
     if (
       !window.confirm(
         language === "th"
-          ? `ปิดใช้งาน "${row.service_name}" หรือไม่? รายการนี้จะไม่ถูกใช้คำนวณราคาในใบงานใหม่`
-          : `Disable "${row.service_name}"? It will no longer apply to new orders.`
+          ? `ปิดใช้งาน "${row.display_name}" หรือไม่? รายการนี้จะไม่ถูกใช้คำนวณราคาในใบงานใหม่`
+          : `Disable "${row.display_name}"? It will no longer apply to new orders.`
       )
     )
       return;
@@ -291,6 +335,7 @@ function PricingPageInner() {
   };
 
   const handleSyncToSheet = async () => {
+    if (!canEdit) return;
     setIsSyncing(true);
     setStatusMessage(null);
     try {
@@ -323,18 +368,21 @@ function PricingPageInner() {
   };
 
   const handleEnable = async (row: ServicePriceRow) => {
+    if (!canEdit) return;
     const res = await updateServicePrice(row.id, {
       service_code: row.service_code,
       category: row.category,
-      service_name: row.service_name,
-      description_template: row.description_template ?? null,
+      business_type: row.business_type,
+      display_name: row.display_name,
+      description: row.description ?? null,
       base_price:
         row.base_price === null || row.base_price === undefined
           ? null
           : Number(row.base_price),
-      price_type: row.price_type,
-      urgent_fee_default: Number(row.urgent_fee_default ?? 0),
-      active: true,
+      pricing_type: row.pricing_type,
+      urgent_fee_default: Number(row.urgent_fee_default ?? 30),
+      sort_order: row.sort_order ?? 0,
+      is_active: true,
       branch_id: row.branch_id,
       brand_id: row.brand_id,
     });
@@ -361,28 +409,37 @@ function PricingPageInner() {
               ? "จัดการบริการ ราคา และส่วนลด — เปลี่ยนแล้วใช้กับทุกใบงานใหม่ทันที"
               : "Edit services, prices, and rules — applies to every new order"}
           </p>
+          {!canEdit && (
+            <p className="mt-2 inline-block px-2 py-0.5 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-800 text-[11px] font-semibold">
+              {language === "th"
+                ? "โหมดดูเท่านั้น — เฉพาะ Owner / HQ Admin แก้ไขได้"
+                : "Read-only — Owner / HQ Admin only can edit"}
+            </p>
+          )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => void handleSyncToSheet()}
-            disabled={isSyncing}
-            className="border border-green-600 text-green-700 hover:bg-green-50 px-4 py-2.5 rounded-lg transition font-medium disabled:opacity-50"
-          >
-            {isSyncing
-              ? language === "th"
-                ? "กำลังซิงค์..."
-                : "Syncing..."
-              : language === "th"
-              ? "ซิงค์ไป Google Sheet"
-              : "Sync to Google Sheet"}
-          </button>
-          <button
-            onClick={handleOpenAdd}
-            className="bg-green-700 hover:bg-green-800 text-white px-5 py-2.5 rounded-lg transition font-semibold"
-          >
-            + {language === "th" ? "เพิ่มบริการ" : "Add service"}
-          </button>
-        </div>
+        {canEdit && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => void handleSyncToSheet()}
+              disabled={isSyncing}
+              className="border border-green-600 text-green-700 hover:bg-green-50 px-4 py-2.5 rounded-lg transition font-medium disabled:opacity-50"
+            >
+              {isSyncing
+                ? language === "th"
+                  ? "กำลังซิงค์..."
+                  : "Syncing..."
+                : language === "th"
+                ? "ซิงค์ไป Google Sheet"
+                : "Sync to Google Sheet"}
+            </button>
+            <button
+              onClick={handleOpenAdd}
+              className="bg-green-700 hover:bg-green-800 text-white px-5 py-2.5 rounded-lg transition font-semibold"
+            >
+              + {language === "th" ? "เพิ่มบริการ" : "Add service"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Summary band */}
@@ -531,9 +588,11 @@ function PricingPageInner() {
                   const categoryLabel =
                     SERVICE_CATEGORIES.find((c) => c.code === row.category)
                       ?.labelTh ?? row.category;
+                  const branchOpt = row.branch_id
+                    ? branchOptions.find((b) => b.id === row.branch_id)
+                    : null;
                   const branchLabel = row.branch_id
-                    ? ALL_BRANCHES.find((b) => b.id === row.branch_id)
-                        ?.shortLabel ?? row.branch_id
+                    ? branchOpt?.label ?? row.branch_id
                     : language === "th"
                     ? "ทุกสาขา"
                     : "All branches";
@@ -555,15 +614,15 @@ function PricingPageInner() {
                       </td>
                       <td className="p-3 text-gray-700">{categoryLabel}</td>
                       <td className="p-3 text-gray-900 font-medium">
-                        {row.service_name}
-                        {row.description_template && (
+                        {row.display_name}
+                        {row.description && (
                           <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
-                            {row.description_template}
+                            {row.description}
                           </p>
                         )}
                       </td>
                       <td className="p-3 whitespace-nowrap">
-                        {row.price_type === "estimate_required" ? (
+                        {row.pricing_type === "estimate_required" ? (
                           <span className="text-yellow-800 text-xs">
                             {language === "th" ? "ประเมินราคา" : "Estimate"}
                           </span>
@@ -594,26 +653,34 @@ function PricingPageInner() {
                         )}
                       </td>
                       <td className="p-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => handleOpenEdit(row)}
-                          className="text-green-700 hover:text-green-800 text-sm font-medium mr-3"
-                        >
-                          {language === "th" ? "แก้ไข" : "Edit"}
-                        </button>
-                        {currentlyEffective ? (
-                          <button
-                            onClick={() => void handleDisable(row)}
-                            className="text-red-600 hover:text-red-700 text-sm font-medium"
-                          >
-                            {language === "th" ? "ปิด" : "Disable"}
-                          </button>
+                        {canEdit ? (
+                          <>
+                            <button
+                              onClick={() => handleOpenEdit(row)}
+                              className="text-green-700 hover:text-green-800 text-sm font-medium mr-3"
+                            >
+                              {language === "th" ? "แก้ไข" : "Edit"}
+                            </button>
+                            {currentlyEffective ? (
+                              <button
+                                onClick={() => void handleDisable(row)}
+                                className="text-red-600 hover:text-red-700 text-sm font-medium"
+                              >
+                                {language === "th" ? "ปิด" : "Disable"}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => void handleEnable(row)}
+                                className="text-gray-600 hover:text-gray-800 text-sm font-medium"
+                              >
+                                {language === "th" ? "เปิด" : "Enable"}
+                              </button>
+                            )}
+                          </>
                         ) : (
-                          <button
-                            onClick={() => void handleEnable(row)}
-                            className="text-gray-600 hover:text-gray-800 text-sm font-medium"
-                          >
-                            {language === "th" ? "เปิด" : "Enable"}
-                          </button>
+                          <span className="text-[11px] text-gray-400">
+                            {language === "th" ? "ดูเท่านั้น" : "Read-only"}
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -625,220 +692,255 @@ function PricingPageInner() {
         )}
       </div>
 
-      {/* Editor modal */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={handleCloseModal}
-        title={
-          editingRow
-            ? language === "th"
-              ? "แก้ไขบริการ"
-              : "Edit service"
-            : language === "th"
-            ? "เพิ่มบริการใหม่"
-            : "Add service"
-        }
-        onSubmit={isSubmitting ? undefined : handleSubmit}
-        submitLabel={
-          isSubmitting
-            ? language === "th"
-              ? "กำลังบันทึก..."
-              : "Saving..."
-            : editingRow && saveMode === "version"
-            ? language === "th"
-              ? "บันทึกเป็นเวอร์ชันใหม่"
-              : "Save as new version"
-            : language === "th"
-            ? "บันทึก"
-            : "Save"
-        }
-      >
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+      {/* Editor modal — owner/hq_admin only */}
+      {canEdit && (
+        <Modal
+          isOpen={isModalOpen}
+          onClose={handleCloseModal}
+          title={
+            editingRow
+              ? language === "th"
+                ? "แก้ไขบริการ"
+                : "Edit service"
+              : language === "th"
+              ? "เพิ่มบริการใหม่"
+              : "Add service"
+          }
+          onSubmit={isSubmitting ? undefined : handleSubmit}
+          submitLabel={
+            isSubmitting
+              ? language === "th"
+                ? "กำลังบันทึก..."
+                : "Saving..."
+              : editingRow && saveMode === "version"
+              ? language === "th"
+                ? "บันทึกเป็นเวอร์ชันใหม่"
+                : "Save as new version"
+              : language === "th"
+              ? "บันทึก"
+              : "Save"
+          }
+        >
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  service_code
+                </label>
+                <input
+                  type="text"
+                  value={form.service_code}
+                  onChange={(e) =>
+                    setForm({ ...form, service_code: e.target.value })
+                  }
+                  disabled={!!editingRow}
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm font-mono outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
+                  placeholder="ALT-001"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  {language === "th" ? "หมวด" : "Category"}
+                </label>
+                <select
+                  value={form.category}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      category: e.target.value as ServiceCategoryKey | "",
+                    })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="">
+                    {language === "th" ? "เลือกหมวด" : "Select category"}
+                  </option>
+                  {SERVICE_CATEGORIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {language === "th" ? c.labelTh : c.labelEn}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
-                service_code
+                {language === "th" ? "ชื่อบริการ (display_name)" : "Display name"}
               </label>
               <input
                 type="text"
-                value={form.service_code}
+                value={form.display_name}
                 onChange={(e) =>
-                  setForm({ ...form, service_code: e.target.value })
-                }
-                disabled={!!editingRow}
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm font-mono outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
-                placeholder="ALT-001"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                {language === "th" ? "หมวด" : "Category"}
-              </label>
-              <select
-                value={form.category}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    category: e.target.value as ServiceCategoryKey | "",
-                  })
-                }
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
-              >
-                <option value="">
-                  {language === "th" ? "เลือกหมวด" : "Select category"}
-                </option>
-                {SERVICE_CATEGORIES.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {language === "th" ? c.labelTh : c.labelEn}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
-              {language === "th" ? "ชื่อบริการ" : "Service name"}
-            </label>
-            <input
-              type="text"
-              value={form.service_name}
-              onChange={(e) =>
-                setForm({ ...form, service_name: e.target.value })
-              }
-              className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-              placeholder="ตัดขากางเกง"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
-              description_template
-            </label>
-            <textarea
-              value={form.description_template}
-              onChange={(e) =>
-                setForm({ ...form, description_template: e.target.value })
-              }
-              rows={2}
-              className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-              placeholder={
-                language === "th"
-                  ? "ข้อความตั้งต้นที่จะใส่ใน field รายละเอียดงานของใบงาน"
-                  : "Default detail text inserted into new order forms"
-              }
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                price_type
-              </label>
-              <select
-                value={form.price_type}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    price_type: e.target.value as PriceType,
-                  })
-                }
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
-              >
-                <option value="fixed">
-                  fixed{language === "th" ? " (ราคาคงที่)" : ""}
-                </option>
-                <option value="estimate_required">
-                  estimate_required
-                  {language === "th" ? " (ประเมินราคา)" : ""}
-                </option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                base_price (฿)
-              </label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={form.base_price}
-                onChange={(e) =>
-                  setForm({ ...form, base_price: e.target.value })
-                }
-                disabled={form.price_type === "estimate_required"}
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
-                placeholder="0"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                urgent_fee_default (฿)
-              </label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={form.urgent_fee_default}
-                onChange={(e) =>
-                  setForm({ ...form, urgent_fee_default: e.target.value })
+                  setForm({ ...form, display_name: e.target.value })
                 }
                 className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                placeholder="ตัดขากางเกง"
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                branch_id
-              </label>
-              <select
-                value={form.branch_id}
-                onChange={(e) =>
-                  setForm({ ...form, branch_id: e.target.value })
-                }
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
-              >
-                <option value="">
-                  {language === "th" ? "ทุกสาขา" : "All branches"}
-                </option>
-                {ALL_BRANCHES.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.shortLabel}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">
-                brand_id
+                description
               </label>
-              <select
-                value={form.brand_id}
+              <textarea
+                value={form.description}
                 onChange={(e) =>
-                  setForm({ ...form, brand_id: e.target.value })
+                  setForm({ ...form, description: e.target.value })
                 }
-                className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
-              >
-                <option value="">
-                  {language === "th" ? "ทุกแบรนด์" : "All brands"}
-                </option>
-                {BRAND_OPTIONS.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
+                rows={2}
+                className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                placeholder={
+                  language === "th"
+                    ? "ข้อความตั้งต้นที่จะใส่ใน field รายละเอียดงานของใบงาน"
+                    : "Default detail text inserted into new order forms"
+                }
+              />
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  business_type
+                </label>
+                <select
+                  value={form.business_type}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      business_type: e.target.value as BusinessType,
+                    })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="care_u">care_u (Care U)</option>
+                  <option value="ezy_repair">ezy_repair (Ezy Repair)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  pricing_type
+                </label>
+                <select
+                  value={form.pricing_type}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      pricing_type: e.target.value as PricingType,
+                    })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="fixed">
+                    fixed{language === "th" ? " (ราคาคงที่)" : ""}
+                  </option>
+                  <option value="estimate_required">
+                    estimate_required
+                    {language === "th" ? " (ประเมินราคา)" : ""}
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  base_price (฿)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={form.base_price}
+                  onChange={(e) =>
+                    setForm({ ...form, base_price: e.target.value })
+                  }
+                  disabled={form.pricing_type === "estimate_required"}
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-100"
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  urgent_fee (฿)
+                </label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={form.urgent_fee_default}
+                  onChange={(e) =>
+                    setForm({ ...form, urgent_fee_default: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  sort_order
+                </label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={form.sort_order}
+                  onChange={(e) =>
+                    setForm({ ...form, sort_order: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  branch_id
+                </label>
+                <select
+                  value={form.branch_id}
+                  onChange={(e) =>
+                    setForm({ ...form, branch_id: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="">
+                    {language === "th" ? "ทุกสาขา (global)" : "All branches (global)"}
+                  </option>
+                  {branchOptions.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  brand_id
+                </label>
+                <select
+                  value={form.brand_id}
+                  onChange={(e) =>
+                    setForm({ ...form, brand_id: e.target.value })
+                  }
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm bg-white outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="">
+                    {language === "th" ? "ทุกแบรนด์" : "All brands"}
+                  </option>
+                  {BRAND_OPTIONS.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div>
-              <label className="flex items-center gap-2 mt-5">
+              <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={form.active}
+                  checked={form.is_active}
                   onChange={(e) =>
-                    setForm({ ...form, active: e.target.checked })
+                    setForm({ ...form, is_active: e.target.checked })
                   }
                   className="w-4 h-4 accent-green-700"
                 />
@@ -847,59 +949,59 @@ function PricingPageInner() {
                 </span>
               </label>
             </div>
-          </div>
 
-          {editingRow && (
-            <div className="border-t border-gray-200 pt-3 mt-3">
-              <p className="text-xs font-semibold text-gray-700 mb-2">
-                {language === "th" ? "โหมดบันทึก" : "Save mode"}
-              </p>
-              <div className="flex flex-col gap-1.5 text-sm">
-                <label className="flex items-start gap-2">
-                  <input
-                    type="radio"
-                    name="saveMode"
-                    checked={saveMode === "quick"}
-                    onChange={() => setSaveMode("quick")}
-                    className="mt-0.5 accent-green-700"
-                  />
-                  <span>
-                    <span className="font-medium">
-                      {language === "th" ? "แก้ไขในที่เดิม" : "Quick edit"}
+            {editingRow && (
+              <div className="border-t border-gray-200 pt-3 mt-3">
+                <p className="text-xs font-semibold text-gray-700 mb-2">
+                  {language === "th" ? "โหมดบันทึก" : "Save mode"}
+                </p>
+                <div className="flex flex-col gap-1.5 text-sm">
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="saveMode"
+                      checked={saveMode === "quick"}
+                      onChange={() => setSaveMode("quick")}
+                      className="mt-0.5 accent-green-700"
+                    />
+                    <span>
+                      <span className="font-medium">
+                        {language === "th" ? "แก้ไขในที่เดิม" : "Quick edit"}
+                      </span>
+                      <span className="block text-[11px] text-gray-500">
+                        {language === "th"
+                          ? "ใช้สำหรับแก้คำผิด — pricing_audit_logs ยังบันทึกการเปลี่ยน"
+                          : "Use for typo fixes — still logged in pricing_audit_logs"}
+                      </span>
                     </span>
-                    <span className="block text-[11px] text-gray-500">
-                      {language === "th"
-                        ? "ใช้สำหรับแก้คำผิด — ไม่บันทึกประวัติเวอร์ชัน"
-                        : "Use for typo fixes — does not bump version history"}
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="saveMode"
+                      checked={saveMode === "version"}
+                      onChange={() => setSaveMode("version")}
+                      className="mt-0.5 accent-green-700"
+                    />
+                    <span>
+                      <span className="font-medium">
+                        {language === "th"
+                          ? "บันทึกเป็นเวอร์ชันใหม่"
+                          : "Save as new version"}
+                      </span>
+                      <span className="block text-[11px] text-gray-500">
+                        {language === "th"
+                          ? "ปิดเวอร์ชันเก่า (เซ็ต effective_to = วันนี้) แล้วสร้างเวอร์ชันใหม่ — ใช้เมื่อเปลี่ยนราคา"
+                          : "Closes the old row and inserts a new one — use for real price changes"}
+                      </span>
                     </span>
-                  </span>
-                </label>
-                <label className="flex items-start gap-2">
-                  <input
-                    type="radio"
-                    name="saveMode"
-                    checked={saveMode === "version"}
-                    onChange={() => setSaveMode("version")}
-                    className="mt-0.5 accent-green-700"
-                  />
-                  <span>
-                    <span className="font-medium">
-                      {language === "th"
-                        ? "บันทึกเป็นเวอร์ชันใหม่"
-                        : "Save as new version"}
-                    </span>
-                    <span className="block text-[11px] text-gray-500">
-                      {language === "th"
-                        ? "ปิดเวอร์ชันเก่า (เซ็ต effective_to = วันนี้) แล้วสร้างเวอร์ชันใหม่ — ใช้เมื่อเปลี่ยนราคา"
-                        : "Closes the old row and inserts a new one — use for real price changes"}
-                    </span>
-                  </span>
-                </label>
+                  </label>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      </Modal>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

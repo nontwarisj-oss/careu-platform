@@ -183,6 +183,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260520_auth_audit.sql` | user identity columns, order_audit_log, orders.job_id (initial), system_settings |
 | `20260521_enterprise_foundation.sql` | branches, profiles, business_type, due_date, tech, customers extras, job_id_sequence, generate_ezy_job_id, scoped job_id index, RLS on new tables |
 | `20260522_auth_bridge_rls.sql` | helper functions `current_user_role()` + `current_user_branch_code()`; strict RLS on orders + customers; admin/branch read policies on profiles |
+| `20260523_pricing_engine.sql` | `service_prices` column renames + business_type + sort_order + updated_at trigger; `branch_id` text → uuid FK; scoped unique index; `pricing_audit_logs` + trigger; RLS read-all / admin-write |
 
 Every new migration MUST:
 1. Be idempotent.

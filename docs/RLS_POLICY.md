@@ -15,7 +15,8 @@
 | `job_id_sequence` | **ON** | Service role only (no policies). |
 | `roles` | OFF | Reference data, no sensitive content. |
 | `expense_log` | OFF | Manager-only UI; RLS flip pairs with the next reports/dashboard pass. |
-| `service_prices` | OFF | Read-mostly catalog; RLS flip pairs with the pricing engine refactor. |
+| `service_prices` | **ON** | Read-all for any authenticated user; INSERT/UPDATE/DELETE restricted to owner/hq_admin via `service_prices_admin_write`. |
+| `pricing_audit_logs` | **ON** | SELECT restricted to owner/hq_admin (`pricing_audit_admin_read`); writes via the `log_pricing_change` trigger (SECURITY DEFINER) only — no INSERT policy for any role. |
 | `order_audit_log` | OFF | Written by server routes via service role only. |
 | `users` (legacy) | OFF | Being phased out in favour of `profiles`. |
 
@@ -127,11 +128,27 @@ Note: customers with `branch_id IS NULL` represent "chain-wide" customers (e.g. 
 | Operation | owner | hq_admin | branch_manager | front_staff | technician |
 |---|---|---|---|---|---|
 | SELECT | all | all | all | all | all |
-| INSERT | yes | yes | yes (own branch overrides only) | no | no |
-| UPDATE | yes | yes | yes (own branch_id rows only) | no | no |
-| DELETE | no — disable via `active=false` + `effective_to=now()` | no | no | no | no |
+| INSERT | yes | yes | **no** | no | no |
+| UPDATE | yes | yes | **no** | no | no |
+| DELETE | no — disable via `is_active=false` + `effective_to=now()` | no | no | no | no |
 
-The catalog is read-mostly. Hiding it from front-staff/technicians is a UI concern, not a security one.
+Implemented as two policies after `20260523_pricing_engine.sql`:
+- `service_prices_read_all` — `FOR SELECT TO authenticated USING (true)` — everyone in the app can read the catalog (the order form needs it).
+- `service_prices_admin_write` — `FOR ALL TO authenticated USING (current_user_role() in ('owner','hq_admin')) WITH CHECK (same)` — only owner/hq_admin can mutate.
+
+The `/pricing` page also UI-gates the Add/Edit/Disable/Sync buttons behind `canManagePricing(role)` so branch managers see read-only mode instead of buttons that the DB would reject.
+
+### 4.6b `pricing_audit_logs`
+
+| Operation | owner | hq_admin | branch_manager | front_staff | technician |
+|---|---|---|---|---|---|
+| SELECT | all | all | no | no | no |
+| INSERT | **trigger only** | **trigger only** | **trigger only** | **trigger only** | **trigger only** |
+| UPDATE / DELETE | **forbidden** | **forbidden** | **forbidden** | **forbidden** | **forbidden** |
+
+Implemented as:
+- `pricing_audit_admin_read` — `FOR SELECT TO authenticated USING (current_user_role() in ('owner','hq_admin'))`.
+- No INSERT/UPDATE/DELETE policy exists. The only write path is the `log_pricing_change()` trigger on `service_prices`, which is `SECURITY DEFINER` and runs with the table-owner privileges. The trigger reads `request.jwt.claim.sub` to stamp `changed_by` with the authenticated user's profile id.
 
 ### 4.7 `order_audit_log`
 
@@ -255,4 +272,4 @@ Automate the above in a Vitest / Playwright suite (next phase).
 
 ---
 
-**Last updated:** 2026-05-13 (migration 20260522_auth_bridge_rls.sql)
+**Last updated:** 2026-05-13 (migration 20260523_pricing_engine.sql)

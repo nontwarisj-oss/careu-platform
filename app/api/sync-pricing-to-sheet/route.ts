@@ -19,7 +19,7 @@ export const runtime = "nodejs";
 const SHEET_TARGET = process.env.GOOGLE_SHEET_PRICING_TAB ?? "Pricing";
 
 function isCurrent(row: ServicePriceRow, now: Date): boolean {
-  if (!row.active) return false;
+  if (!row.is_active) return false;
   const from = new Date(row.effective_from);
   if (Number.isFinite(from.getTime()) && from > now) return false;
   if (row.effective_to) {
@@ -54,7 +54,7 @@ export async function POST() {
   const res = await supabase
     .from("service_prices")
     .select(
-      "id, service_code, category, service_name, description_template, base_price, price_type, urgent_fee_default, active, branch_id, brand_id, effective_from, effective_to, created_at, created_by"
+      "id, service_code, category, business_type, display_name, description, base_price, pricing_type, urgent_fee_default, is_active, sort_order, branch_id, brand_id, effective_from, effective_to, created_at, created_by, updated_at, updated_by"
     );
 
   if (res.error) {
@@ -92,17 +92,17 @@ export async function POST() {
   let appended = 0;
   for (const row of active) {
     // Pricing tab column contract:
-    //   A snapshot_at | B service_code | C category | D service_name
-    //   E description | F price_type | G base_price | H urgent_fee_default
+    //   A snapshot_at | B service_code | C category | D display_name
+    //   E description | F pricing_type | G base_price | H urgent_fee_default
     //   I branch_id | J brand_id | K effective_from | L effective_to | M created_by
     const sheetRow: Array<string | number> = [
       stamp,
       row.service_code,
       categoryLabel(row.category),
-      row.service_name,
-      row.description_template ?? "",
-      row.price_type,
-      row.price_type === "estimate_required"
+      row.display_name,
+      row.description ?? "",
+      row.pricing_type,
+      row.pricing_type === "estimate_required"
         ? ""
         : Number(row.base_price ?? 0),
       Number(row.urgent_fee_default ?? 0),

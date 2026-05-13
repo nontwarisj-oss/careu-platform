@@ -2,14 +2,17 @@
 // catalog at order time, with progressive fallback so the app keeps working
 // regardless of migration state:
 //
-//   1. Query public.service_prices for currently-effective + active rows.
+//   1. Query public.service_prices for currently-effective + is_active rows.
 //   2. Merge with the hardcoded SERVICES array — DB rows win on shared codes.
 //   3. If the DB query fails (missing table, schema cache, network), fall
 //      back entirely to the hardcoded SERVICES + log a console warning so
 //      the operator can see why prices look stale.
 //
-// The merge keeps the platform editable from /pricing without losing the
-// safety net of the hardcoded catalog the shop has used since v1.
+// Column naming reflects 20260523_pricing_engine.sql:
+//   display_name (was service_name), description (was description_template),
+//   pricing_type (was price_type), is_active (was active). branch_id is uuid
+//   referencing public.branches(id). business_type ('care_u' | 'ezy_repair'),
+//   sort_order, updated_at, updated_by added.
 
 import supabase from "@/lib/supabase";
 import {
@@ -24,29 +27,36 @@ export type ServicePriceRow = {
   id: string;
   service_code: string;
   category: string;
-  service_name: string;
-  description_template: string | null;
+  business_type: "care_u" | "ezy_repair";
+  display_name: string;
+  description: string | null;
   base_price: number | string | null;
-  price_type: "fixed" | "estimate_required";
+  pricing_type: "fixed" | "estimate_required";
   urgent_fee_default: number | string;
-  active: boolean;
-  branch_id: string | null;
+  is_active: boolean;
+  sort_order: number;
+  branch_id: string | null;       // uuid (branches.id) — null = global
   brand_id: string | null;
   effective_from: string;
   effective_to: string | null;
   created_at: string;
   created_by: string | null;
+  updated_at: string;
+  updated_by: string | null;
 };
 
 export type EffectivePricingContext = {
+  /** Pass either a branches.id (uuid) OR a branches.code (slug); resolved below. */
   branchId?: string | null;
   brandId?: string | null;
   /** Override "now" for tests / time-travel. */
   asOf?: Date;
+  /** Filter to one business type when both share codes (rare). */
+  businessType?: "care_u" | "ezy_repair";
 };
 
 const PRICING_COLUMNS =
-  "id, service_code, category, service_name, description_template, base_price, price_type, urgent_fee_default, active, branch_id, brand_id, effective_from, effective_to, created_at, created_by";
+  "id, service_code, category, business_type, display_name, description, base_price, pricing_type, urgent_fee_default, is_active, sort_order, branch_id, brand_id, effective_from, effective_to, created_at, created_by, updated_at, updated_by";
 
 export type PricingFetchResult = {
   /** Merged catalog ready for the UI / SmartOrderForm. */
@@ -68,7 +78,7 @@ function toNum(v: number | string | null | undefined): number | null {
 
 /** True when `now` falls inside [effective_from, effective_to). */
 function isCurrent(row: ServicePriceRow, now: Date): boolean {
-  if (!row.active) return false;
+  if (!row.is_active) return false;
   const from = new Date(row.effective_from);
   if (Number.isFinite(from.getTime()) && from > now) return false;
   if (row.effective_to) {
@@ -100,16 +110,16 @@ function chooseMoreSpecific(
 
 function rowToServiceItem(row: ServicePriceRow): ServiceItem {
   const basePrice =
-    row.price_type === "estimate_required" ? null : toNum(row.base_price);
+    row.pricing_type === "estimate_required" ? null : toNum(row.base_price);
   const urgent = toNum(row.urgent_fee_default);
   return {
     code: row.service_code,
     category: row.category as ServiceCategoryKey,
-    nameTh: row.service_name,
-    nameEn: row.service_name, // EN label not persisted yet; reuse Thai name
+    nameTh: row.display_name,
+    nameEn: row.display_name, // EN label not persisted yet; reuse Thai name
     basePrice,
-    templateTh: row.description_template ?? "",
-    isSpecial: row.price_type === "estimate_required",
+    templateTh: row.description ?? "",
+    isSpecial: row.pricing_type === "estimate_required",
     urgentFeeDefault: urgent && urgent > 0 ? urgent : undefined,
   };
 }
@@ -129,6 +139,7 @@ export async function fetchPricingCatalog(
   const res = await supabase
     .from("service_prices")
     .select(PRICING_COLUMNS)
+    .order("sort_order", { ascending: true })
     .order("service_code", { ascending: true })
     .order("effective_from", { ascending: false });
 
@@ -142,10 +153,11 @@ export async function fetchPricingCatalog(
     rows = (res.data ?? []) as ServicePriceRow[];
   }
 
-  // Resolve "current effective row per code", branch/brand-aware.
+  // Resolve "current effective row per code", branch/brand/business-type aware.
   const currentByCode = new Map<string, ServicePriceRow>();
   for (const row of rows) {
     if (!isCurrent(row, now)) continue;
+    if (ctx.businessType && row.business_type !== ctx.businessType) continue;
     const existing = currentByCode.get(row.service_code);
     if (!existing) {
       currentByCode.set(row.service_code, row);
@@ -180,16 +192,39 @@ export async function fetchPricingCatalog(
 export type ServicePriceInput = {
   service_code: string;
   category: string;
-  service_name: string;
-  description_template?: string | null;
+  business_type?: "care_u" | "ezy_repair";
+  display_name: string;
+  description?: string | null;
   base_price?: number | null;
-  price_type: "fixed" | "estimate_required";
+  pricing_type: "fixed" | "estimate_required";
   urgent_fee_default?: number;
-  active?: boolean;
-  branch_id?: string | null;
+  is_active?: boolean;
+  sort_order?: number;
+  branch_id?: string | null;   // uuid or null
   brand_id?: string | null;
-  created_by?: string | null;
+  created_by?: string | null;  // uuid or null
 };
+
+function toInsertPayload(input: ServicePriceInput) {
+  return {
+    service_code: input.service_code.trim(),
+    category: input.category,
+    business_type: input.business_type ?? "care_u",
+    display_name: input.display_name.trim(),
+    description: input.description ?? null,
+    base_price:
+      input.pricing_type === "estimate_required"
+        ? null
+        : input.base_price ?? null,
+    pricing_type: input.pricing_type,
+    urgent_fee_default: input.urgent_fee_default ?? 30,
+    is_active: input.is_active ?? true,
+    sort_order: input.sort_order ?? 0,
+    branch_id: input.branch_id ?? null,
+    brand_id: input.brand_id ?? null,
+    created_by: input.created_by ?? null,
+  };
+}
 
 /**
  * Insert a brand-new version. The caller is responsible for closing any
@@ -199,22 +234,7 @@ export type ServicePriceInput = {
 export async function insertServicePrice(
   input: ServicePriceInput
 ): Promise<{ id: string | null; error: string | null }> {
-  const payload = {
-    service_code: input.service_code.trim(),
-    category: input.category,
-    service_name: input.service_name.trim(),
-    description_template: input.description_template ?? null,
-    base_price:
-      input.price_type === "estimate_required"
-        ? null
-        : input.base_price ?? null,
-    price_type: input.price_type,
-    urgent_fee_default: input.urgent_fee_default ?? 0,
-    active: input.active ?? true,
-    branch_id: input.branch_id ?? null,
-    brand_id: input.brand_id ?? null,
-    created_by: input.created_by ?? null,
-  };
+  const payload = toInsertPayload(input);
   const res = await supabase
     .from("service_prices")
     .insert(payload)
@@ -230,7 +250,7 @@ export async function updateServicePrice(
   patch: Partial<ServicePriceInput>
 ): Promise<{ error: string | null }> {
   const writable: Record<string, unknown> = { ...patch };
-  if (patch.price_type === "estimate_required") writable.base_price = null;
+  if (patch.pricing_type === "estimate_required") writable.base_price = null;
   const res = await supabase
     .from("service_prices")
     .update(writable)
@@ -248,7 +268,7 @@ export async function closeServicePrice(
 ): Promise<{ error: string | null }> {
   const res = await supabase
     .from("service_prices")
-    .update({ active: false, effective_to: new Date().toISOString() })
+    .update({ is_active: false, effective_to: new Date().toISOString() })
     .eq("id", id);
   if (res.error) return { error: res.error.message };
   return { error: null };

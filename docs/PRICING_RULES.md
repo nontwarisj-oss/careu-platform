@@ -8,9 +8,20 @@
 
 1. **Predictable.** The same inputs always produce the same total — no UI surprises.
 2. **Editable without redeploy.** Live prices live in `public.service_prices` and are edited at `/pricing`. The hardcoded `SERVICES` array in `lib/pricing.ts` is a **safety-net fallback** for codes the DB doesn't yet carry.
-3. **Versioned.** Every price change preserves history via `effective_from / effective_to / active`. "Save as new version" closes the old row, inserts a new one — that's the audit trail.
+3. **Versioned + audited.** Every price change preserves history via `effective_from / effective_to / is_active`. "Save as new version" closes the old row, inserts a new one. A Postgres trigger writes every INSERT / UPDATE / DELETE to `public.pricing_audit_logs` automatically — no app code can forget.
 4. **Branch / brand-aware.** A service can have a global default + branch-specific or brand-specific overrides. Most-specific wins.
 5. **Transparent to the customer.** Urgent fees and discounts appear as separate line items on the receipt. No hidden bundling.
+
+## 1b. Layered architecture (post-`20260523`)
+
+| Layer | Module | What it owns |
+|---|---|---|
+| **A — pricing data** | [`lib/pricingDb.ts`](../lib/pricingDb.ts) | Reads `service_prices` with progressive fallback to hardcoded `SERVICES`. CRUD helpers for the `/pricing` page. |
+| **B — pricing rules** | [`lib/pricingService.ts`](../lib/pricingService.ts) | `getServicePrice`, `calculateUrgentFee`. Resolves the per-line surcharge from the catalog row or the global default. |
+| **C — promotion rules** | [`lib/pricing.ts`](../lib/pricing.ts) `PROMOTIONS` + `computeDiscount`, called via [`lib/pricingService.ts::calculatePromotionDiscount`](../lib/pricingService.ts) | Tier walk for B2S, exclusion-code check, manual override. |
+| **D — receipt display** | [`lib/pricingService.ts::calculateFinalPrice`](../lib/pricingService.ts) → `ReceiptLine[]` | Subtotal, "คิวงานด่วน", discount, total — each as a discrete line for the receipt. |
+
+UI files (forms, receipt) should NEVER compute discount or urgent surcharges inline. They call `calculateFinalPrice`.
 
 ---
 
@@ -68,21 +79,11 @@ Behaviour in the form:
 - One discount per order. Stack with urgent fee, never with another promotion.
 
 **Excluded items:**
-- Student name embroidery (any service code starting with `EMB-` or category `special` when the service name contains "ชื่อ" / "embroidery").
-- Enforcement: front-desk picks `NONE` as the promotion code when the order is name-embroidery-only. The engine itself does not yet auto-exclude — this is a manual rule today.
+- Student name embroidery — encoded as `Promotion.excludedServiceCodes` on the B2S row in [`lib/pricing.ts`](../lib/pricing.ts). `lib/pricingService.ts::calculatePromotionDiscount` checks the order's `serviceCode` against this list and returns 0 when excluded.
 
-**Status of code vs spec:**
+**Status of code vs spec:** ✅ **Aligned.** As of `20260523_pricing_engine.sql` the B2S row is `type: 'tiered'` with the four tiers above, `computeDiscount` walks them and picks the highest match, and `calculatePromotionDiscount` enforces the exclusion list. The historical 10 %-flat behaviour is gone.
 
-The current `PROMOTIONS` row in `lib/pricing.ts` reads:
-```ts
-{ code: "B2S", nameTh: "Back to School (-10%)", nameEn: "Back to School", type: "percent", value: 10 }
-```
-That row implements a flat 10 % discount — which does **not** match the tiered rule above. This is **known drift**. The next pricing migration must:
-1. Change `Promotion.type` to `'tiered'` and add `Promotion.tiers: Array<{minSubtotal:number,discount:number}>`.
-2. Update `computeDiscount` to walk the tiers and pick the highest matching threshold.
-3. Move promotions out of `lib/pricing.ts` into a DB table (`promotions`) with the same versioning shape as `service_prices`.
-
-Until that lands, branch managers MUST manually pick the right discount using "ส่วนลดเอง (กรอกจำนวน)" (`MANUAL` promotion) and enter the matching baht amount.
+Moving promotions out of `lib/pricing.ts` into a versioned `promotions` DB table is the next refactor step (deferred — this commit landed schema + engine first).
 
 ---
 
@@ -90,13 +91,13 @@ Until that lands, branch managers MUST manually pick the right discount using "�
 
 These are services whose price is fixed by rule, not by the catalog default:
 
-| Service | Price | Notes |
-|---|---|---|
-| Plastic zipper, 6-inch pants | **130 THB flat** | Replaces the standard zipper price for this exact spec. Add as `service_code = 'REP-002-PZ6'` (or similar) in `service_prices`. |
-| Jeans reconstruction hem | **200 THB flat** | "Reconstruction hem" = re-cut at the original hem with the original stitching shape. No extra taper fee. Add as `service_code = 'ALT-001-RCN'`. |
-| Standard reconstruction hem | base price only | No extra taper fee even if the leg is tapered. |
+| service_code | Display | Price | Pricing rule |
+|---|---|---|---|
+| `REP-002-PZ6` | ซิปพลาสติก 6 นิ้ว (กางเกง) | **130 THB flat** | Replaces the standard zipper price for this exact spec. |
+| `ALT-001-RCN` | เย็บชายกางเกงยีนส์แบบ Reconstruction | **200 THB flat** | Re-cut at the original hem with the original stitching shape. No extra taper fee. |
+| Standard reconstruction hem | (covered by `ALT-001-RCN`) | base only | No extra taper fee even if the leg is tapered. |
 
-**Status of code vs spec:** none of the three rules above are in the current `SERVICES` array. Add them as DB rows via `/pricing` → "+ เพิ่มบริการ" with `price_type='fixed'` and the prices above. Document the codes used in this section once they're inserted.
+**Status of code vs spec:** ✅ **Seeded by `20260523_pricing_engine.sql`** into `public.service_prices` (global, `business_type='care_u'`, `is_active=true`). The `/pricing` page surfaces them like any other row; the order form picks them up via `fetchPricingCatalog`.
 
 ---
 
@@ -226,4 +227,4 @@ The hardcoded fallback exists so a brand-new database can run the form without m
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-13 (migration 20260523_pricing_engine.sql)

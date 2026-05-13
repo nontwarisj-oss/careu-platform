@@ -194,18 +194,44 @@ export const SERVICES: ServiceItem[] = [
   },
 ];
 
+export type PromotionTier = { minSubtotal: number; discount: number };
+
 export type Promotion = {
   code: string;
   nameTh: string;
   nameEn: string;
-  type: "percent" | "flat" | "manual";
-  /** For percent: 0-100. For flat: ฿. For manual: ignored. */
+  type: "percent" | "flat" | "manual" | "tiered" | "none";
+  /** For percent: 0-100. For flat: ฿. For manual / none / tiered: ignored. */
   value: number;
+  /** Only used when type='tiered'. Pick the highest tier where minSubtotal ≤ subtotal. */
+  tiers?: PromotionTier[];
+  /** Service codes excluded from this promotion (e.g. embroidery for B2S). */
+  excludedServiceCodes?: string[];
 };
 
+// Canonical tiered Back to School rule per docs/PRICING_RULES.md §4.
+// Previously this was modeled as a 10% percent discount, which did not match
+// the spec — fixed here. The receipt + form get the right number for every
+// subtotal band.
+const B2S_TIERS: PromotionTier[] = [
+  { minSubtotal: 200, discount: 20 },
+  { minSubtotal: 300, discount: 30 },
+  { minSubtotal: 500, discount: 50 },
+  { minSubtotal: 1000, discount: 100 },
+];
+
 export const PROMOTIONS: Promotion[] = [
-  { code: "NONE", nameTh: "ไม่มีโปรโมชัน", nameEn: "No promotion", type: "manual", value: 0 },
-  { code: "B2S", nameTh: "Back to School (-10%)", nameEn: "Back to School", type: "percent", value: 10 },
+  { code: "NONE", nameTh: "ไม่มีโปรโมชัน", nameEn: "No promotion", type: "none", value: 0 },
+  {
+    code: "B2S",
+    nameTh: "Back to School (ตามช่วงราคา)",
+    nameEn: "Back to School (tiered)",
+    type: "tiered",
+    value: 0,
+    tiers: B2S_TIERS,
+    // Student name embroidery is ineligible for the BTS discount.
+    excludedServiceCodes: ["SPC-001"],
+  },
   { code: "MANUAL", nameTh: "ส่วนลดเอง (กรอกจำนวน)", nameEn: "Manual discount", type: "manual", value: 0 },
 ];
 
@@ -261,7 +287,13 @@ export function getCustomerTypeByCode(
  * Resolve a discount amount for the given subtotal.
  * - `manualDiscount` overrides any promotion (used by promotion = MANUAL).
  * - Promotion `percent` discounts are rounded down to whole baht.
- * - The returned amount is clamped to the subtotal.
+ * - `tiered` walks the tiers and picks the highest matching minSubtotal band.
+ * - Returned amount is clamped to the subtotal.
+ *
+ * `excludedServiceCodes` is intentionally NOT enforced here — that's a
+ * per-line concern. computePromotion at the order level handles exclusion.
+ * For single-service flows callers should pre-check whether the chosen
+ * service is excluded and switch to MANUAL / NONE if so.
  */
 export function computeDiscount(
   subtotal: number,
@@ -272,7 +304,16 @@ export function computeDiscount(
   if (promo?.code === "MANUAL" || (manualDiscount && manualDiscount > 0)) {
     return Math.min(Math.max(0, Math.floor(manualDiscount ?? 0)), subtotal);
   }
-  if (!promo || promo.code === "NONE") return 0;
+  if (!promo || promo.code === "NONE" || promo.type === "none") return 0;
+  if (promo.type === "tiered" && promo.tiers && promo.tiers.length > 0) {
+    let discount = 0;
+    for (const tier of promo.tiers) {
+      if (subtotal >= tier.minSubtotal && tier.discount > discount) {
+        discount = tier.discount;
+      }
+    }
+    return Math.min(discount, subtotal);
+  }
   if (promo.type === "percent") {
     return Math.min(Math.floor((subtotal * promo.value) / 100), subtotal);
   }
