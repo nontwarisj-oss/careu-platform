@@ -74,7 +74,7 @@ export default function CustomersPage() {
   }, [fetchCustomers]);
 
   const handleAddCustomer = async () => {
-    if (!formData.name || !formData.phone || !formData.address) {
+    if (!formData.name.trim() || !formData.phone.trim()) {
       return;
     }
 
@@ -102,10 +102,10 @@ export default function CustomersPage() {
 
     const { error } = await supabase.from("customers").insert({
       branch_id: firstBranch.id,
-      name: formData.name,
-      phone: formData.phone,
-      email: formData.email || null,
-      address: formData.address,
+      name: formData.name.trim(),
+      phone: formData.phone.trim(),
+      email: formData.email.trim() || "N/A",
+      address: formData.address.trim() || "N/A",
       notes: null,
     });
 
@@ -137,11 +137,15 @@ export default function CustomersPage() {
       key: "email",
       label: t("customers.email", language),
       width: "180px",
+      render: (email: string | undefined) =>
+        email && email.trim() ? email : "N/A",
     },
     {
       key: "address",
       label: t("customers.address", language),
       width: "200px",
+      render: (address: string | undefined) =>
+        address && address.trim() ? address : "N/A",
     },
     {
       key: "lastOrderDate",
@@ -195,8 +199,8 @@ export default function CustomersPage() {
             setFormData({
               name: customer.name,
               phone: customer.phone,
-              email: customer.email || "",
-              address: customer.address,
+              email: customer.email && customer.email !== "N/A" ? customer.email : "",
+              address: customer.address && customer.address !== "N/A" ? customer.address : "",
             });
           }}
           onDelete={(customer) => {
