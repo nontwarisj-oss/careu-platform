@@ -73,6 +73,8 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **technician_payroll_items — edit (bonus / deduction)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **branch_monthly_profit view** | ✅ all branches | ✅ all branches | 👁 🏢 (own branch only) | ❌ | ❌ |
 | **calculateBranchLaborCost** | ✅ | ✅ | ✅ 🏢 (own branch only) | ❌ | ❌ |
+| **Dashboard — fetch snapshot (`fetchDashboardSnapshot`)** | ✅ all branches | ✅ all branches | ✅ 🏢 (own branch via RLS + client filter) | ✅ 🏢 (front-desk tab only) | ✅ 🏢 (production tab only) |
+| **Dashboard — KPI bundle (`assembleKpis`)** | ✅ full bundle | ✅ full bundle | ✅ scoped bundle | ✅ operational subset (no financials) | ✅ workload-only subset |
 
 ---
 

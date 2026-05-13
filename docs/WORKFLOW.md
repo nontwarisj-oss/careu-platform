@@ -297,6 +297,48 @@ RLS policies on `public.expenses`:
 - `expenses_branch_scoped` — branch_manager read + write rows where `branch_id = current_user_branch_code()`.
 - front_staff / technician have no policy → no access.
 
+## 9b. Dashboard workflow (foundation)
+
+> Status: **data + KPI layer refactored** as of the dashboard foundation phase. UI redesign is intentionally deferred — the existing five role-specific dashboards (FrontDesk / Production / Accounting / Manager / Executive) keep their current shape and consume the new layer.
+
+### 9b.1 What every dashboard call goes through
+1. `app/page.tsx` reads `useRole()` + `useBranch()` to determine the scope.
+2. Calls `fetchDashboardSnapshot({ branchCode, allBranches })` from [`lib/dashboardData.ts`](../lib/dashboardData.ts).
+3. Snapshot is passed to the role-specific component. Inside that component (or any future widget), `assembleKpis(snapshot)` from [`lib/dashboardKpi.ts`](../lib/dashboardKpi.ts) produces every operational number at once.
+
+### 9b.2 Role-aware visibility
+
+| Role | What the page does |
+|---|---|
+| owner / hq_admin | `allBranches=true` → fetches all branches; the branch tab on the right is a focus filter, not a security boundary. Dashboard tabs cycle through all five views. |
+| branch_manager | `allBranches=false` → fetcher applies a client-side branch filter on top of RLS. Manager / Production / Accounting tabs visible; data scoped to own branch. |
+| front_staff | Only the FrontDesk dashboard shows (single tab). Operational widgets: today's orders, pending queue, ready-for-pickup. |
+| technician | Only the Production dashboard shows. Workload-focused: assigned jobs, completed today, target progress (via `getTechnicianWorkload`). |
+
+The branch selector in the sidebar is locked for non-admin roles by the AuthContext, so even an owner switching branches doesn't change a branch-locked user's view.
+
+### 9b.3 KPI bundle reference
+
+`assembleKpis(snapshot)` returns:
+
+| Field | Computed by |
+|---|---|
+| `salesToday` / `salesThisMonth` / `salesLastMonth` / `monthOverMonthPct` | `getSalesToday` / `getSalesThisMonth` / `getSalesLastMonth` |
+| `pendingOrders` / `inProgressOrders` / `readyForPickup` | `countByStatus` |
+| `completedToday` | `getCompletedToday` (array of orders) |
+| `overdueJobs` / `dueSoon` | `getOverdueJobs` / `getDueSoon` (uses `orders.due_date`) |
+| `topServices` (top 5) / `categoryMix` | `aggregateTopServices` / `aggregateByCategory` |
+| `payments` / `profit` / `expenses` | `aggregatePayments` / `getEstimatedProfit` / `getExpenseSummary` |
+| `branches` (per-branch rollup) / `customerCohort` | `aggregateByBranch` / `aggregateCustomerCohort` |
+| `technicianWorkload` | `getTechnicianWorkload` — per-tech assigned/today/production |
+
+### 9b.4 Future scaling
+- Replace the direct `supabase.from('orders')` reads in `dashboardData.ts` with an RPC backed by a materialised view (`dashboard_daily_snapshot`).
+- Add SWR / TanStack Query caching at the React layer for sub-second navigation.
+- Add scheduled refresh of the materialised view via Supabase Cron.
+
+The KPI layer doesn't change — it stays pure functions over the resulting arrays.
+
 ## 9. Payroll workflow (foundation)
 
 > Status: **foundation only**. Tables + calculation helpers exist as of `20260525_payroll_foundation.sql` / [`lib/payrollService.ts`](../lib/payrollService.ts). UI lives in a future phase.

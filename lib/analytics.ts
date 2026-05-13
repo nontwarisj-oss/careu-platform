@@ -21,6 +21,14 @@ export type AnalyticsOrder = {
   promotion_code: string | null;
   customer_type: string | null;
   payment_status: string | null;
+  // Added by 20260521 (jobs) and 20260524 (assignments). Optional so old
+  // narrow-projection fetches and pre-migration data still type-check.
+  due_date?: string | null;
+  labor_cost?: number | null;
+  material_cost?: number | null;
+  assigned_technician_id?: string | null;
+  production_value?: number | null;
+  tech?: string | null;
 };
 
 function startOfDay(d: Date): Date {

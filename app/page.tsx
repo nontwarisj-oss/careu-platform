@@ -5,12 +5,12 @@ import { useLanguage } from "@/lib/languageContext";
 import { useBranch } from "@/lib/branchContext";
 import { useRole } from "@/lib/roleContext";
 import { BrandLogo } from "@/components/BrandLogo";
-import supabase from "@/lib/supabase";
-import {
-  type AnalyticsOrder,
-  filterByBranch,
-} from "@/lib/analytics";
+import { type AnalyticsOrder, filterByBranch } from "@/lib/analytics";
 import type { ExpenseRow } from "@/lib/expenses";
+import {
+  fetchDashboardSnapshot,
+  type DashboardSnapshot,
+} from "@/lib/dashboardData";
 import {
   DASHBOARD_LABELS,
   getAccessibleDashboards,
@@ -24,116 +24,57 @@ import { AccountingDashboard } from "@/components/dashboard/AccountingDashboard"
 import { ManagerDashboard } from "@/components/dashboard/ManagerDashboard";
 import { ExecutiveDashboard } from "@/components/dashboard/ExecutiveDashboard";
 
-const WIDE_COLUMNS =
-  "id, customer_id, price, status, created_at, branch_id, subtotal, discount, urgent_fee, service_category, service_code, service_name, promotion_code, customer_type, payment_status";
-
-const NARROW_COLUMNS =
-  "id, customer_id, price, status, created_at";
-
 export default function Dashboard() {
   const { language } = useLanguage();
   const { branch } = useBranch();
   const { role, definition } = useRole();
 
-  const [orders, setOrders] = useState<AnalyticsOrder[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
-  const [customerCount, setCustomerCount] = useState(0);
+  // The fetcher returns ALL data (branch-filtered for branch-locked roles).
+  // The page keeps the role-tab logic + passes the appropriate slice to each
+  // dashboard component. Data layer lives in lib/dashboardData.ts so future
+  // pages can reuse the same fetcher without re-implementing.
+  const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeDashboard, setActiveDashboard] = useState<DashboardKey>(
     getDefaultDashboard(role)
   );
 
-  // Keep the active tab in sync with the selected role.
+  const allBranches = seesAllBranches(role);
+
   useEffect(() => {
     setActiveDashboard(getDefaultDashboard(role));
   }, [role]);
 
+  // Re-fetch whenever the role or branch changes — both can change the
+  // server-side slice (allBranches flag) AND the client-side filter.
   useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
     void (async () => {
-      setIsLoading(true);
-      setErrorMessage(null);
-
-      let rawRows: Array<Record<string, unknown>> | null = null;
-      const wide = await supabase
-        .from("orders")
-        .select(WIDE_COLUMNS)
-        .order("created_at", { ascending: false });
-      if (!wide.error) {
-        rawRows = (wide.data ?? []) as unknown as Array<Record<string, unknown>>;
-      } else {
-        const narrow = await supabase
-          .from("orders")
-          .select(NARROW_COLUMNS)
-          .order("created_at", { ascending: false });
-        if (narrow.error) {
-          setErrorMessage(narrow.error.message);
-          setOrders([]);
-          setIsLoading(false);
-          return;
-        }
-        rawRows = (narrow.data ?? []) as unknown as Array<Record<string, unknown>>;
+      const next = await fetchDashboardSnapshot({
+        branchCode: branch.id,
+        allBranches,
+      });
+      if (!cancelled) {
+        setSnapshot(next);
+        setIsLoading(false);
       }
-
-      setOrders(
-        rawRows.map((row) => ({
-          id: String(row.id),
-          customer_id: (row.customer_id as string) ?? null,
-          price: Number(row.price ?? 0),
-          status: (row.status as string) ?? "",
-          created_at: row.created_at as string,
-          branch_id: (row.branch_id as string) ?? null,
-          subtotal:
-            row.subtotal !== null && row.subtotal !== undefined
-              ? Number(row.subtotal)
-              : null,
-          discount: Number(row.discount ?? 0),
-          urgent_fee: Number(row.urgent_fee ?? 0),
-          service_category: (row.service_category as string) ?? null,
-          service_code: (row.service_code as string) ?? null,
-          service_name: (row.service_name as string) ?? null,
-          promotion_code: (row.promotion_code as string) ?? null,
-          customer_type: (row.customer_type as string) ?? null,
-          payment_status: (row.payment_status as string) ?? "unpaid",
-        }))
-      );
-
-      const { count } = await supabase
-        .from("customers")
-        .select("id", { count: "exact", head: true });
-      setCustomerCount(count ?? 0);
-
-      // Expenses (optional — table may not exist yet on older deployments).
-      const expRes = await supabase
-        .from("expenses")
-        .select(
-          "id, expense_date, category, description, amount, branch_id, payment_method, notes, created_by, created_at"
-        )
-        .order("expense_date", { ascending: false });
-      if (!expRes.error) {
-        setExpenses(
-          ((expRes.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
-            id: String(row.id),
-            expense_date: (row.expense_date as string) ?? new Date().toISOString(),
-            category: (row.category as string) ?? "other",
-            description: (row.description as string) ?? null,
-            amount: Number(row.amount ?? 0),
-            branch_id: (row.branch_id as string) ?? null,
-            payment_method: (row.payment_method as string) ?? null,
-            notes: (row.notes as string) ?? null,
-            created_by: (row.created_by as string) ?? null,
-            created_at: (row.created_at as string) ?? new Date().toISOString(),
-          }))
-        );
-      }
-
-      setIsLoading(false);
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [branch.id, allBranches]);
+
+  // Memoise the "branch-scoped" view used by widgets that should respect
+  // the user's selection even when allBranches=true. Owner / hq_admin
+  // looking at a single branch tab still see scoped numbers on the
+  // FrontDesk / Production dashboards.
+  const orders: AnalyticsOrder[] = snapshot?.orders ?? [];
+  const expenses: ExpenseRow[] = snapshot?.expenses ?? [];
 
   const scopedOrders = useMemo(
-    () => filterByBranch(orders, branch.id, seesAllBranches(role)),
-    [orders, branch.id, role]
+    () => filterByBranch(orders, branch.id, allBranches),
+    [orders, branch.id, allBranches]
   );
 
   const accessible = getAccessibleDashboards(role);
@@ -160,22 +101,22 @@ export default function Dashboard() {
               {language === "th" ? "สาขาที่เลือก" : "Current branch"}
             </p>
             <p className="text-sm font-semibold text-gray-800 truncate max-w-[220px]">
-              {seesAllBranches(role)
+              {allBranches
                 ? language === "th"
                   ? "ทุกสาขา"
                   : "All branches"
                 : branch.shortLabel}
             </p>
             <p className="text-[10px] text-gray-500 truncate max-w-[220px]">
-              {seesAllBranches(role) ? branch.shortLabel : branch.address}
+              {allBranches ? branch.shortLabel : branch.address}
             </p>
           </div>
         </div>
       </div>
 
-      {errorMessage && (
+      {snapshot?.error && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {errorMessage}
+          {snapshot.error}
         </div>
       )}
 
@@ -202,7 +143,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {isLoading ? (
+      {isLoading || !snapshot ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">
           กำลังโหลด...
         </div>
@@ -213,7 +154,7 @@ export default function Dashboard() {
           allOrders={orders}
           expenses={expenses}
           branchId={branch.id}
-          customerCount={customerCount}
+          customerCount={snapshot.customerCount}
         />
       )}
     </div>

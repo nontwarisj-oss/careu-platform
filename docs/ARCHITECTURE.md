@@ -212,14 +212,58 @@ All Google calls happen server-side from Node-runtime route handlers in `/app/ap
 
 ## 9. Dashboard architecture
 
-`app/page.tsx` (and the role-specific dashboards under `components/dashboard/`) read directly from the Supabase anon client. Each fetch is wrapped in a hook in `lib/analytics.ts`.
+Three-layer separation, as of the dashboard foundation refactor:
 
-Branch isolation today is **UI-layer only**:
-- `useBranch()` provides the current branch context.
-- Charts and KPIs filter by `branch.id` when `seesAllBranches(role) === false`.
-- `owner` / `hq_admin` see aggregate views; `branch_manager` / `front_staff` / `technician` see their branch only.
+```
+┌────────────────────────────────────────────────────────────┐
+│  app/page.tsx                                              │
+│    • Picks the active role-specific view (5 components)    │
+│    • Calls fetchDashboardSnapshot on mount + on branch     │
+│      or role change                                        │
+│    • Passes the resulting orders/expenses/customerCount    │
+│      to the dashboard components                           │
+└──────────────┬─────────────────────────────────────────────┘
+               │
+               ▼  (one call instead of inline useEffect)
+┌────────────────────────────────────────────────────────────┐
+│  lib/dashboardData.ts                                      │
+│    • fetchDashboardSnapshot({ branchCode, allBranches })   │
+│    • Pulls orders (wide → narrow fallback), expenses,      │
+│      customer count                                        │
+│    • Applies a belt-and-braces branch filter on top of     │
+│      RLS so preview mode still scopes correctly            │
+└──────────────┬─────────────────────────────────────────────┘
+               │
+               ▼  (pure functions, no DB)
+┌────────────────────────────────────────────────────────────┐
+│  lib/dashboardKpi.ts                                       │
+│    • Operational KPIs: sales today / pending / ready-      │
+│      for-pickup / overdue / due-soon / labor cost /        │
+│      estimated profit / technician workload / expense      │
+│      summary / top services                                │
+│    • assembleKpis(input) → DashboardKpiBundle              │
+│    • Re-exports primitives from lib/analytics.ts so a      │
+│      consumer needs one import                             │
+└────────────────────────────────────────────────────────────┘
+```
 
-Once strict RLS is on (next phase), the same client queries will auto-scope server-side — no frontend change needed.
+Branch isolation runs at three layers (defense in depth):
+
+| Layer | What |
+|---|---|
+| **UI** | Sidebar branch selector locks for non-admin roles; dashboard shows "ทุกสาขา / All branches" label for admins. |
+| **Server (RLS)** | `orders` / `expenses` / `customers` policies from migrations `20260522` + `20260525` scope reads by `current_user_branch_code()`. |
+| **Client filter** | `fetchDashboardSnapshot` re-applies the branch filter on the result so preview-mode (no JWT bridge) still works. |
+
+Pages that need fewer KPIs import the individual helpers; pages that need everything call `assembleKpis(snapshot)` and read the bundle. Future per-branch tabs / per-tech widgets just call the same data + KPI layer with a different scope.
+
+### Future scaling
+The fetcher signature is the swap point. When daily order volume warrants:
+- Replace the direct `supabase.from('orders')` reads with an RPC backed by a materialised view (e.g. `dashboard_daily_snapshot(branch_code, day)`).
+- Add `swr`-style caching at the React layer.
+- Add scheduled refresh of the materialised view via Supabase Cron.
+
+The KPI layer doesn't change — it stays pure functions over the resulting orders/expenses arrays.
 
 ---
 
@@ -357,10 +401,12 @@ lib/
 ├── pricing.ts        ← legacy hardcoded catalog
 ├── technicianService.ts ← skill catalog + recommendTechnician
 ├── technicianKpi.ts  ← daily/monthly KPI + ranking helpers
-└── payrollService.ts ← production target, performance ratio, estimated payroll, branch labor cost, monthly profit fetch
+├── payrollService.ts ← production target, performance ratio, estimated payroll, branch labor cost, monthly profit fetch
+├── dashboardData.ts  ← single fetcher for orders + expenses + customer count (role-aware branch scope)
+└── dashboardKpi.ts   ← operational KPI helpers + assembleKpis bundle
 
 supabase/migrations/
-└── 20260512..20260521 (see §7)
+└── 20260512..20260525 (see §7)
 ```
 
 ---
