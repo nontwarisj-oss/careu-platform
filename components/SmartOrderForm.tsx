@@ -344,6 +344,18 @@ export function SmartOrderForm({
       return;
     }
 
+    // Fire-and-forget Google Sheet sync. Order is already safely in Supabase
+    // at this point — sync failure must NOT block the staff workflow. The
+    // /orders/[id]/document page surfaces a manual retry button so the
+    // operator can re-sync if this call quietly fails.
+    void fetch("/api/sync-order-to-sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId }),
+    }).catch(() => {
+      // Network errors swallowed intentionally; the manual button is the UX.
+    });
+
     const summary: SmartOrderCreatedSummary = {
       orderId,
       customerName: resolvedCustomer.name,

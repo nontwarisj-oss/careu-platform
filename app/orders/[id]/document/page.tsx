@@ -65,6 +65,10 @@ export default function OrderDocumentPage({
   const [laborInput, setLaborInput] = useState<string>("");
   const [materialInput, setMaterialInput] = useState<string>("");
   const [costSaving, setCostSaving] = useState(false);
+  const [sheetSyncStatus, setSheetSyncStatus] = useState<
+    "idle" | "syncing" | "success" | "failed"
+  >("idle");
+  const [sheetSyncError, setSheetSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -266,6 +270,35 @@ export default function OrderDocumentPage({
     setTimeout(() => setToast(null), 3000);
   };
 
+  const handleSyncToSheet = async () => {
+    if (!order) return;
+    setSheetSyncStatus("syncing");
+    setSheetSyncError(null);
+    try {
+      const res = await fetch("/api/sync-order-to-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        setSheetSyncStatus("failed");
+        setSheetSyncError(json.reason ?? `HTTP ${res.status}`);
+        setToast(`ซิงค์ไป Google Sheet ไม่สำเร็จ: ${json.reason ?? res.status}`);
+      } else {
+        setSheetSyncStatus("success");
+        setToast("ซิงค์ไป Google Sheet เรียบร้อย");
+      }
+    } catch (err) {
+      setSheetSyncStatus("failed");
+      setSheetSyncError(
+        err instanceof Error ? err.message : "Network error"
+      );
+      setToast("ซิงค์ไป Google Sheet ไม่สำเร็จ — เครือข่ายขัดข้อง");
+    }
+    setTimeout(() => setToast(null), 4000);
+  };
+
   const handlePaymentChange = async (next: string) => {
     if (!order) return;
     setPaymentSaving(true);
@@ -353,6 +386,37 @@ export default function OrderDocumentPage({
             >
               คัดลอกข้อความส่งลูกค้า
             </button>
+            <button
+              onClick={() => void handleSyncToSheet()}
+              disabled={sheetSyncStatus === "syncing"}
+              className="px-3 py-2 rounded-lg border border-green-600 text-green-700 hover:bg-green-50 text-sm font-medium disabled:opacity-50"
+            >
+              {sheetSyncStatus === "syncing"
+                ? "กำลังซิงค์..."
+                : sheetSyncStatus === "failed"
+                ? "ลองซิงค์ Google Sheet อีกครั้ง"
+                : "ซิงค์ไป Google Sheet"}
+            </button>
+            <span
+              className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                sheetSyncStatus === "success"
+                  ? "bg-green-50 text-green-800 border-green-200"
+                  : sheetSyncStatus === "failed"
+                  ? "bg-red-50 text-red-700 border-red-200"
+                  : sheetSyncStatus === "syncing"
+                  ? "bg-yellow-50 text-yellow-800 border-yellow-200"
+                  : "bg-gray-50 text-gray-600 border-gray-200"
+              }`}
+              title={sheetSyncError ?? undefined}
+            >
+              {sheetSyncStatus === "success"
+                ? "Sheet • ซิงค์แล้ว"
+                : sheetSyncStatus === "failed"
+                ? "Sheet • ล้มเหลว"
+                : sheetSyncStatus === "syncing"
+                ? "Sheet • กำลังซิงค์"
+                : "Sheet • รอซิงค์"}
+            </span>
           </div>
         </div>
 

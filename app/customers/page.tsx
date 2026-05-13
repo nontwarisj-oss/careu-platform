@@ -14,6 +14,7 @@ import {
   importCustomerRows,
   type ParsedCustomerRow,
 } from "@/lib/customerImport";
+import { aggregateOrdersToCustomers } from "@/lib/customerStats";
 
 type CustomerRow = {
   id: string;
@@ -34,6 +35,7 @@ type CustomerStats = {
   orderCount: number;
   totalSpent: number;
   latestDate: string | null;
+  latestService: string | null;
 };
 
 type CustomerSegment = "vip" | "repeat" | "new";
@@ -42,6 +44,7 @@ type EnrichedCustomer = Customer & {
   orderCount: number;
   isRepeat: boolean;
   segment: CustomerSegment;
+  latestService: string | null;
 };
 
 function classifySegment(orderCount: number): CustomerSegment {
@@ -84,6 +87,11 @@ export default function CustomersPage() {
   const [statsByCustomer, setStatsByCustomer] = useState<
     Record<string, CustomerStats>
   >({});
+  const [statsMeta, setStatsMeta] = useState<{
+    unmatchedOrders: number;
+    totalOrders: number;
+  }>({ unmatchedOrders: 0, totalOrders: 0 });
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
@@ -105,40 +113,74 @@ export default function CustomersPage() {
     setIsLoading(false);
   }, []);
 
-  const fetchCustomerStats = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("customer_id, price, created_at");
-    if (error) return;
-    const map: Record<string, CustomerStats> = {};
-    for (const row of (data ?? []) as Array<{
-      customer_id: string | null;
-      price: number | string | null;
-      created_at: string;
-    }>) {
-      if (!row.customer_id) continue;
-      const cur = map[row.customer_id] ?? {
-        orderCount: 0,
-        totalSpent: 0,
-        latestDate: null,
-      };
-      cur.orderCount += 1;
-      cur.totalSpent += Number(row.price ?? 0);
-      if (!cur.latestDate || new Date(row.created_at) > new Date(cur.latestDate)) {
-        cur.latestDate = row.created_at;
+  const fetchCustomerStats = useCallback(
+    async (currentCustomers: Customer[]) => {
+      // Try the wide projection first (service_name lives there post smart-
+      // order migration); fall back to the legacy projection if columns are
+      // missing so old databases still aggregate correctly.
+      const wide = await supabase
+        .from("orders")
+        .select("customer_id, customer_name, price, created_at, service_name, item_name");
+      let rows: Array<{
+        customer_id: string | null;
+        customer_name: string | null;
+        price: number | string | null;
+        created_at: string;
+        service_name?: string | null;
+        item_name?: string | null;
+      }> = [];
+      if (!wide.error) {
+        rows = (wide.data ?? []) as typeof rows;
+      } else {
+        const narrow = await supabase
+          .from("orders")
+          .select("customer_id, customer_name, price, created_at");
+        if (narrow.error) {
+          setStatsError(narrow.error.message);
+          setStatsByCustomer({});
+          setStatsMeta({ unmatchedOrders: 0, totalOrders: 0 });
+          return;
+        }
+        rows = (narrow.data ?? []) as typeof rows;
       }
-      map[row.customer_id] = cur;
-    }
-    setStatsByCustomer(map);
-  }, []);
 
-  useEffect(() => {
-    void fetchCustomerStats();
-  }, [fetchCustomerStats]);
+      setStatsError(null);
+
+      const { stats, unmatchedOrders, totalOrders } = aggregateOrdersToCustomers(
+        currentCustomers.map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+        })),
+        rows.map((r) => ({
+          customer_id: r.customer_id,
+          customer_name: r.customer_name,
+          price: Number(r.price ?? 0),
+          created_at: r.created_at,
+          service_name: r.service_name ?? null,
+          item_name: r.item_name ?? null,
+        }))
+      );
+      setStatsByCustomer(stats);
+      setStatsMeta({ unmatchedOrders, totalOrders });
+    },
+    []
+  );
 
   useEffect(() => {
     void fetchCustomers();
   }, [fetchCustomers]);
+
+  // Recompute order aggregation whenever the customer list changes. This way
+  // sync / CSV import / manual add automatically refresh visit + spend
+  // numbers without each handler needing to call fetchCustomerStats again.
+  useEffect(() => {
+    if (customers.length === 0) {
+      setStatsByCustomer({});
+      return;
+    }
+    void fetchCustomerStats(customers);
+  }, [customers, fetchCustomerStats]);
 
   const handleAddCustomer = async () => {
     if (!formData.name.trim() || !formData.phone.trim()) {
@@ -199,6 +241,7 @@ export default function CustomersPage() {
         orderCount,
         isRepeat: orderCount >= 2,
         segment: classifySegment(orderCount),
+        latestService: stats?.latestService ?? null,
       };
     });
   }, [customers, statsByCustomer]);
@@ -280,7 +323,7 @@ export default function CustomersPage() {
             ? `ซิงค์ลูกค้าเสร็จแล้ว\nเพิ่มใหม่ ${added} ราย\nอัปเดตลูกค้าเดิม ${matched} ราย`
             : `Customer sync complete\nAdded ${added} new\nKept ${matched} existing`
         );
-        await Promise.all([fetchCustomers(), fetchCustomerStats()]);
+        await fetchCustomers();
       }
     } catch (err) {
       setSyncMessage(err instanceof Error ? err.message : "Sync failed");
@@ -320,7 +363,7 @@ export default function CustomersPage() {
     );
     setImportPreview([]);
     setIsSubmitting(false);
-    await Promise.all([fetchCustomers(), fetchCustomerStats()]);
+    await fetchCustomers();
   };
 
   const columns = [
@@ -360,8 +403,20 @@ export default function CustomersPage() {
     {
       key: "lastOrderDate",
       label: t("customers.lastOrder", language),
-      width: "120px",
-      render: (date: Date | undefined) => (date ? formatDate(date, language) : "-"),
+      width: "180px",
+      render: (date: Date | undefined, row: EnrichedCustomer) => {
+        if (!date) return <span className="text-gray-500">-</span>;
+        return (
+          <div>
+            <p className="text-gray-800">
+              {row.latestService ?? "-"}
+            </p>
+            <p className="text-[11px] text-gray-500">
+              {formatDate(date, language)}
+            </p>
+          </div>
+        );
+      },
     },
     {
       key: "totalSpent",
@@ -538,6 +593,22 @@ export default function CustomersPage() {
       {errorMessage && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {errorMessage}
+        </div>
+      )}
+
+      {statsError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {language === "th"
+            ? `อ่านตาราง orders ไม่สำเร็จ จึงคำนวณยอดลูกค้าไม่ได้: ${statsError}`
+            : `Could not read orders table to aggregate visits/spend: ${statsError}`}
+        </div>
+      )}
+
+      {statsMeta.unmatchedOrders > 0 && (
+        <div className="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+          {language === "th"
+            ? `มี ${statsMeta.unmatchedOrders} จาก ${statsMeta.totalOrders} ใบงานที่ยังจับคู่กับลูกค้าไม่ได้ (customer_id ขาดและชื่อไม่ตรง) — ใบงานเหล่านี้จะไม่ถูกนับใน "ครั้ง / จำนวนเงินที่ใช้ไป"`
+            : `${statsMeta.unmatchedOrders} of ${statsMeta.totalOrders} orders could not be linked to a customer (missing customer_id and name mismatch) — they are excluded from visits/spend totals.`}
         </div>
       )}
 
