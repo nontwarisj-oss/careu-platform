@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { getBranchById } from "@/lib/brandConfig";
@@ -199,7 +200,7 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-green-100">
         {/* Header */}
-        <div className="bg-gradient-to-r from-green-700 to-green-600 px-6 py-4 flex items-center justify-between border-b-4 border-yellow-400 rounded-t-2xl">
+        <div className="bg-gradient-to-r from-green-700 to-green-600 px-6 py-4 flex items-center justify-between gap-3 border-b-4 border-yellow-400 rounded-t-2xl">
           <div className="text-white min-w-0">
             <p className="text-[11px] uppercase tracking-widest text-yellow-200 font-semibold">
               ใบงานซ่อม
@@ -208,13 +209,22 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
               #{order.id.slice(0, 8).toUpperCase()}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white/90 hover:text-white text-2xl leading-none"
-            aria-label="close"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/orders/${order.id}/document`}
+              onClick={onClose}
+              className="text-xs font-medium bg-white/15 hover:bg-white/25 text-white px-3 py-1.5 rounded-lg"
+            >
+              ดูเอกสารฉบับเต็ม
+            </Link>
+            <button
+              onClick={onClose}
+              className="text-white/90 hover:text-white text-2xl leading-none"
+              aria-label="close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="p-4 md:p-6 space-y-5">

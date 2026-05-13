@@ -119,17 +119,23 @@ export default function IntakePage() {
           </div>
 
           <div className="mt-5 flex flex-col gap-2">
+            <Link
+              href={`/orders/${confirmation.orderId}/document`}
+              className="w-full text-center bg-green-700 hover:bg-green-800 text-white font-semibold py-3 rounded-xl"
+            >
+              เปิดเอกสารฉบับเต็ม (รับงาน/เสนอราคา/ชำระเงิน)
+            </Link>
             <button
               onClick={() => setConfirmation(null)}
-              className="w-full bg-green-700 hover:bg-green-800 text-white font-semibold py-3 rounded-xl"
+              className="w-full border border-green-600 text-green-700 hover:bg-green-50 font-semibold py-3 rounded-xl"
             >
               รับงานใหม่
             </button>
             <Link
               href="/orders"
-              className="w-full text-center border border-green-600 text-green-700 hover:bg-green-50 font-semibold py-3 rounded-xl"
+              className="w-full text-center text-sm text-gray-500 hover:text-gray-700 py-2"
             >
-              ดูรายการคำสั่งซ่อม
+              ดูรายการคำสั่งซ่อมทั้งหมด
             </Link>
           </div>
         </div>

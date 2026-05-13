@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { OrderDetailModal } from "@/components/OrderDetailModal";
@@ -298,6 +299,7 @@ export default function OrdersPage() {
                   <th className="text-left p-4">ราคา</th>
                   <th className="text-left p-4">สถานะ</th>
                   <th className="text-left p-4">วันที่</th>
+                  <th className="text-left p-4 print:hidden">เอกสาร</th>
                 </tr>
               </thead>
               <tbody>
@@ -359,6 +361,15 @@ export default function OrdersPage() {
                     </td>
                     <td className="p-4 text-gray-600">
                       {new Date(order.created_at).toLocaleDateString("th-TH")}
+                    </td>
+                    <td className="p-4 print:hidden">
+                      <Link
+                        href={`/orders/${order.id}/document`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-sm text-green-700 hover:text-green-800 font-medium"
+                      >
+                        ดูเอกสาร →
+                      </Link>
                     </td>
                   </tr>
                 ))}
