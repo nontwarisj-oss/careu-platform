@@ -262,7 +262,83 @@ This phase ships the inputs payroll will read:
 - Productivity target (computed or override).
 - Daily / monthly aggregates from the view.
 
-A future payroll phase consumes these to compute bonuses and approve payouts. Nothing about payroll is implemented today — wage edits stay locked to owner / hq_admin so the data shape is correct when payroll lands.
+The payroll foundation (§9) consumes these. Nothing about a payout UI is implemented yet — wage edits stay locked to owner / hq_admin so the data shape stays correct.
+
+## 8. Expense workflow
+
+> Status: standardised + RLS-protected as of `20260525_payroll_foundation.sql`. UI in `/expenses` keeps the same fields the staff already use.
+
+### 8.1 Capturing an expense
+1. Branch manager (or owner / hq_admin) opens `/expenses`.
+2. Fills in `expense_date`, `category` (10-value catalog in [`lib/expenses.ts`](../lib/expenses.ts)), `description`, `amount`, `payment_method`, `notes`. `branch_id` defaults to the current branch.
+3. Saves. The DB trigger automatically stamps `created_by_uuid = auth.uid()` and `updated_by` / `updated_at` on subsequent edits.
+
+### 8.2 Columns
+| Column | Source | Required? |
+|---|---|---|
+| `branch_id` (text slug) | UI / sheet sync | yes |
+| `category` | EXPENSE_CATEGORIES catalog | yes |
+| `amount` | manual entry | yes |
+| `expense_date` | manual entry; defaults to today | yes |
+| `payment_method` | PAYMENT_METHODS catalog | optional |
+| `description` / `notes` | manual entry | one of two required for audit |
+| `created_by` (text) | legacy free-form attribution (sheet sync) | optional |
+| `created_by_uuid` (uuid) | auto-stamped from JWT on INSERT | optional (auto) |
+| `updated_at` / `updated_by` | auto-stamped on UPDATE | auto |
+
+### 8.3 Bulk sync from Google Sheet
+1. `/expenses` → "ซิงค์ Expense_Log" (owner/hq_admin only).
+2. Server reads the `Expense_Log` tab via gviz CSV, dedups by content, writes new rows into `public.expenses`.
+3. The trigger stamps `created_by_uuid = NULL` on these rows (sync runs as service role; the bridge JWT isn't present in that path). `created_by` text keeps the original "ผู้บันทึก" name from the sheet.
+
+### 8.4 Branch isolation
+RLS policies on `public.expenses`:
+- `expenses_admin_full` — owner / hq_admin read + write any branch.
+- `expenses_branch_scoped` — branch_manager read + write rows where `branch_id = current_user_branch_code()`.
+- front_staff / technician have no policy → no access.
+
+## 9. Payroll workflow (foundation)
+
+> Status: **foundation only**. Tables + calculation helpers exist as of `20260525_payroll_foundation.sql` / [`lib/payrollService.ts`](../lib/payrollService.ts). UI lives in a future phase.
+
+### 9.1 Data model
+- `public.payroll_periods` — one row per (branch_id, year, month). Status: `open → finalized → paid` (or `cancelled`).
+- `public.technician_payroll_items` — one row per technician per period. Snapshot of wage + multiplier + days_worked + production + target + bonus + deduction + final_pay.
+- `public.branch_monthly_profit` (view) — revenue − material − labor − expenses per branch per month.
+
+### 9.2 Estimating a payroll
+1. Owner / hq_admin opens (future) `/admin/payroll`.
+2. UI calls `calculateEstimatedPayroll(tech, year, month)` from [`lib/payrollService.ts`](../lib/payrollService.ts) for each active technician in the chosen branch.
+3. Result table shows `daysWorked`, `baseWage`, `productionValue`, `targetValue`, `performanceRatio`, `aboveTarget`. Owner enters bonus / deduction; system computes `final_pay = base + bonus − deduction`.
+4. "Finalize" creates a `payroll_periods` row with `status='finalized'` and one `technician_payroll_items` row per tech with the snapshot values.
+5. "Mark paid" later flips `status='paid'` + stamps `paid_at` / `paid_by`.
+
+### 9.3 Why snapshot the wage
+`daily_wage_snapshot` and `target_multiplier_snapshot` on `technician_payroll_items` capture the technician's wage at finalization time. If HQ later raises the wage, last month's payroll history doesn't drift — the snapshot is immutable.
+
+### 9.4 Branch labor cost
+`calculateBranchLaborCost(branchId, fromDate, toDate)` rolls up `daily_wage × days_worked` for every technician in the branch in the window. Used by:
+- The future payroll UI (preview).
+- The future profit dashboard (the labor row in revenue − labor − expenses).
+
+### 9.5 Branch profit
+`fetchBranchMonthlyProfit(fromMonth, toMonth)` reads the `branch_monthly_profit` view:
+```
+gross_profit = revenue − material_cost − labor_cost (per-order) − operational_expenses
+```
+- `revenue` is sum of `orders.price` where `status='completed'`.
+- `material_cost` and `labor_cost` are the per-order numbers entered by managers in the order document page's cost panel.
+- `operational_expenses` is sum of `expenses.amount` for the month.
+
+Note: per-order `labor_cost` (recorded on completion) is the "real" cost number; the payroll `final_pay` (recorded at month-end) is the "paid" number. The two converge in well-run shops but can diverge — the profit view uses the per-order value because it matches what's been incurred at the time of revenue capture.
+
+### 9.6 Future bonus / incentive expansion
+This commit ships the **inputs**. A bonus engine consumes them:
+- Performance bonus = max(0, performance_ratio − 1) × base_wage × bonus_rate.
+- Tenure bonus = months_employed × tenure_increment.
+- Branch profit-share = branch_gross_profit × profit_share_pct.
+
+None of those are implemented yet. The `bonus_amount` and `deduction_amount` columns on `technician_payroll_items` are owner-decided overrides; an automated engine plugs in alongside without schema changes.
 
 ---
 

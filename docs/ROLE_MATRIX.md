@@ -65,6 +65,14 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **technician_profiles — toggle active** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Order assignment (`orders.assigned_technician_id`)** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 (self-assign) |
 | **Productivity KPI view** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ✅ own row only |
+| **`/expenses` view + add** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **`/expenses` sync from sheet** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **payroll_periods — view** | ✅ all | ✅ all | 👁 🏢 (read only) | ❌ | ❌ |
+| **payroll_periods — create / finalize / pay** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **technician_payroll_items — view** | ✅ all | ✅ all | 👁 🏢 (own branch only via period join) | ❌ | ❌ |
+| **technician_payroll_items — edit (bonus / deduction)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **branch_monthly_profit view** | ✅ all branches | ✅ all branches | 👁 🏢 (own branch only) | ❌ | ❌ |
+| **calculateBranchLaborCost** | ✅ | ✅ | ✅ 🏢 (own branch only) | ❌ | ❌ |
 
 ---
 

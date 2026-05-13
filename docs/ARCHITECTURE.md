@@ -185,6 +185,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260522_auth_bridge_rls.sql` | helper functions `current_user_role()` + `current_user_branch_code()`; strict RLS on orders + customers; admin/branch read policies on profiles |
 | `20260523_pricing_engine.sql` | `service_prices` column renames + business_type + sort_order + updated_at trigger; `branch_id` text → uuid FK; scoped unique index; `pricing_audit_logs` + trigger; RLS read-all / admin-write |
 | `20260524_technician_foundation.sql` | `technician_profiles` table + RLS; orders `assigned_technician_id` / `assigned_at` / `production_value` / `assignment_notes`; `touch_assignment` trigger; `technician_daily_kpi` view |
+| `20260525_payroll_foundation.sql` | `current_user_branch_id()` helper; `expenses` standardised (`created_by_uuid`, `updated_at`, `updated_by`, triggers) + RLS; `payroll_periods` + `technician_payroll_items` tables; `branch_monthly_profit` view; RLS on all new objects |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -355,7 +356,8 @@ lib/
 ├── brandConfig.ts    ← branch UI metadata (mirror of branches table)
 ├── pricing.ts        ← legacy hardcoded catalog
 ├── technicianService.ts ← skill catalog + recommendTechnician
-└── technicianKpi.ts  ← daily/monthly KPI + ranking helpers
+├── technicianKpi.ts  ← daily/monthly KPI + ranking helpers
+└── payrollService.ts ← production target, performance ratio, estimated payroll, branch labor cost, monthly profit fetch
 
 supabase/migrations/
 └── 20260512..20260521 (see §7)
