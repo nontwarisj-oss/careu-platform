@@ -47,11 +47,21 @@ export async function POST(req: Request) {
   }
 
   if (!readGoogleSheetsConfig()) {
+    const missing = [
+      ["GOOGLE_SERVICE_ACCOUNT_EMAIL", process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL],
+      ["GOOGLE_PRIVATE_KEY", process.env.GOOGLE_PRIVATE_KEY],
+      ["GOOGLE_SHEET_ID", process.env.GOOGLE_SHEET_ID],
+    ]
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    console.warn("[sync-order-to-sheet] missing env vars", missing);
     return NextResponse.json(
       {
         ok: false,
-        reason:
-          "Google Sheets sync ยังไม่ตั้งค่า credentials — เพิ่ม GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY / GOOGLE_SHEET_ID ใน environment ของ Vercel",
+        reason: `Google Sheets sync ยังไม่ตั้งค่า credentials — ตัวแปรที่ขาด: ${missing.join(
+          ", "
+        )}`,
+        missing,
       },
       { status: 503 }
     );
@@ -158,15 +168,27 @@ export async function POST(req: Request) {
   try {
     await appendRow(SHEET_TARGET, row);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[sync-order-to-sheet] append failed", {
+      orderId,
+      sheet: SHEET_TARGET,
+      message,
+    });
     return NextResponse.json(
       {
         ok: false,
-        reason: (err as Error).message,
+        reason: message,
+        sheet: SHEET_TARGET,
+        orderId,
       },
       { status: 502 }
     );
   }
 
+  console.info("[sync-order-to-sheet] appended", {
+    orderId,
+    sheet: SHEET_TARGET,
+  });
   return NextResponse.json({
     ok: true,
     sheet: SHEET_TARGET,
