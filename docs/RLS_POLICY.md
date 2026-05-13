@@ -17,6 +17,8 @@
 | `expense_log` | OFF | Manager-only UI; RLS flip pairs with the next reports/dashboard pass. |
 | `service_prices` | **ON** | Read-all for any authenticated user; INSERT/UPDATE/DELETE restricted to owner/hq_admin via `service_prices_admin_write`. |
 | `pricing_audit_logs` | **ON** | SELECT restricted to owner/hq_admin (`pricing_audit_admin_read`); writes via the `log_pricing_change` trigger (SECURITY DEFINER) only — no INSERT policy for any role. |
+| `expense_audit_log` | **ON** | SELECT restricted to owner/hq_admin (`expense_audit_admin_read`); writes via the `log_expense_change` trigger only. Append-only. |
+| `sync_failures` | **ON** | SELECT restricted to owner/hq_admin (`sync_failures_admin_read`); writes via service-role only (no INSERT/UPDATE/DELETE policy for any authenticated role). |
 | `order_audit_log` | OFF | Written by server routes via service role only. |
 | `users` (legacy) | OFF | Being phased out in favour of `profiles`. |
 

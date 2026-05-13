@@ -186,6 +186,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260523_pricing_engine.sql` | `service_prices` column renames + business_type + sort_order + updated_at trigger; `branch_id` text → uuid FK; scoped unique index; `pricing_audit_logs` + trigger; RLS read-all / admin-write |
 | `20260524_technician_foundation.sql` | `technician_profiles` table + RLS; orders `assigned_technician_id` / `assigned_at` / `production_value` / `assignment_notes`; `touch_assignment` trigger; `technician_daily_kpi` view |
 | `20260525_payroll_foundation.sql` | `current_user_branch_id()` helper; `expenses` standardised (`created_by_uuid`, `updated_at`, `updated_by`, triggers) + RLS; `payroll_periods` + `technician_payroll_items` tables; `branch_monthly_profit` view; RLS on all new objects |
+| `20260526_operational_hardening.sql` | `sync_failures` durable queue + RLS; `expense_audit_log` + trigger; `order_audit_log.action` enum extended (+ assigned, receipt_regenerated, sync_failed); `orders` NOT VALID CHECK constraints (status / payment_status / quantity / non-negative numerics); `validate_order_assignment` trigger (rejects inactive-tech + cross-branch); search indexes (orders.customer_name lower, orders(branch_id,status,created_at desc), pg_trgm GIN on customers.name + normalized_name) |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -356,6 +357,56 @@ Future flow:
 
 ---
 
+## 12b. Operational hardening (post-`20260526`)
+
+Three concerns ship together because they all defend the same surface — "the platform must not lose data under operator error or network failure":
+
+### 12b.1 Audit strategy
+| Domain | Table | Writer | Triggered by |
+|---|---|---|---|
+| Pricing | `public.pricing_audit_logs` | DB trigger (SECURITY DEFINER) | INSERT / UPDATE / DELETE on `service_prices` |
+| Expense | `public.expense_audit_log` | DB trigger (SECURITY DEFINER) | INSERT / UPDATE / DELETE on `expenses` |
+| Order | `public.order_audit_log` | App via `lib/auditService.recordAudit({ domain: 'order', … })` or direct insert | order create / status change / payment change / cost edit / assignment / receipt regen / sync push or fail |
+| Auth (future) | reserved | reserved | future Supabase Auth events |
+
+Read access is owner / hq_admin only on every audit table (`*_admin_read` policies). No client can DELETE / UPDATE an audit row — append-only by policy.
+
+### 12b.2 Failure handling philosophy
+1. **Critical user action succeeds before secondary effects.** Order create persists to `public.orders` first; sync to Google Sheet is fire-and-forget. A sync outage NEVER blocks the staff workflow.
+2. **Failures are durable + visible.** `logSyncFailure` in [`lib/syncFailures.ts`](../lib/syncFailures.ts) writes to BOTH the function log AND `public.sync_failures` (when the service role is configured). The DB queue is the basis for a future cron retry job.
+3. **Recovery has one entry point.** [`lib/recoveryService.ts`](../lib/recoveryService.ts) exposes `listFailedSyncs`, `markSyncResolved`, `resyncOrderToSheet`, `rebuildReceiptData`. A future `/admin/recovery` page imports this module and drives all four.
+4. **Validation is layered.** UI validation in [`lib/validation.ts`](../lib/validation.ts) for friendly errors. App-layer re-validation in service helpers. DB CHECK constraints + triggers as the last line of defence — they always reject invalid writes regardless of how they got there.
+
+### 12b.3 Operational status standardisation
+Status fields now have CHECK constraints (NOT VALID so legacy rows are exempt). Canonical values:
+
+| Field | Allowed values |
+|---|---|
+| `orders.status` | `pending`, `in-progress`, `completed`, `ready-for-pickup`, `cancelled` |
+| `orders.payment_status` | `unpaid`, `deposit`, `paid` |
+| `orders.quantity` | NULL or `>= 1` |
+| `orders.price` / `urgent_fee` / `discount` | `>= 0` (price NOT NULL) |
+| `service_prices.business_type` | `care_u`, `ezy_repair` |
+| `service_prices.pricing_type` | `fixed`, `estimate_required` |
+| `payroll_periods.status` | `open`, `finalized`, `paid`, `cancelled` |
+| `sync_failures.status` | `pending`, `retrying`, `resolved`, `dead` |
+
+### 12b.4 Job ID hardening (verification)
+The job_id contract is already concurrency-safe (see [JOB_ID_RULES.md](./JOB_ID_RULES.md)):
+- Partial unique index `orders_job_id_scoped_idx (branch_id, business_type, job_id) WHERE job_id IS NOT NULL` is the atomic gatekeeper.
+- Care U manual ids: app pre-checks, DB index makes the insert the source of truth. Race winner is whichever transaction lands first.
+- Ezy Repair auto ids: `generate_ezy_job_id(branch)` is an atomic upsert on `job_id_sequence`. Daily reset is implicit in the `for_date` PK column.
+
+No schema change required in `20260526`. Hardening here is documentation + the new app-side `validateOrderInput` that rejects malformed manual ids before submit.
+
+### 12b.5 Inactive-tech / cross-branch trigger
+`public.validate_order_assignment()` runs BEFORE INSERT OR UPDATE OF (assigned_technician_id, branch_id) on `public.orders`. Rejects:
+- Assigning a non-existent technician.
+- Assigning an inactive technician.
+- Assigning a technician whose `branch_id` (uuid → branches.code via join) doesn't match the order's `branch_id` (text slug).
+
+The trigger uses `raise exception … using errcode='check_violation'` so the error surfaces as a Postgres CHECK violation to PostgREST clients — friendly to the supabase-js error handler.
+
 ## 13. Security principles
 
 1. **Defense in depth.** UI guards + server route guards + RLS — assume any single layer can fail.
@@ -448,7 +499,11 @@ lib/
 ├── dashboardData.ts  ← single fetcher for orders + expenses + customer count (role-aware branch scope)
 ├── dashboardKpi.ts   ← operational KPI helpers + assembleKpis bundle
 ├── receiptData.ts    ← buildReceiptData / Items / Totals / PaymentSummary
-└── printService.ts   ← printReceipt / saveReceiptAsImage + PDF/LINE stubs
+├── printService.ts   ← printReceipt / saveReceiptAsImage + PDF/LINE stubs
+├── auditService.ts   ← unified recordAudit(domain, action, target, …)
+├── validation.ts     ← validateOrderInput / Expense / Pricing / BranchAssignment / TechnicianAssignment
+├── recoveryService.ts ← listFailedSyncs / markSyncResolved / resyncOrderToSheet / rebuildReceiptData
+└── syncFailures.ts   ← console.error + fire-and-forget public.sync_failures persist
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt

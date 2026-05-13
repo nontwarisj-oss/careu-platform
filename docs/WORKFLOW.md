@@ -405,14 +405,36 @@ None of those are implemented yet. The `bonus_amount` and `deduction_amount` col
    - **Sync to Sheet** → `POST /api/sync-order-to-sheet`; sync-status pill in the action bar tracks idle / syncing / success / failed.
 
 ### 8.4 Audit log
-Every business-meaningful state change writes one row to `public.order_audit_log`:
-- `created` (from `createSmartOrder`)
-- `status_changed` (from `/orders` list and document page)
-- `payment_changed` (from document page)
-- `cost_updated` (from document page cost panel)
-- `sync_pushed` (from `/api/sync-order-to-sheet` success)
+Every business-meaningful state change writes one row to one of three audit tables. All three are append-only + RLS-restricted to owner / hq_admin reads.
 
-Audit log is append-only and visible to `owner` / `hq_admin` only.
+| Audit table | Domain | Writer | Actions |
+|---|---|---|---|
+| `public.order_audit_log` | orders | app via [`lib/auditService.ts`](../lib/auditService.ts) or direct insert | `created`, `status_changed`, `payment_changed`, `cost_updated`, `cancelled`, `sync_pushed`, `assigned`, `receipt_regenerated`, `sync_failed` |
+| `public.pricing_audit_logs` | service_prices | DB trigger (SECURITY DEFINER) | `create`, `update`, `disable`, `activate`, `delete` |
+| `public.expense_audit_log` | expenses | DB trigger (SECURITY DEFINER) | `create`, `update`, `delete` |
+
+The trigger-driven tables (pricing / expense) are impossible to forget — every row change is logged. The app-driven table (orders) is the canonical path for events with meaningful before/after metadata that's not a simple row diff (e.g. "sync_pushed" carries the target Sheet tab, not a column delta).
+
+### 8.5 Failure handling philosophy
+1. **Order create succeeds before secondary effects.** The `/intake` form persists to `public.orders` then fire-and-forgets the Google Sheet sync. A sync outage never blocks the staff workflow.
+2. **Failures land in two places.** [`lib/syncFailures.ts::logSyncFailure`](../lib/syncFailures.ts) emits a parseable `[sync-failure]` log line AND inserts a row into `public.sync_failures` (when `SUPABASE_SERVICE_ROLE_KEY` is set). The DB queue is owner / hq_admin readable + the basis for a future cron retry.
+3. **Recovery is one module.** [`lib/recoveryService.ts`](../lib/recoveryService.ts) — `listFailedSyncs`, `markSyncResolved`, `resyncOrderToSheet`, `rebuildReceiptData`. A future `/admin/recovery` page imports all four.
+
+### 8.6 Validation rules
+Three layers:
+
+| Layer | Where | What it catches |
+|---|---|---|
+| UI | [`lib/validation.ts`](../lib/validation.ts) called from forms | Friendly Thai errors before submit (empty fields, malformed Job ID, negative amounts, past due-date) |
+| App | Service helpers / route handlers | Re-validation so the API never trusts the UI alone |
+| DB | CHECK constraints + triggers from `20260526` | Last line of defence — rejects bad writes regardless of how they arrived. `validate_order_assignment` trigger rejects inactive-tech + cross-branch assignment |
+
+Canonical status values are enforced by DB CHECKs:
+- `orders.status` ∈ `pending | in-progress | completed | ready-for-pickup | cancelled`
+- `orders.payment_status` ∈ `unpaid | deposit | paid`
+- `orders.quantity` ≥ 1, `price` / `urgent_fee` / `discount` ≥ 0
+
+Older rows that pre-date a constraint are exempt (constraints are `NOT VALID`); staff fix them via the normal UI when they next touch the row.
 
 ---
 

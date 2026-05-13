@@ -1,14 +1,17 @@
-// Structured logger for sync failures. Today this is the "queue" — every
-// call lands as a single console.error line with a parseable JSON payload
-// so Vercel function logs are searchable + a future cron retry can pick
-// failed rows out of the log stream and retry them.
+// Structured logger for sync failures. Today's API stays synchronous for
+// caller convenience (no await needed in fire-and-forget paths). Two
+// destinations:
+//   1. console.error  — always. Greppable in Vercel function logs.
+//   2. public.sync_failures — best-effort fire-and-forget insert via the
+//      service-role admin client when configured. Becomes the queue a
+//      future cron job retries from.
 //
-// Next-phase upgrade path: replace the console.error with an insert into
-// public.sync_failures (TBD) and add a scheduled job that re-runs them.
-// Keeping the API stable now means the route handlers won't need to
-// change when that happens.
+// Both are best-effort: a DB outage MUST NOT crash the route handler that
+// reported the failure.
 //
 // Server-only — never import from a "use client" file.
+
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 export type SyncFailureKind =
   | "order_to_sheet"
@@ -27,23 +30,57 @@ export type SyncFailure = {
   reason: string;
   /** ISO 8601 timestamp; defaults to now() when omitted. */
   failedAt?: string;
+  /** Optional branch_code (text slug) so admins can filter by branch. */
+  branchId?: string | null;
 };
 
 /**
- * Record a sync failure. Today: structured console.error.
- * Tomorrow: enqueue to public.sync_failures + retry via a cron job.
- *
- * Callers should NEVER throw on the back of this — it is best-effort
- * telemetry, not a guarantee.
+ * Record a sync failure. Returns void (sync from the caller's perspective).
+ * The DB persistence runs as fire-and-forget so the route handler doesn't
+ * block on it. Errors during persistence are themselves logged but never
+ * thrown — the caller has already done its job by signalling the failure.
  */
 export function logSyncFailure(failure: SyncFailure): void {
   const payload = {
     kind: failure.kind,
     targetId: failure.targetId ?? null,
+    branchId: failure.branchId ?? null,
     reason: failure.reason,
     failedAt: failure.failedAt ?? new Date().toISOString(),
     payload: failure.payload ?? {},
   };
-  // Single line, JSON-parseable — easy to grep in Vercel function logs.
+  // 1. Greppable structured log line — always.
   console.error(`[sync-failure] ${JSON.stringify(payload)}`);
+
+  // 2. Best-effort persistence to public.sync_failures.
+  void persistSyncFailure(failure);
+}
+
+async function persistSyncFailure(failure: SyncFailure): Promise<void> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return;
+  try {
+    const res = await admin.from("sync_failures").insert({
+      kind: failure.kind,
+      target_id: failure.targetId ?? null,
+      payload: failure.payload ?? {},
+      reason: failure.reason,
+      branch_id: failure.branchId ?? null,
+      status: "pending",
+      attempts: 0,
+    });
+    if (
+      res.error &&
+      !/relation .* does not exist|schema cache|column .* does not exist/i.test(
+        res.error.message
+      )
+    ) {
+      console.warn("[sync-failure] persistence failed", res.error.message);
+    }
+  } catch (err) {
+    console.warn(
+      "[sync-failure] persistence threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
