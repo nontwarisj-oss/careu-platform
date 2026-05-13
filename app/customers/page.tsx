@@ -6,6 +6,7 @@ import { useLanguage } from "@/lib/languageContext";
 import { t } from "@/lib/translations";
 import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
+import { CustomerHistoryModal } from "@/components/CustomerHistoryModal";
 import { Customer } from "@/types";
 import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import {
@@ -57,6 +58,7 @@ export default function CustomersPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importPreview, setImportPreview] = useState<ParsedCustomerRow[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
@@ -303,6 +305,8 @@ export default function CustomersPage() {
         <Table
           columns={columns}
           data={filteredCustomers}
+          onHistory={(customer) => setHistoryCustomer(customer)}
+          historyLabel={language === "th" ? "ดูประวัติ" : "View history"}
           onEdit={(customer) => {
             setSelectedCustomer(customer);
             setFormData({
@@ -438,6 +442,14 @@ export default function CustomersPage() {
           )}
         </div>
       </Modal>
+
+      <CustomerHistoryModal
+        isOpen={historyCustomer !== null}
+        customerId={historyCustomer?.id ?? null}
+        customerName={historyCustomer?.name ?? ""}
+        customerPhone={historyCustomer?.phone}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

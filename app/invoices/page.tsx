@@ -13,6 +13,25 @@ type InvoiceRow = {
   created_at: string;
 };
 
+// Charge breakdown is built from the order row. Until the schema adds
+// discount / urgent_fee columns, these helpers return 0 — the receipt
+// layout already has slots ready so we won't need a template change later.
+function getDiscount(_inv: InvoiceRow): number {
+  return 0;
+}
+
+function getUrgentFee(_inv: InvoiceRow): number {
+  return 0;
+}
+
+function getSubtotal(inv: InvoiceRow): number {
+  return inv.price;
+}
+
+function getTotal(inv: InvoiceRow): number {
+  return getSubtotal(inv) - getDiscount(inv) + getUrgentFee(inv);
+}
+
 const SLOGAN_TH = "แคร์ยู ดูแลเสื้อผ้าคุณด้วยใจ";
 
 const statusLabelsTh: Record<string, string> = {
@@ -177,11 +196,46 @@ export default function InvoicesPage() {
 
                 <div className="border-t border-gray-200 my-3" />
 
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600 font-medium">ยอดรวม</span>
-                  <span className="text-2xl font-bold text-green-700">
-                    {formatCurrency(inv.price)}
+                {/* Charge breakdown */}
+                <div className="flex justify-between">
+                  <span className="text-gray-500">ยอดก่อนส่วนลด</span>
+                  <span className="text-gray-800">
+                    {formatCurrency(getSubtotal(inv))}
                   </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">ส่วนลด</span>
+                  <span className="text-gray-800">
+                    -{formatCurrency(getDiscount(inv))}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">ค่างานด่วน</span>
+                  <span className="text-gray-800">
+                    {formatCurrency(getUrgentFee(inv))}
+                  </span>
+                </div>
+
+                <div className="border-t border-gray-200 my-3" />
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600 font-medium">ยอดรวมสุทธิ</span>
+                  <span className="text-2xl font-bold text-green-700">
+                    {formatCurrency(getTotal(inv))}
+                  </span>
+                </div>
+
+                {/* QR payment placeholder (drop a QR <img> here later) */}
+                <div className="mt-4 flex items-center gap-4 border border-dashed border-yellow-300 bg-yellow-50/40 rounded-lg p-3">
+                  <div className="w-20 h-20 flex-shrink-0 grid place-items-center bg-white border border-yellow-300 rounded-md text-[10px] text-gray-400 text-center leading-tight">
+                    QR
+                    <br />
+                    Code
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
+                    <p>สแกนเพื่อชำระ — รายละเอียดการชำระจะแสดงในเฟสถัดไป</p>
+                  </div>
                 </div>
               </div>
 

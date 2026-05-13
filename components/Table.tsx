@@ -15,6 +15,8 @@ interface TableProps<T> {
   onRowClick?: (item: T) => void;
   onEdit?: (item: T) => void;
   onDelete?: (item: T) => void;
+  onHistory?: (item: T) => void;
+  historyLabel?: string;
   emptyMessage?: string;
 }
 
@@ -24,6 +26,8 @@ export const Table = <T extends { id?: string | number }>({
   onRowClick,
   onEdit,
   onDelete,
+  onHistory,
+  historyLabel = "ดูประวัติ",
   emptyMessage = "ไม่มีข้อมูล",
 }: TableProps<T>) => {
   if (data.length === 0) {
@@ -48,7 +52,7 @@ export const Table = <T extends { id?: string | number }>({
                 {col.label}
               </th>
             ))}
-            {(onEdit || onDelete) && (
+            {(onEdit || onDelete || onHistory) && (
               <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
                 การกระทำ
               </th>
@@ -73,9 +77,20 @@ export const Table = <T extends { id?: string | number }>({
                     : (item as any)[col.key as string]}
                 </td>
               ))}
-              {(onEdit || onDelete) && (
+              {(onEdit || onDelete || onHistory) && (
                 <td className="px-6 py-4 text-sm">
-                  <div className="flex gap-2">
+                  <div className="flex gap-3">
+                    {onHistory && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onHistory(item);
+                        }}
+                        className="text-green-700 hover:text-green-800 font-medium"
+                      >
+                        {historyLabel}
+                      </button>
+                    )}
                     {onEdit && (
                       <button
                         onClick={(e) => {

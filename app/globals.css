@@ -26,6 +26,10 @@ body {
 }
 
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
   body.printing-receipt * {
     visibility: hidden;
   }
@@ -38,6 +42,12 @@ body {
     top: 0;
     left: 0;
     width: 100%;
+    max-width: 186mm;
+    margin: 0 auto;
     box-shadow: none;
+    border-radius: 0;
+  }
+  body.printing-receipt .print-hide {
+    display: none !important;
   }
 }

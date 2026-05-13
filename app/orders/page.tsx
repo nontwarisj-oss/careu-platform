@@ -22,6 +22,9 @@ type Order = {
 
 const STATUS_OPTIONS = ["pending", "in-progress", "completed", "ready-for-pickup"] as const;
 const EDITABLE_STATUSES = ["pending", "in-progress", "completed"] as const;
+const FILTER_STATUSES = ["all", "pending", "in-progress", "completed", "ready-for-pickup"] as const;
+
+type FilterStatus = (typeof FILTER_STATUSES)[number];
 
 const statusLabels: Record<string, string> = {
   pending: "รอดำเนิน",
@@ -37,6 +40,22 @@ const statusBadgeClasses: Record<string, string> = {
   "ready-for-pickup": "border-purple-200 bg-purple-50 text-purple-800",
 };
 
+function normalizePhone(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function startOfDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
 export default function OrdersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -44,12 +63,19 @@ export default function OrdersPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // New-order form
   const [customerId, setCustomerId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [itemName, setItemName] = useState("");
   const [price, setPrice] = useState("");
   const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>("pending");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+
+  // Filters
+  const [orderSearch, setOrderSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<FilterStatus>("all");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  // Future: const [urgentOnly, setUrgentOnly] = useState(false);
 
   const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
@@ -90,20 +116,39 @@ export default function OrdersPage() {
     })();
   }, [fetchCustomers, fetchOrders]);
 
-  const filteredOrders = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return orders.filter((order) => {
-      const matchesStatus = statusFilter === "all" || order.status === statusFilter;
-      const matchesSearch =
-        !q ||
-        [order.customer_name, order.item_name, order.id]
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-      return matchesStatus && matchesSearch;
-    });
-  }, [orders, searchQuery, statusFilter]);
+  // ---- Customer typeahead (repeat-customer detection) -----------------------
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === customerId) ?? null,
+    [customers, customerId]
+  );
 
+  const customerMatches = useMemo(() => {
+    const raw = customerSearch.trim();
+    if (!raw || selectedCustomer) return [];
+    const lower = raw.toLowerCase();
+    const phoneDigits = normalizePhone(raw);
+    const byPhone = phoneDigits.length >= 3;
+    return customers
+      .filter((c) => {
+        if (byPhone && normalizePhone(c.phone).includes(phoneDigits)) return true;
+        return c.name.toLowerCase().includes(lower);
+      })
+      .slice(0, 6);
+  }, [customers, customerSearch, selectedCustomer]);
+
+  const exactPhoneMatch = useMemo(() => {
+    const digits = normalizePhone(customerSearch);
+    if (digits.length < 9) return null;
+    return customers.find((c) => normalizePhone(c.phone) === digits) ?? null;
+  }, [customers, customerSearch]);
+
+  useEffect(() => {
+    if (exactPhoneMatch && !customerId) {
+      setCustomerId(exactPhoneMatch.id);
+    }
+  }, [exactPhoneMatch, customerId]);
+
+  // ---- Summary --------------------------------------------------------------
   const summary = useMemo(() => {
     const pending = orders.filter((o) => o.status === "pending").length;
     const inProgress = orders.filter((o) => o.status === "in-progress").length;
@@ -111,6 +156,7 @@ export default function OrdersPage() {
     return { pending, inProgress, completed, total: orders.length };
   }, [orders]);
 
+  // ---- Submit ---------------------------------------------------------------
   const handleCreateOrder = async () => {
     if (!customerId || !itemName.trim() || !price) {
       return;
@@ -142,6 +188,7 @@ export default function OrdersPage() {
     }
 
     setCustomerId("");
+    setCustomerSearch("");
     setItemName("");
     setPrice("");
     setStatus("pending");
@@ -167,6 +214,40 @@ export default function OrdersPage() {
     }
   };
 
+  // ---- Filters --------------------------------------------------------------
+  const filteredOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+    const fromDate = dateFrom ? startOfDay(new Date(dateFrom)) : null;
+    const toDate = dateTo ? endOfDay(new Date(dateTo)) : null;
+
+    return orders.filter((o) => {
+      if (statusFilter !== "all" && o.status !== statusFilter) return false;
+
+      if (fromDate || toDate) {
+        const created = new Date(o.created_at);
+        if (fromDate && created < fromDate) return false;
+        if (toDate && created > toDate) return false;
+      }
+
+      if (q) {
+        const idStart = o.id.slice(0, 8).toLowerCase();
+        const matches =
+          o.customer_name.toLowerCase().includes(q) ||
+          o.item_name.toLowerCase().includes(q) ||
+          idStart.includes(q);
+        if (!matches) return false;
+      }
+
+      return true;
+    });
+  }, [orders, orderSearch, statusFilter, dateFrom, dateTo]);
+
+  const isFilterActive =
+    orderSearch.trim() !== "" ||
+    statusFilter !== "all" ||
+    dateFrom !== "" ||
+    dateTo !== "";
+
   return (
     <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-4 md:p-8 pt-20 md:pt-8">
       <div className="mb-8 flex flex-col gap-2 border-l-4 border-yellow-400 pl-4">
@@ -181,6 +262,7 @@ export default function OrdersPage() {
         </div>
       )}
 
+      {/* Status summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
           <p className="text-xs text-gray-500">ทั้งหมด</p>
@@ -200,98 +282,184 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      <div className="bg-white p-5 md:p-6 rounded-2xl border border-green-100 shadow-sm mb-8">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">เพิ่มคำสั่งซ่อม</h2>
-            <p className="text-xs text-gray-500">โครงสร้างพร้อมต่อยอด branch_id / customer history / repeat customer detection</p>
-          </div>
+      {/* New-order form */}
+      <div className="bg-white p-5 md:p-6 rounded-2xl border border-green-100 shadow-sm mb-6">
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-gray-900">เพิ่มคำสั่งซ่อม</h2>
+          <p className="text-xs text-gray-500">
+            ค้นหาลูกค้าด้วยเบอร์โทรหรือชื่อ — ระบบจะตรวจจับลูกค้าซ้ำให้อัตโนมัติ
+          </p>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-          <select
-            value={customerId}
-            onChange={(e) => setCustomerId(e.target.value)}
-            disabled={isSubmitting}
-            className="rounded-xl border border-gray-200 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500 lg:col-span-2"
-          >
-            <option value="">เลือกลูกค้า</option>
-            {customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.name} ({customer.phone})
-              </option>
-            ))}
-          </select>
 
-          <input
-            type="text"
-            placeholder="รายการซ่อม"
-            value={itemName}
-            onChange={(e) => setItemName(e.target.value)}
-            disabled={isSubmitting}
-            className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
-          />
+        <div className="grid gap-4">
+          {/* Customer typeahead */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">ลูกค้า</label>
+            {selectedCustomer ? (
+              <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
+                <div>
+                  <p className="font-medium text-gray-800">{selectedCustomer.name}</p>
+                  <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerId("");
+                    setCustomerSearch("");
+                  }}
+                  className="text-sm text-green-700 hover:text-green-800 font-medium"
+                >
+                  เปลี่ยน
+                </button>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  disabled={isSubmitting}
+                  placeholder="ค้นหาด้วยเบอร์โทรหรือชื่อลูกค้า"
+                  className="w-full rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
+                />
+                {customerSearch.trim() && customerMatches.length > 0 && (
+                  <div className="mt-2 border border-gray-200 rounded-xl bg-white shadow-sm divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                    {customerMatches.map((c) => (
+                      <button
+                        type="button"
+                        key={c.id}
+                        onClick={() => {
+                          setCustomerId(c.id);
+                          setCustomerSearch("");
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-green-50"
+                      >
+                        <span className="font-medium text-gray-800">{c.name}</span>
+                        <span className="text-sm text-gray-500 ml-2">{c.phone}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {customerSearch.trim() &&
+                  customerMatches.length === 0 &&
+                  customers.length > 0 && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      ไม่พบลูกค้า — เพิ่มลูกค้าใหม่ที่หน้า /customers
+                    </p>
+                  )}
+              </>
+            )}
+          </div>
 
-          <input
-            type="number"
-            placeholder="ราคา"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            disabled={isSubmitting}
-            className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
-          />
-
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as (typeof STATUS_OPTIONS)[number])}
-            disabled={isSubmitting}
-            className="rounded-xl border border-gray-200 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>{statusLabels[s] ?? s}</option>
-            ))}
-          </select>
+          <div className="grid gap-4 md:grid-cols-3">
+            <input
+              type="text"
+              placeholder="รายการซ่อม"
+              value={itemName}
+              onChange={(e) => setItemName(e.target.value)}
+              disabled={isSubmitting}
+              className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
+            />
+            <input
+              type="number"
+              placeholder="ราคา"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              disabled={isSubmitting}
+              className="rounded-xl border border-gray-200 p-3 outline-none focus:ring-2 focus:ring-green-500"
+            />
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as (typeof STATUS_OPTIONS)[number])}
+              disabled={isSubmitting}
+              className="rounded-xl border border-gray-200 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
+            >
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {statusLabels[s] ?? s}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <button
             onClick={handleCreateOrder}
             disabled={isSubmitting || !customerId || !itemName.trim() || !price}
-            className="rounded-xl bg-green-700 p-3 font-semibold text-white transition hover:bg-green-800 disabled:opacity-50 md:col-span-2 lg:col-span-5"
+            className="rounded-xl bg-green-700 p-3 font-semibold text-white transition hover:bg-green-800 disabled:opacity-50"
           >
             บันทึกคำสั่งซ่อม
           </button>
         </div>
       </div>
 
+      {/* Orders table */}
       <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-gray-100 p-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-900">รายการงานซ่อม</h2>
-            <p className="text-xs text-gray-500">แสดง {filteredOrders.length} จาก {orders.length} รายการ</p>
+            <p className="text-xs text-gray-500">
+              แสดง {filteredOrders.length} จาก {orders.length} รายการ
+            </p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:max-w-2xl md:w-full">
             <input
               type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              value={orderSearch}
+              onChange={(e) => setOrderSearch(e.target.value)}
               placeholder="ค้นหาลูกค้า / งาน / เลขที่"
-              className="rounded-xl border border-gray-200 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 col-span-2"
             />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              onChange={(e) => setStatusFilter(e.target.value as FilterStatus)}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 col-span-2 sm:col-span-1"
             >
-              <option value="all">ทุกสถานะ</option>
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>{statusLabels[s] ?? s}</option>
+              {FILTER_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s === "all" ? "ทุกสถานะ" : statusLabels[s] ?? s}
+                </option>
               ))}
             </select>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              aria-label="from date"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              aria-label="to date"
+            />
           </div>
         </div>
+
+        {isFilterActive && (
+          <div className="flex items-center justify-end gap-3 px-4 py-2 border-b border-gray-100 text-xs text-gray-500">
+            <button
+              type="button"
+              onClick={() => {
+                setOrderSearch("");
+                setStatusFilter("all");
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="text-green-700 hover:text-green-800 font-medium"
+            >
+              ล้างตัวกรอง
+            </button>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="p-8 text-center text-gray-500">กำลังโหลด...</div>
         ) : filteredOrders.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">ไม่พบคำสั่งซ่อม</div>
+          <div className="p-8 text-center text-gray-500">
+            {orders.length === 0 ? "ไม่มีคำสั่งซ่อม" : "ไม่พบรายการตามตัวกรอง"}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px]">
@@ -306,13 +474,23 @@ export default function OrdersPage() {
               </thead>
               <tbody>
                 {filteredOrders.map((order) => (
-                  <tr key={order.id} className="border-t border-gray-100 hover:bg-green-50/30">
+                  <tr
+                    key={order.id}
+                    className="border-t border-gray-100 hover:bg-green-50/30"
+                  >
                     <td className="p-4 font-medium text-gray-900">{order.customer_name}</td>
                     <td className="p-4 text-gray-700">{order.item_name}</td>
-                    <td className="p-4 font-semibold text-green-700">{formatCurrency(order.price)}</td>
+                    <td className="p-4 font-semibold text-green-700">
+                      {formatCurrency(order.price)}
+                    </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusBadgeClasses[order.status] ?? "border-gray-200 bg-gray-50 text-gray-700"}`}>
+                        <span
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                            statusBadgeClasses[order.status] ??
+                            "border-gray-200 bg-gray-50 text-gray-700"
+                          }`}
+                        >
                           {statusLabels[order.status] ?? order.status}
                         </span>
                         <select
@@ -321,12 +499,16 @@ export default function OrdersPage() {
                           className="rounded-lg border border-gray-200 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
                         >
                           {EDITABLE_STATUSES.map((s) => (
-                            <option key={s} value={s}>{statusLabels[s] ?? s}</option>
+                            <option key={s} value={s}>
+                              {statusLabels[s] ?? s}
+                            </option>
                           ))}
                           {!EDITABLE_STATUSES.includes(
                             order.status as (typeof EDITABLE_STATUSES)[number]
                           ) && (
-                            <option value={order.status}>{statusLabels[order.status] ?? order.status}</option>
+                            <option value={order.status}>
+                              {statusLabels[order.status] ?? order.status}
+                            </option>
                           )}
                         </select>
                       </div>
