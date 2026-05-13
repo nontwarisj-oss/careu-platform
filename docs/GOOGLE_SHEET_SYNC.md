@@ -127,83 +127,89 @@ The service account must be added as **Editor** on the spreadsheet (share dialog
 
 ## 6. Formatting preservation strategy
 
-Today's writes use `spreadsheets.values.append` with `valueInputOption=USER_ENTERED, insertDataOption=INSERT_ROWS`. This:
-- ✅ inserts a brand-new row at the end of the data range.
-- ✅ parses numbers / dates / booleans via the same rules as keyboard input.
-- ⚠️ **does NOT propagate the formatting / data-validation / formula / checkbox configuration** from the row above.
+Status: **implemented** as of the sheet-preservation refactor.
 
-### 6.1 What works today
+### 6.1 The two write modes
 
-| Property | Status |
-|---|---|
-| Plain values | ✅ correct |
-| Numbers parsed as numbers | ✅ correct (via USER_ENTERED) |
-| Dates parsed when the column is `th-TH` text | ✅ correct |
-| Auto-row-height | ✅ default behaviour |
-| Cell colours that come from **conditional formatting rules** | ✅ preserved (rules apply to all rows in their range) |
-| Checkbox in M / N / O | ⚠️ only when the column has range-level data validation rule (set once in the sheet template) |
+The platform has two write helpers in [`lib/googleSheets.ts`](../lib/googleSheets.ts):
 
-### 6.2 What breaks today
+| Helper | Underlying API | Preserves formatting? | When to use |
+|---|---|---|---|
+| `appendRow(tab, row[])` | `values.append` | ❌ no | Tabs whose formatting comes entirely from column-range rules (ARRAYFORMULA, column-wide conditional formats). |
+| `insertFormattedRow(tab, values, opts)` | `batchUpdate` | ✅ yes — dropdowns, checkboxes, borders, font, colors | Any tab where staff configured dropdowns / checkboxes / per-row colors. |
 
-| Property | Status |
-|---|---|
-| Manual cell-level fill / border / font | ❌ not copied |
-| Per-row conditional formats applied via copy-paste | ❌ not copied |
-| Formulas in trailing columns (P+) | ⚠️ broken when the column has a hand-typed formula instead of an `ARRAYFORMULA` |
-| Dropdown when the validation is set per-row, not per-column | ❌ not copied |
+The choice between them is made declaratively in [`lib/sheetConfigs.ts`](../lib/sheetConfigs.ts) — `preserveFormatting: true` routes through `insertFormattedRow`. The domain layer in [`lib/sheetWriters.ts`](../lib/sheetWriters.ts) (`writeOrderRow`, `writePricingRow`, `writeDebugRow`) picks the right path automatically.
 
-### 6.3 The forbidden pattern
+### 6.2 What insertFormattedRow does
 
-```ts
-// ❌ DO NOT do this — destroys per-row formatting in many sheets
-await appendRow(SHEET_TAB, [...]); // unconditional, no template copy
-```
+Three `batchUpdate` requests, in order:
 
-`appendRow` is fine **only when** the target tab's formatting comes from column-range rules (conditional formatting, column-wide data validation, ARRAYFORMULA in the header row). Front_Desk and Pricing meet this bar today because of how the sheet was set up.
-
-### 6.4 The next-phase pattern (template-preserving append)
-
-When a tab acquires per-row formatting we cannot move to column-range rules, switch to `spreadsheets.batchUpdate` with `copyPaste`:
+1. **`insertDimension` with `inheritFromBefore: true`**
+   Expands the grid; inherits row height + data-validation rules from the row immediately above. This alone covers most dropdown / checkbox situations because data validation in Google Sheets is range-scoped.
+2. **`copyPaste` with `pasteType: PASTE_NORMAL`** from a configurable template row
+   Propagates per-cell formats (fill / borders / font / number format) + formulas. The template-row index is set per tab in `SHEET_CONFIGS` (typically `1` = first data row beneath the header).
+3. **`updateCells` with `fields: 'userEnteredValue'`**
+   Writes the actual data, overwriting whatever PASTE_NORMAL put in the columns we have values for. Cells we DON'T pass values for retain the template's content — that's the formula-preservation escape hatch.
 
 ```jsonc
 {
   "requests": [
-    {
-      "insertDimension": {
-        "range": { "sheetId": <numeric>, "dimension": "ROWS",
-                   "startIndex": <last+1>, "endIndex": <last+2> },
-        "inheritFromBefore": true
-      }
-    },
-    {
-      "copyPaste": {
-        "source":      { "sheetId": <numeric>, "startRowIndex": <template>, "endRowIndex": <template+1>,
-                         "startColumnIndex": 0, "endColumnIndex": 15 },
-        "destination": { "sheetId": <numeric>, "startRowIndex": <last+1>, "endRowIndex": <last+2>,
-                         "startColumnIndex": 0, "endColumnIndex": 15 },
-        "pasteType": "PASTE_NORMAL",
-        "pasteOrientation": "NORMAL"
-      }
-    },
-    {
-      "updateCells": { /* set the actual values for the new row */ }
-    }
+    { "insertDimension": { "range": {...}, "inheritFromBefore": true } },
+    { "copyPaste":      { "source": {...row=template...}, "destination": {...row=insertAt...},
+                          "pasteType": "PASTE_NORMAL" } },
+    { "updateCells":    { "rows": [...], "fields": "userEnteredValue",
+                          "start": {...row=insertAt...} } }
   ]
 }
 ```
 
-`inheritFromBefore: true` copies the row-height + per-cell properties from the row above; `PASTE_NORMAL` carries formatting + data validation + formulas. The third request fills in the data.
+### 6.3 What's preserved end-to-end
 
-`lib/googleSheets.ts` is structured so adding a `batchUpdate` helper next to `appendRow` is straightforward — it shares the JWT exchange path.
+| Property | Preserved? | How |
+|---|---|---|
+| Cell-level fill colour | ✅ | `copyPaste(PASTE_NORMAL)` |
+| Border style + colour | ✅ | `copyPaste(PASTE_NORMAL)` |
+| Font / size / weight | ✅ | `copyPaste(PASTE_NORMAL)` |
+| Number / currency / date format | ✅ | `copyPaste(PASTE_NORMAL)` |
+| Per-row dropdown (data validation) | ✅ | `inheritFromBefore: true` + `PASTE_NORMAL` |
+| Per-row checkbox | ✅ | `inheritFromBefore: true` (data validation rule inherits) |
+| Conditional formatting | ✅ | Rules with row-range expansion auto-cover new rows |
+| Formulas in trailing columns | ⚠️ | Survives only if the caller OMITS that column index from the values map. The sparse `Record<number, value>` form of `insertFormattedRow` makes this easy: pass only the columns you want to overwrite. |
+| Tab name renamed in Google | ⚠️ | The numeric-sheet-id cache is per warm function. Redeploy to bust it. |
 
-### 6.5 Rule of thumb
+### 6.4 The sparse-write escape hatch
 
-| If the tab has… | Use |
+When a tab has a formula in column F, calling `insertFormattedRow` with a 15-element array would overwrite that formula. Use the sparse form instead:
+
+```ts
+await insertFormattedRow("Front_Desk", {
+  0: dateStr,        // A
+  1: jobId,          // B
+  2: customerName,   // C
+  // skip column F (index 5) — leave the template formula in place
+  6: quantity,       // G
+  ...
+}, { columnCount: 15, templateRowIndex: 1 });
+```
+
+Cells with no entry in the map keep whatever PASTE_NORMAL copied in from the template row — including any formula.
+
+### 6.5 The forbidden pattern (historical)
+
+```ts
+// ❌ DO NOT do this on a tab with per-row formatting
+await appendRow("Some_Tab_With_Dropdowns", [...]);
+```
+
+This pattern existed for Front_Desk and Pricing before this refactor and was the source of dropdown / checkbox loss in the past. It is replaced everywhere by `writeOrderRow` / `writePricingRow` (which route through `insertFormattedRow`). `appendRow` remains exported only for tabs explicitly marked `preserveFormatting: false` in `SHEET_CONFIGS` (today: the `Debug` tab).
+
+### 6.6 Rule of thumb
+
+| If you're adding a new tab… | Do |
 |---|---|
-| ARRAYFORMULA-driven columns and column-wide conditional formats | `appendRow` (today's path) |
-| Hand-typed per-row formulas, manual colour fills, per-row dropdowns | `batchUpdate` with `copyPaste` (next-phase path) |
-
-When in doubt: open the sheet → format a test row → run a dry-run via `/api/debug-sheet?dryRun=1` against a copy of the tab and inspect by eye. Don't ship if formatting drifts.
+| Tab has per-row data validation (dropdowns, checkboxes) | Add a `SheetTabConfig` with `preserveFormatting: true` + a `templateRowIndex` pointing at the first data row. Add a `writeXxxRow` helper in `lib/sheetWriters.ts`. |
+| Tab is diagnostic / append-only with no formatting | `preserveFormatting: false` and the same writer pattern. |
+| Existing tab loses a dropdown after a deploy | Open the sheet, set the dropdown via data validation on the **whole column** (Data → Data validation → Apply to range = "A2:A"), and the issue disappears for every future row. |
 
 ---
 
@@ -246,7 +252,8 @@ Every failure is logged to the Vercel function log via `console.error("[sync-…
 
 | Step | Why |
 |---|---|
-| Switch Front_Desk to `batchUpdate` with `inheritFromBefore` | Resilient against future tab redesign with per-row formatting. |
+| ~~Switch Front_Desk to `batchUpdate` with `inheritFromBefore`~~ | ✅ Done — all `preserveFormatting: true` tabs use `insertFormattedRow`. |
+| `public.sync_failures` table + cron retry | `logSyncFailure` in [`lib/syncFailures.ts`](../lib/syncFailures.ts) is a stub today — it emits a structured `[sync-failure]` log line. Promote to a DB queue that a scheduled job retries. |
 | Add a "reconcile" job that diffs the DB against the sheet | Catch missed syncs (e.g. orders created during a credential outage). |
 | Per-branch tabs (e.g. `Front_Desk_SLM`, `Front_Desk_C24`) | Cleaner per-branch filtering for accountants. Implementation: tab name read from `branches.short_code`. |
 | Webhook trigger from sheet edits | Accountant edits a payment status in the sheet → server picks it up via Google Apps Script → updates DB. Today this would clobber the DB without warning, so it's gated behind a manual reconcile UI. |
@@ -261,4 +268,4 @@ Every failure is logged to the Vercel function log via `console.error("[sync-…
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-13 (sheet preservation refactor — `lib/sheetWriters.ts` + `lib/sheetConfigs.ts` + `insertFormattedRow`)

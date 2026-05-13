@@ -62,9 +62,11 @@
 5. From the document page the staff can: **พิมพ์เอกสาร**, **บันทึกเป็นรูปภาพ**, **ส่ง LINE OA** (when configured), **คัดลอกข้อความส่งลูกค้า**.
 
 ### 1.8 Google Sheet sync
-1. `SmartOrderForm` immediately POSTs `/api/sync-order-to-sheet` with the new order id (fire-and-forget).
-2. Server appends one row to the `Front_Desk` tab with the exact A–O column mapping in [GOOGLE_SHEET_SYNC.md](./GOOGLE_SHEET_SYNC.md).
-3. The document page shows a **sync status pill** (รอซิงค์ / กำลังซิงค์ / ซิงค์แล้ว / ล้มเหลว) + retry button.
+1. `SmartOrderForm` immediately POSTs `/api/sync-order-to-sheet` with the new order id (fire-and-forget — order creation never blocks on the sheet round-trip).
+2. The route handler calls `writeOrderRow` ([`lib/sheetWriters.ts`](../lib/sheetWriters.ts)) which routes through `insertFormattedRow` because Front_Desk has `preserveFormatting: true` in [`SHEET_CONFIGS`](../lib/sheetConfigs.ts). The exact A–O column mapping lives in [GOOGLE_SHEET_SYNC.md](./GOOGLE_SHEET_SYNC.md) — dropdowns / checkboxes / borders are preserved.
+3. On success: row appended, `order_audit_log(action='sync_pushed')` written by the document page when staff hits the retry button.
+4. On failure: `logSyncFailure` (`lib/syncFailures.ts`) emits a parseable `[sync-failure]` log line in the Vercel function log; the route returns 502 with the reason; the frontend remains uninterrupted.
+5. The document page shows a **sync status pill** (รอซิงค์ / กำลังซิงค์ / ซิงค์แล้ว / ล้มเหลว) + retry button. The retry button re-POSTs the same route.
 
 ### 1.9 Technician flow
 1. Technician opens `/orders` (sidebar shows only Dashboard + Orders for `role='technician'`).
@@ -250,4 +252,4 @@ Audit log is append-only and visible to `owner` / `hq_admin` only.
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-13 (sheet preservation refactor)

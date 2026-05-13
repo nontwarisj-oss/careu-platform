@@ -11,7 +11,8 @@
 // and then remove (or guard behind ADMIN role).
 
 import { NextResponse } from "next/server";
-import { appendRow, readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { writeDebugRow } from "@/lib/sheetWriters";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -106,10 +107,10 @@ export async function GET(req: Request) {
     });
   }
 
-  // Live dry-run append
+  // Live dry-run append (Debug tab is intentionally formatting-free).
   const stamp = new Date().toISOString();
   try {
-    await appendRow("Debug", [
+    await writeDebugRow([
       stamp,
       "careu-debug",
       "Diagnostic write from /api/debug-sheet",

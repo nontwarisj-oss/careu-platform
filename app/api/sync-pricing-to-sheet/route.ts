@@ -9,7 +9,9 @@
 
 import { NextResponse } from "next/server";
 import supabase from "@/lib/supabase";
-import { appendRow, readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { writePricingRow } from "@/lib/sheetWriters";
+import { logSyncFailure } from "@/lib/syncFailures";
 import { SERVICE_CATEGORIES } from "@/lib/pricing";
 import type { ServicePriceRow } from "@/lib/pricingDb";
 
@@ -91,35 +93,33 @@ export async function POST() {
 
   let appended = 0;
   for (const row of active) {
-    // Pricing tab column contract:
-    //   A snapshot_at | B service_code | C category | D display_name
-    //   E description | F pricing_type | G base_price | H urgent_fee_default
-    //   I branch_id | J brand_id | K effective_from | L effective_to | M created_by
-    const sheetRow: Array<string | number> = [
-      stamp,
-      row.service_code,
-      categoryLabel(row.category),
-      row.display_name,
-      row.description ?? "",
-      row.pricing_type,
-      row.pricing_type === "estimate_required"
-        ? ""
-        : Number(row.base_price ?? 0),
-      Number(row.urgent_fee_default ?? 0),
-      row.branch_id ?? "",
-      row.brand_id ?? "",
-      row.effective_from,
-      row.effective_to ?? "",
-      row.created_by ?? "",
-    ];
     try {
-      await appendRow(SHEET_TARGET, sheetRow);
+      await writePricingRow({
+        snapshotAt: stamp,
+        serviceCode: row.service_code,
+        categoryLabel: categoryLabel(row.category),
+        displayName: row.display_name,
+        description: row.description ?? "",
+        pricingType: row.pricing_type,
+        basePrice:
+          row.pricing_type === "estimate_required"
+            ? ""
+            : Number(row.base_price ?? 0),
+        urgentFeeDefault: Number(row.urgent_fee_default ?? 0),
+        branchId: row.branch_id ?? "",
+        brandId: row.brand_id ?? "",
+        effectiveFrom: row.effective_from,
+        effectiveTo: row.effective_to ?? "",
+        createdBy: row.created_by ?? "",
+      });
       appended += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[sync-pricing-to-sheet] append failed", {
-        service_code: row.service_code,
-        message,
+      logSyncFailure({
+        kind: "pricing_to_sheet",
+        targetId: row.service_code,
+        reason: message,
+        payload: { sheet: SHEET_TARGET, appended, remaining: active.length - appended },
       });
       return NextResponse.json(
         {

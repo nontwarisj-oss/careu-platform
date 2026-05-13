@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import supabase from "@/lib/supabase";
-import { appendRow, readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { readGoogleSheetsConfig } from "@/lib/googleSheets";
+import { writeOrderRow } from "@/lib/sheetWriters";
+import { logSyncFailure } from "@/lib/syncFailures";
 import {
   getCustomerTypeByCode,
   getServiceByCode,
@@ -139,36 +141,44 @@ export async function POST(req: Request) {
       : "ด่วน"
     : "";
 
-  // Front_Desk column contract — must match the live sheet exactly:
-  //   A Date | B Job ID | C Customer | D Tel | E History | F Detail
-  //   G QTY  | H Price  | I Pay Status | J Tech | K Job Status
-  //   L วันนัด/ด่วน | M checkbox | N checkbox | O Archive
-  const row: Array<string | number> = [
-    dateStr,                                                              // A Date
-    refId,                                                                // B Job ID
-    (raw.customer_name as string) ?? "",                                  // C Customer
-    customerPhone ?? "",                                                  // D Tel
-    customerTypeLabel,                                                    // E History (customer type)
-    detail,                                                               // F Detail
-    Number(raw.quantity ?? 1),                                            // G QTY
-    Number(raw.price ?? 0),                                               // H Price (net total)
-    PAYMENT_LABEL[(raw.payment_status as string) ?? "unpaid"] ?? "",      // I Pay Status
-    "",                                                                   // J Tech (filled by staff)
-    STATUS_LABEL[(raw.status as string) ?? "pending"] ?? "",              // K Job Status
-    urgentLabel,                                                          // L วันนัด/ด่วน
-    "",                                                                   // M checkbox
-    "",                                                                   // N checkbox
-    "",                                                                   // O Archive
-  ];
-
+  // Column-by-column contract is encoded in lib/sheetWriters::writeOrderRow,
+  // which reads lib/sheetConfigs::SHEET_CONFIGS.front_desk for the column
+  // count + template row. This route just builds the named payload.
   try {
-    await appendRow(SHEET_TARGET, row);
+    const result = await writeOrderRow({
+      date: dateStr,
+      jobId: refId,
+      customerName: (raw.customer_name as string) ?? "",
+      customerPhone: customerPhone ?? "",
+      customerType: customerTypeLabel,
+      detail,
+      quantity: Number(raw.quantity ?? 1),
+      price: Number(raw.price ?? 0),
+      paymentStatus: PAYMENT_LABEL[(raw.payment_status as string) ?? "unpaid"] ?? "",
+      tech: "",
+      jobStatus: STATUS_LABEL[(raw.status as string) ?? "pending"] ?? "",
+      urgent: urgentLabel,
+    });
+    console.info("[sync-order-to-sheet] appended", {
+      orderId,
+      sheet: result.sheet,
+      rowIndex: result.rowIndex,
+      formatted: result.formatted,
+    });
+    return NextResponse.json({
+      ok: true,
+      sheet: result.sheet,
+      rowIndex: result.rowIndex,
+      formatted: result.formatted,
+      orderId,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[sync-order-to-sheet] append failed", {
-      orderId,
-      sheet: SHEET_TARGET,
-      message,
+    logSyncFailure({
+      kind: "order_to_sheet",
+      targetId: orderId,
+      reason: message,
+      payload: { sheet: SHEET_TARGET },
     });
     return NextResponse.json(
       {
@@ -180,14 +190,4 @@ export async function POST(req: Request) {
       { status: 502 }
     );
   }
-
-  console.info("[sync-order-to-sheet] appended", {
-    orderId,
-    sheet: SHEET_TARGET,
-  });
-  return NextResponse.json({
-    ok: true,
-    sheet: SHEET_TARGET,
-    orderId,
-  });
 }
