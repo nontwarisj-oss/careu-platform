@@ -56,6 +56,8 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
   const [branchId, setBranchId] = useState<string | null>(null);
   const [subtotal, setSubtotal] = useState<number | null>(null);
   const [discount, setDiscount] = useState<number>(0);
+  const [laborCost, setLaborCost] = useState<number | null>(null);
+  const [materialCost, setMaterialCost] = useState<number | null>(null);
   const [serviceCategory, setServiceCategory] = useState<string | null>(null);
   const [serviceCode, setServiceCode] = useState<string | null>(null);
   const [serviceName, setServiceName] = useState<string | null>(null);
@@ -80,6 +82,8 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
       setBranchId(null);
       setSubtotal(null);
       setDiscount(0);
+      setLaborCost(null);
+      setMaterialCost(null);
       setServiceCategory(null);
       setServiceCode(null);
       setServiceName(null);
@@ -105,12 +109,14 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
         template_text?: string | null;
         customer_type?: string | null;
         promotion_code?: string | null;
+        labor_cost?: number | string | null;
+        material_cost?: number | string | null;
       };
       let extendedRow: ExtendedRow | null = null;
       const wide = await supabase
         .from("orders")
         .select(
-          "notes, urgent, urgent_fee, branch_id, subtotal, discount, service_category, service_code, service_name, quantity, template_text, customer_type, promotion_code"
+          "notes, urgent, urgent_fee, branch_id, subtotal, discount, service_category, service_code, service_name, quantity, template_text, customer_type, promotion_code, labor_cost, material_cost"
         )
         .eq("id", order.id)
         .maybeSingle();
@@ -144,6 +150,16 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
         setTemplateText(extendedRow.template_text ?? null);
         setCustomerType(extendedRow.customer_type ?? null);
         setPromotionCode(extendedRow.promotion_code ?? null);
+        setLaborCost(
+          extendedRow.labor_cost !== null && extendedRow.labor_cost !== undefined
+            ? Number(extendedRow.labor_cost)
+            : null
+        );
+        setMaterialCost(
+          extendedRow.material_cost !== null && extendedRow.material_cost !== undefined
+            ? Number(extendedRow.material_cost)
+            : null
+        );
       }
 
       // Customer phone — only resolvable when customer_id is present.
@@ -195,6 +211,14 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
       : null;
   const customerTypeLabel =
     getCustomerTypeByCode(customerType ?? undefined)?.nameTh ?? null;
+  const hasCostData = laborCost !== null || materialCost !== null;
+  const jobProfit = hasCostData
+    ? order.price - (laborCost ?? 0) - (materialCost ?? 0)
+    : null;
+  const jobMargin =
+    hasCostData && order.price > 0 && jobProfit !== null
+      ? Math.round((jobProfit / order.price) * 100)
+      : null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -320,6 +344,48 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
                 </p>
               </div>
             </div>
+
+            {hasCostData && (
+              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">
+                  ต้นทุน / กำไรงานนี้ (ภายใน)
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-gray-500">ค่าแรง</p>
+                    <p className="font-semibold text-gray-800">
+                      {formatCurrency(laborCost ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">ค่าวัสดุ</p>
+                    <p className="font-semibold text-gray-800">
+                      {formatCurrency(materialCost ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">กำไรงาน</p>
+                    <p
+                      className={`font-bold ${
+                        (jobProfit ?? 0) >= 0 ? "text-green-700" : "text-red-700"
+                      }`}
+                    >
+                      {formatCurrency(jobProfit ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">อัตรากำไร</p>
+                    <p
+                      className={`font-bold ${
+                        (jobMargin ?? 0) >= 0 ? "text-green-700" : "text-red-700"
+                      }`}
+                    >
+                      {jobMargin !== null ? `${jobMargin}%` : "-"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Notes */}

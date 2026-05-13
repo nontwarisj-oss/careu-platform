@@ -7,6 +7,7 @@ import { useBranch } from "@/lib/branchContext";
 import { branches, getBranchById } from "@/lib/brandConfig";
 import { BrandLogo } from "@/components/BrandLogo";
 import { RouteGuard } from "@/components/RouteGuard";
+import { buildExportFilename, downloadCsv } from "@/lib/csvExport";
 import {
   EXPENSE_CATEGORIES,
   PAYMENT_METHODS,
@@ -62,6 +63,10 @@ function ExpensesPageInner() {
   // Filters for the list
   const [filterBranchId, setFilterBranchId] = useState<string | "all">("all");
   const [filterCategory, setFilterCategory] = useState<string | "all">("all");
+  const [filterPayment, setFilterPayment] = useState<string | "all">("all");
+  const [filterDateFrom, setFilterDateFrom] = useState<string>("");
+  const [filterDateTo, setFilterDateTo] = useState<string>("");
+  const [visibleCount, setVisibleCount] = useState<number>(50);
 
   // Sync the form's default branch with the selected branch from the sidebar.
   useEffect(() => {
@@ -223,12 +228,73 @@ function ExpensesPageInner() {
 
   // ---- Derived ---------------------------------------------------------
   const filtered = useMemo(() => {
+    const fromTs = filterDateFrom ? new Date(filterDateFrom).getTime() : null;
+    const toTs = filterDateTo
+      ? new Date(`${filterDateTo}T23:59:59`).getTime()
+      : null;
     return expenses.filter((e) => {
       if (filterBranchId !== "all" && e.branch_id !== filterBranchId) return false;
       if (filterCategory !== "all" && e.category !== filterCategory) return false;
+      if (filterPayment !== "all" && (e.payment_method ?? "") !== filterPayment)
+        return false;
+      if (fromTs || toTs) {
+        const ts = new Date(
+          e.expense_date.includes("T") ? e.expense_date : `${e.expense_date}T00:00`
+        ).getTime();
+        if (fromTs && ts < fromTs) return false;
+        if (toTs && ts > toTs) return false;
+      }
       return true;
     });
-  }, [expenses, filterBranchId, filterCategory]);
+  }, [
+    expenses,
+    filterBranchId,
+    filterCategory,
+    filterPayment,
+    filterDateFrom,
+    filterDateTo,
+  ]);
+
+  // Whenever filters change, reset the load-more page back to the first slice.
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [filterBranchId, filterCategory, filterPayment, filterDateFrom, filterDateTo]);
+
+  const visibleRows = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount]
+  );
+  const runningTotal = useMemo(
+    () => filtered.reduce((s, r) => s + Number(r.amount || 0), 0),
+    [filtered]
+  );
+
+  const handleExportCsv = () => {
+    const headers = [
+      "วันที่",
+      "หมวด",
+      "รายละเอียด",
+      "สาขา",
+      "วิธีชำระ",
+      "บันทึก",
+      "จำนวน",
+    ];
+    const rows = filtered.map((e) => ({
+      วันที่: new Date(e.expense_date).toLocaleDateString("th-TH"),
+      หมวด: getCategoryLabel(e.category),
+      รายละเอียด: e.description ?? "",
+      สาขา: e.branch_id ? getBranchById(e.branch_id).shortLabel : "-",
+      วิธีชำระ: getPaymentMethodLabel(e.payment_method),
+      บันทึก: e.notes ?? "",
+      จำนวน: e.amount,
+    }));
+    downloadCsv(buildExportFilename("expenses-ledger"), headers, rows);
+  };
+
+  const handlePrintPdf = () => {
+    if (typeof window === "undefined") return;
+    window.print();
+  };
 
   const summary = useMemo(() => {
     return {
@@ -469,9 +535,9 @@ function ExpensesPageInner() {
           )}
         </div>
 
-        <div className="rounded-2xl border border-yellow-200 bg-yellow-50/40 p-5 shadow-sm">
+        <div className="rounded-2xl border border-yellow-200 bg-yellow-50/40 p-5 shadow-sm print:hidden">
           <h3 className="text-lg font-bold text-gray-900 mb-3">ตัวกรองรายการ</h3>
-          <div className="space-y-3 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <label className="block">
               <span className="block text-xs font-medium text-gray-700 mb-1">สาขา</span>
               <select
@@ -502,18 +568,93 @@ function ExpensesPageInner() {
                 ))}
               </select>
             </label>
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-700 mb-1">วิธีชำระ</span>
+              <select
+                value={filterPayment}
+                onChange={(e) => setFilterPayment(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white p-2 outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="all">ทุกวิธี</option>
+                {PAYMENT_METHODS.map((p) => (
+                  <option key={p.code} value={p.code}>
+                    {p.labelTh}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="block text-xs font-medium text-gray-700 mb-1">ตั้งแต่</span>
+                <input
+                  type="date"
+                  value={filterDateFrom}
+                  onChange={(e) => setFilterDateFrom(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white p-2 outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs font-medium text-gray-700 mb-1">ถึง</span>
+                <input
+                  type="date"
+                  value={filterDateTo}
+                  onChange={(e) => setFilterDateTo(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white p-2 outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+            </div>
           </div>
+          {(filterBranchId !== "all" ||
+            filterCategory !== "all" ||
+            filterPayment !== "all" ||
+            filterDateFrom ||
+            filterDateTo) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterBranchId("all");
+                setFilterCategory("all");
+                setFilterPayment("all");
+                setFilterDateFrom("");
+                setFilterDateTo("");
+              }}
+              className="mt-3 text-xs text-green-700 hover:text-green-800 font-medium"
+            >
+              ล้างตัวกรอง
+            </button>
+          )}
         </div>
       </div>
 
       {/* Table */}
       <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between border-b border-gray-100 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between border-b border-gray-100 p-4">
           <div>
             <h3 className="text-lg font-bold text-gray-900">รายการค่าใช้จ่าย</h3>
             <p className="text-xs text-gray-500">
-              แสดง {filtered.length} จาก {expenses.length} รายการ
+              แสดง {visibleRows.length} จาก {filtered.length} รายการที่กรอง •{" "}
+              {expenses.length} ในระบบทั้งหมด
             </p>
+            <p className="text-xs text-green-700 font-medium mt-0.5">
+              ยอดรวมในช่วงที่กรอง: {formatCurrency(runningTotal)}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={filtered.length === 0}
+              className="rounded-lg bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white px-3 py-1.5 text-sm font-medium"
+            >
+              ดาวน์โหลด CSV
+            </button>
+            <button
+              type="button"
+              onClick={handlePrintPdf}
+              className="rounded-lg border border-green-600 text-green-700 hover:bg-green-50 px-3 py-1.5 text-sm font-medium"
+            >
+              พิมพ์ / PDF
+            </button>
           </div>
         </div>
         {isLoading ? (
@@ -535,7 +676,7 @@ function ExpensesPageInner() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((row) => (
+                {visibleRows.map((row) => (
                   <tr key={row.id} className="border-t border-gray-100">
                     <td className="p-3 text-sm text-gray-700 whitespace-nowrap">
                       {new Date(row.expense_date).toLocaleDateString("th-TH")}
@@ -580,6 +721,17 @@ function ExpensesPageInner() {
                 ))}
               </tbody>
             </table>
+            {visibleRows.length < filtered.length && (
+              <div className="p-4 text-center border-t border-gray-100 print:hidden">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + 50)}
+                  className="text-sm font-medium text-green-700 hover:text-green-800"
+                >
+                  โหลดเพิ่มอีก 50 รายการ
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

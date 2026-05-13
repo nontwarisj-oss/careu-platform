@@ -23,6 +23,7 @@ import {
   sumExpenses,
   type ExpenseRow,
 } from "@/lib/expenses";
+import { getBranchPerformance } from "@/lib/accounting";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
 import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
 
@@ -91,6 +92,9 @@ export function ExecutiveDashboard({
   const branchProfit = computeProfitByBranch(orders, expenses);
   const branches = aggregateByBranch(orders);
   const maxBranchRevenue = Math.max(1, ...branches.map((b) => b.revenue));
+  const performance = getBranchPerformance(orders, expenses);
+  const bestBranch = performance.find((b) => b.isBest) ?? null;
+  const worstBranch = performance.find((b) => b.isWorst) ?? null;
   const topServices = aggregateTopServices(orders, 5);
   const cohort = aggregateCustomerCohort(orders, customerCount);
   const topExpenseCategories = aggregateExpensesByCategory(expenses)
@@ -179,6 +183,36 @@ export function ExecutiveDashboard({
           <SimpleLineChart data={expenseTrend} />
         </div>
       </div>
+
+      {/* Best vs worst branch callout */}
+      {(bestBranch || worstBranch) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {bestBranch && (
+            <BranchCallout
+              tone="best"
+              shortLabel={bestBranch.shortLabel}
+              name={bestBranch.name}
+              revenue={bestBranch.revenue}
+              expense={bestBranch.expense}
+              netProfit={bestBranch.netProfit}
+              marginPercent={bestBranch.marginPercent}
+              orderCount={bestBranch.orderCount}
+            />
+          )}
+          {worstBranch && worstBranch.branchId !== bestBranch?.branchId && (
+            <BranchCallout
+              tone="worst"
+              shortLabel={worstBranch.shortLabel}
+              name={worstBranch.name}
+              revenue={worstBranch.revenue}
+              expense={worstBranch.expense}
+              netProfit={worstBranch.netProfit}
+              marginPercent={worstBranch.marginPercent}
+              orderCount={worstBranch.orderCount}
+            />
+          )}
+        </div>
+      )}
 
       {/* Branch profit (NEW — uses real expense data) */}
       <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -396,6 +430,78 @@ function KpiCard({
       <p className="text-xs text-gray-600">{title}</p>
       <p className="mt-1 text-3xl font-extrabold text-gray-900">{value}</p>
       {hint && <p className="mt-2 text-[11px] text-gray-500">{hint}</p>}
+    </div>
+  );
+}
+
+function BranchCallout({
+  tone,
+  shortLabel,
+  name,
+  revenue,
+  expense,
+  netProfit,
+  marginPercent,
+  orderCount,
+}: {
+  tone: "best" | "worst";
+  shortLabel: string;
+  name: string;
+  revenue: number;
+  expense: number;
+  netProfit: number;
+  marginPercent: number;
+  orderCount: number;
+}) {
+  const isBest = tone === "best";
+  return (
+    <div
+      className={`rounded-2xl border p-5 shadow-sm ${
+        isBest
+          ? "border-green-200 bg-gradient-to-br from-green-50 to-yellow-50"
+          : "border-red-200 bg-red-50/60"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <p
+          className={`text-[10px] uppercase tracking-widest font-bold ${
+            isBest ? "text-green-700" : "text-red-700"
+          }`}
+        >
+          {isBest ? "สาขาทำกำไรสูงสุด" : "สาขาที่ต้องดูแล"}
+        </p>
+        <span
+          className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ${
+            isBest
+              ? "bg-yellow-300 text-green-900"
+              : "bg-red-200 text-red-900"
+          }`}
+        >
+          {isBest ? "Best" : "Worst"}
+        </span>
+      </div>
+      <p className="text-xl font-bold text-gray-900 mt-1">{shortLabel}</p>
+      <p className="text-[11px] text-gray-500 truncate">{name}</p>
+      <p
+        className={`mt-2 text-3xl font-extrabold ${
+          netProfit >= 0 ? "text-green-700" : "text-red-700"
+        }`}
+      >
+        {formatCurrency(netProfit)}
+      </p>
+      <p className="text-[11px] text-gray-500">
+        margin {marginPercent}% • {orderCount} ออเดอร์
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+        <div className="rounded-md bg-white border border-gray-200 px-2 py-1.5">
+          <p className="text-gray-500">รายได้</p>
+          <p className="font-semibold text-gray-800">{formatCurrency(revenue)}</p>
+        </div>
+        <div className="rounded-md bg-white border border-gray-200 px-2 py-1.5">
+          <p className="text-gray-500">ค่าใช้จ่าย</p>
+          <p className="font-semibold text-gray-800">{formatCurrency(expense)}</p>
+        </div>
+      </div>
     </div>
   );
 }
