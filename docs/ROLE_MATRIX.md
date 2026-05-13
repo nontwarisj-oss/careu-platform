@@ -60,6 +60,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Audit log (`order_audit_log`)** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
 | **Manage staff (promote / demote / disable)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
+| **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
+| **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **technician_profiles — toggle active** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Order assignment (`orders.assigned_technician_id`)** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 (self-assign) |
+| **Productivity KPI view** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ✅ own row only |
 
 ---
 

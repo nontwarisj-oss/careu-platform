@@ -184,6 +184,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260521_enterprise_foundation.sql` | branches, profiles, business_type, due_date, tech, customers extras, job_id_sequence, generate_ezy_job_id, scoped job_id index, RLS on new tables |
 | `20260522_auth_bridge_rls.sql` | helper functions `current_user_role()` + `current_user_branch_code()`; strict RLS on orders + customers; admin/branch read policies on profiles |
 | `20260523_pricing_engine.sql` | `service_prices` column renames + business_type + sort_order + updated_at trigger; `branch_id` text → uuid FK; scoped unique index; `pricing_audit_logs` + trigger; RLS read-all / admin-write |
+| `20260524_technician_foundation.sql` | `technician_profiles` table + RLS; orders `assigned_technician_id` / `assigned_at` / `production_value` / `assignment_notes`; `touch_assignment` trigger; `technician_daily_kpi` view |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -352,7 +353,9 @@ lib/
 ├── jobId.ts          ← Care U manual id normalize/validate
 ├── phone.ts          ← Thai phone canonicalisation
 ├── brandConfig.ts    ← branch UI metadata (mirror of branches table)
-└── pricing.ts        ← legacy hardcoded catalog
+├── pricing.ts        ← legacy hardcoded catalog
+├── technicianService.ts ← skill catalog + recommendTechnician
+└── technicianKpi.ts  ← daily/monthly KPI + ranking helpers
 
 supabase/migrations/
 └── 20260512..20260521 (see §7)

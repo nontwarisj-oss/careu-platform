@@ -220,6 +220,50 @@ Technicians work the production queue.
 
 Technicians never see financial reports or pricing.
 
+## 7b. Technician assignment + productivity (foundation)
+
+> Status: **foundation only**. Data model + helper services live in code as of `20260524_technician_foundation.sql`. UI is intentionally not built yet — the next phase wires recommendations into the order document page and adds a productivity dashboard.
+
+### 7b.1 Data model
+- `public.technician_profiles` — one row per technician (`display_name`, `skill_tags text[]`, `daily_wage`, `target_multiplier` default 3, optional override `productivity_target`, `active`, `branch_id`).
+- `public.orders.assigned_technician_id` (uuid → `technician_profiles`), `assigned_at`, `production_value`, `assignment_notes`.
+- View `public.technician_daily_kpi` — one row per (technician, day) with assigned/completed counts and values. Branch isolation flows through `orders` RLS.
+
+### 7b.2 Effective daily target
+```
+productivity_target  (when set)            → use as-is
+daily_wage × target_multiplier (default 3) → fallback
+neither set                                → 0 (no target tracking)
+```
+Example: wage 600 × multiplier 3 = **1800 THB daily target**. Anything ≥ that counts as `above_target` for the day.
+
+### 7b.3 Production value
+On orders, `production_value` defaults to NULL. The KPI view falls back to `price − material_cost` when null, so existing orders contribute to the technician's totals without a backfill. The order document page's cost panel already records `material_cost`, so the only data the system needs is `assigned_technician_id`.
+
+### 7b.4 Assignment flow (today: programmatic only)
+1. Front-desk or branch manager opens an order in `/orders/[id]/document`.
+2. (Future UI) Calls `recommendTechnician({ branchId, serviceCategory, serviceCode, urgent })` from [`lib/technicianService.ts`](../lib/technicianService.ts).
+3. UI shows ranked recommendations with score + reasons (skill match, today's workload).
+4. Manager picks a tech → app sets `orders.assigned_technician_id`.
+5. DB trigger stamps `assigned_at = now()` automatically.
+
+Today step 2–4 happens directly through SQL or via the helper from a future component. The `orders.tech` free-text column from `20260521` stays in place as a transition fallback.
+
+### 7b.5 KPI rollups
+- `getDailyKpi(tech, date)` — one technician's day.
+- `getMonthlyKpi(tech, year, month)` — full month aggregate: `totalAssigned`, `daysAboveTarget`, `daysBelowTarget`, `performanceRatio`.
+- `rankTechnicians(fromDate, toDate)` — branch-scoped ranking by total assigned value.
+
+All three live in [`lib/technicianKpi.ts`](../lib/technicianKpi.ts).
+
+### 7b.6 Relationship to payroll
+This phase ships the inputs payroll will read:
+- Daily wage on each profile.
+- Productivity target (computed or override).
+- Daily / monthly aggregates from the view.
+
+A future payroll phase consumes these to compute bonuses and approve payouts. Nothing about payroll is implemented today — wage edits stay locked to owner / hq_admin so the data shape is correct when payroll lands.
+
 ---
 
 ## 8. Cross-cutting workflows
