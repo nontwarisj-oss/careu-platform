@@ -26,6 +26,8 @@ body {
 }
 
 @media print {
+  /* Default print page size: A4. The thermal receipt swaps to 80mm via
+     body.printing-thermal below. */
   @page {
     size: A4;
     margin: 12mm;
@@ -50,4 +52,34 @@ body {
   body.printing-receipt .print-hide {
     display: none !important;
   }
+
+  /* Thermal mode — page-size swap is injected at runtime by
+     lib/printService.ts (the CSS spec does not allow @page to be
+     nested under a body-class selector). Everything else below is
+     plain class-scoped styling that's safe at the top level. */
+  body.printing-thermal .print-this {
+    width: 72mm;
+    max-width: 72mm;
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  body.printing-thermal .receipt-thermal {
+    width: 72mm !important;
+    max-width: 72mm !important;
+  }
+  /* Force monospace + black ink for thermal regardless of theme. */
+  body.printing-thermal .receipt-thermal,
+  body.printing-thermal .receipt-thermal * {
+    color: #000 !important;
+    background: #fff !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  }
+}
+
+/* Light tablet / mobile readability rule for the on-screen thermal
+   preview — keep the font crisp at any viewport width. */
+.receipt-thermal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.25;
 }

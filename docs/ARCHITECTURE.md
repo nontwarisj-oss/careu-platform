@@ -281,18 +281,61 @@ The `total_orders` / `latest_service` / `customer_tier` columns on `customers` e
 
 ## 11. Receipt system architecture
 
-One combined intake-quote-receipt document at `/orders/[id]/document`:
-- Branded header with the branch's `accentClass` gradient.
-- Customer + service detail + summary.
-- Internal-only cost panel (labor / material) — hidden from print.
-- Payment block with QR placeholder + status selector.
-- Action bar with print / save-as-image / LINE OA send / copy-message / sheet sync.
+Three-layer separation (mirrors the dashboard refactor):
 
-Two output channels:
-1. **Browser print** — `window.print()` with `.printing-receipt` body class.
-2. **PNG export** — `html-to-image::toJpeg` on `#careu-document-card`.
+```
+┌────────────────────────────────────────────────────────────┐
+│  app/orders/[id]/document/page.tsx                         │
+│    • Page chrome: action bar (PrintModeSelector),          │
+│      cost panel, payment selector, sync pill               │
+│    • Reads orders / customers / labor + material costs     │
+│    • Picks the right template based on print mode          │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  lib/receiptData.ts        (pure data builders)            │
+│    • buildReceiptData(input) → ReceiptData                 │
+│    • buildReceiptItems / buildReceiptTotals /              │
+│      buildPaymentSummary                                   │
+│    • Server-safe (no React imports)                        │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  components/receipt/                                       │
+│    • ReceiptA4.tsx       — full-page brand card            │
+│    • ReceiptThermal.tsx  — 80mm monospace strip            │
+│    • ReceiptMobile.tsx   — single-column phone layout      │
+│    • ReceiptCommon.tsx   — status badges, QR placeholder   │
+│    • PrintModeSelector.tsx — pill toggle                   │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  lib/printService.ts                                       │
+│    • printReceipt({ mode })   — browser print + body class │
+│    • saveReceiptAsImage(...)  — html-to-image::toJpeg      │
+│    • generateReceiptPdf(...)  — stub for future PDF        │
+│    • sendReceiptViaLine(...)  — stub for LINE image push   │
+└────────────────────────────────────────────────────────────┘
+```
 
-LINE OA send route is stubbed at `/api/line/send` waiting on the LINE Messaging API channel.
+### Print modes
+| Mode | Template | Page size | Use |
+|---|---|---|---|
+| `a4` | `ReceiptA4` | A4 (12mm margin) | Counter print, file copy, customer hand-off |
+| `thermal` | `ReceiptThermal` | 80mm × auto (4mm margin) | ESC/POS receipt printer |
+| `mobile` | `ReceiptMobile` | A4 (preview) | Tablet display, customer phone preview, future LINE image |
+
+The printer page-size swap happens in [`app/globals.css`](../app/globals.css) via `body.printing-thermal @page { size: 80mm auto; }`. `lib/printService.ts` adds/removes the body class around `window.print()`.
+
+### CSS rules
+- `body.printing-receipt` → hides everything except `.print-this` (the receipt root).
+- `body.printing-thermal` → swaps the @page size to 80mm and forces monospace + black ink for thermal.
+- All `print:hidden` Tailwind classes on internal controls (cost panel, payment selector, sync pill, action bar) are honoured.
+
+### Future delivery channels
+- PDF export — `generateReceiptPdf(receipt)` stub today. Implementation: render `ReceiptA4` through a headless browser server-side or via a PDF library (jsPDF / pdf-lib). The signature stays stable so the action-bar button can wire it up.
+- LINE OA image — `sendReceiptViaLine(receipt)` stub. Implementation: `saveReceiptAsImage` first, then POST the resulting binary to `/api/line/send` once the LINE channel is configured.
+- Customer history — `lib/receiptData.ts::buildReceiptData` is purely a function of the order row; reading historical orders + rendering with the same template is a "for each order" loop. No changes needed.
 
 ---
 
@@ -403,7 +446,16 @@ lib/
 ├── technicianKpi.ts  ← daily/monthly KPI + ranking helpers
 ├── payrollService.ts ← production target, performance ratio, estimated payroll, branch labor cost, monthly profit fetch
 ├── dashboardData.ts  ← single fetcher for orders + expenses + customer count (role-aware branch scope)
-└── dashboardKpi.ts   ← operational KPI helpers + assembleKpis bundle
+├── dashboardKpi.ts   ← operational KPI helpers + assembleKpis bundle
+├── receiptData.ts    ← buildReceiptData / Items / Totals / PaymentSummary
+└── printService.ts   ← printReceipt / saveReceiptAsImage + PDF/LINE stubs
+
+components/receipt/
+├── ReceiptA4.tsx        ← full-page branded receipt
+├── ReceiptThermal.tsx   ← 80mm monospace strip
+├── ReceiptMobile.tsx    ← single-column phone layout
+├── ReceiptCommon.tsx    ← shared status/payment badges + QR placeholder
+└── PrintModeSelector.tsx
 
 supabase/migrations/
 └── 20260512..20260525 (see §7)

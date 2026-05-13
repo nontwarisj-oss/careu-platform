@@ -397,10 +397,12 @@ None of those are implemented yet. The `bonus_amount` and `deduction_amount` col
 
 ### 8.3 Order document export
 1. From `/orders/[id]/document`:
-   - **Print** → browser native print, A4 portrait, payment block hidden when status=paid.
-   - **Save as image** → `html-to-image::toJpeg` at 2× pixel ratio.
-   - **LINE OA send** → server-side push (stubbed; awaits `LINE_CHANNEL_ACCESS_TOKEN`).
-   - **Copy message** → uses `buildCustomerMessage` to produce a chat-friendly Thai text snippet.
+   - **PrintModeSelector** → switch between A4 / Thermal (80mm) / Mobile templates. Receipt re-renders instantly.
+   - **Print** → `printReceipt({ mode })` in [`lib/printService.ts`](../lib/printService.ts) sets the body class, calls `window.print()`, then cleans up. Page-size swap happens via `body.printing-thermal @page { size: 80mm auto; }` in [`app/globals.css`](../app/globals.css).
+   - **Save as image** → `saveReceiptAsImage({ receipt })` renders the visible receipt template via `html-to-image::toJpeg` at 2× pixel ratio. Filename = `careu-{refId}.jpg`.
+   - **LINE OA send (text)** → `sendToLineOA` with `buildCustomerMessage(order, branch)`. Image push stub: `sendReceiptViaLine(receipt)` in [`lib/printService.ts`](../lib/printService.ts).
+   - **Copy message** → plain-text snippet via `buildCustomerMessage`.
+   - **Sync to Sheet** → `POST /api/sync-order-to-sheet`; sync-status pill in the action bar tracks idle / syncing / success / failed.
 
 ### 8.4 Audit log
 Every business-meaningful state change writes one row to `public.order_audit_log`:

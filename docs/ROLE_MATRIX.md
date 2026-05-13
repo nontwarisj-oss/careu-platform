@@ -75,6 +75,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **calculateBranchLaborCost** | ✅ | ✅ | ✅ 🏢 (own branch only) | ❌ | ❌ |
 | **Dashboard — fetch snapshot (`fetchDashboardSnapshot`)** | ✅ all branches | ✅ all branches | ✅ 🏢 (own branch via RLS + client filter) | ✅ 🏢 (front-desk tab only) | ✅ 🏢 (production tab only) |
 | **Dashboard — KPI bundle (`assembleKpis`)** | ✅ full bundle | ✅ full bundle | ✅ scoped bundle | ✅ operational subset (no financials) | ✅ workload-only subset |
+| **Receipt view (`/orders/[id]/document`)** | ✅ all | ✅ all | ✅ 🏢 (RLS) | ✅ 🏢 (RLS) | ✅ 🏢 (RLS, view-only) |
+| **Receipt print (A4 / thermal / mobile)** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 |
+| **Save receipt as image** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 |
+| **Receipt — internal cost panel (labor/material)** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
+| **Receipt — payment status edit** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **Receipt — sync to Google Sheet** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 (on own orders) |
 
 ---
 

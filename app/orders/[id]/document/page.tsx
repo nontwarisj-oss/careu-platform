@@ -1,45 +1,29 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { useBranch } from "@/lib/branchContext";
 import { getBranchById } from "@/lib/brandConfig";
-import { BrandLogo } from "@/components/BrandLogo";
 import {
   buildCustomerMessage,
-  categoryLabelFor,
-  formatPaymentStatus,
-  promotionLabelFor,
-  serviceLabelFor,
   type DocumentOrder,
 } from "@/lib/customerMessage";
-import { getCustomerTypeByCode } from "@/lib/pricing";
 import { sendToLineOA } from "@/lib/lineOA";
 import { useAuth } from "@/lib/authContext";
+import { buildReceiptData, type ReceiptData } from "@/lib/receiptData";
+import {
+  printReceipt,
+  saveReceiptAsImage,
+  type PrintMode,
+} from "@/lib/printService";
+import { ReceiptA4 } from "@/components/receipt/ReceiptA4";
+import { ReceiptThermal } from "@/components/receipt/ReceiptThermal";
+import { ReceiptMobile } from "@/components/receipt/ReceiptMobile";
+import { PrintModeSelector } from "@/components/receipt/PrintModeSelector";
 
 type RouteParams = { id: string };
-
-const statusLabelTh: Record<string, string> = {
-  pending: "รอดำเนิน",
-  "in-progress": "กำลังซ่อม",
-  completed: "เสร็จสิ้น",
-  "ready-for-pickup": "พร้อมรับ",
-};
-
-const statusBadgeClasses: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-800 border-yellow-300",
-  "in-progress": "bg-blue-100 text-blue-800 border-blue-300",
-  completed: "bg-green-100 text-green-800 border-green-300",
-  "ready-for-pickup": "bg-purple-100 text-purple-800 border-purple-300",
-};
-
-const paymentBadgeClasses: Record<string, string> = {
-  unpaid: "bg-yellow-100 text-yellow-800 border-yellow-300",
-  paid: "bg-green-100 text-green-800 border-green-300",
-  deposit: "bg-blue-100 text-blue-800 border-blue-300",
-};
 
 const PAYMENT_OPTIONS = [
   { value: "unpaid", label: "ยังไม่ชำระ" },
@@ -82,6 +66,9 @@ export default function OrderDocumentPage({
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [orderBranchId, setOrderBranchId] = useState<string | null>(null);
+  const [orderJobId, setOrderJobId] = useState<string | null>(null);
+  const [orderDueDate, setOrderDueDate] = useState<string | null>(null);
+  const [orderTech, setOrderTech] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [laborCost, setLaborCost] = useState<number | null>(null);
@@ -93,6 +80,7 @@ export default function OrderDocumentPage({
     "idle" | "syncing" | "success" | "failed"
   >("idle");
   const [sheetSyncError, setSheetSyncError] = useState<string | null>(null);
+  const [printMode, setPrintMode] = useState<PrintMode>("a4");
 
   useEffect(() => {
     void (async () => {
@@ -100,10 +88,9 @@ export default function OrderDocumentPage({
       setErrorMessage(null);
 
       // Try the widest column set, then narrow on column-missing errors so the
-      // page renders on any migration state (legacy / intake-extension / smart /
-      // smart+payment).
+      // page renders on any migration state.
       const wide =
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost";
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost, job_id, due_date, tech";
       let raw: Record<string, unknown> | null = null;
 
       const tryFetch = async (cols: string) =>
@@ -115,6 +102,8 @@ export default function OrderDocumentPage({
 
       const tries = [
         wide,
+        // drop assignment + job_id fields (pre 20260520/20260521/20260524)
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost",
         // drop payment_* and document_type
         "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code",
         // drop smart cols
@@ -150,6 +139,9 @@ export default function OrderDocumentPage({
       }
 
       setOrderBranchId((raw.branch_id as string | null) ?? null);
+      setOrderJobId((raw.job_id as string | null) ?? null);
+      setOrderDueDate((raw.due_date as string | null) ?? null);
+      setOrderTech((raw.tech as string | null) ?? null);
       const labor =
         raw.labor_cost !== null && raw.labor_cost !== undefined
           ? Number(raw.labor_cost)
@@ -193,19 +185,37 @@ export default function OrderDocumentPage({
     })();
   }, [orderId]);
 
-  const branch = orderBranchId
-    ? getBranchById(orderBranchId)
-    : currentBranch;
+  const branch = orderBranchId ? getBranchById(orderBranchId) : currentBranch;
+
+  // Build the receipt data object once per render. Pure transformation —
+  // every template component consumes this.
+  const receipt: ReceiptData | null = useMemo(() => {
+    if (!order) return null;
+    return buildReceiptData({
+      order,
+      branchId: orderBranchId,
+      customerPhone: order.customer_phone ?? null,
+      jobId: orderJobId,
+      dueDate: orderDueDate,
+      technicianLabel: orderTech,
+    });
+  }, [order, orderBranchId, orderJobId, orderDueDate, orderTech]);
+
+  // ---- Action handlers ---------------------------------------------------
 
   const handlePrint = () => {
-    if (typeof window === "undefined") return;
-    const card = document.getElementById("careu-document-card");
-    if (!card) return;
-    card.classList.add("print-this");
-    document.body.classList.add("printing-receipt");
-    window.print();
-    card.classList.remove("print-this");
-    document.body.classList.remove("printing-receipt");
+    if (!receipt) return;
+    printReceipt({ mode: printMode });
+  };
+
+  const handleSaveImage = async () => {
+    if (!receipt) return;
+    setToast("กำลังสร้างรูปภาพ...");
+    const res = await saveReceiptAsImage({ receipt });
+    setToast(
+      res.ok ? "บันทึกเป็นรูปภาพเรียบร้อย" : `บันทึกรูปไม่สำเร็จ: ${res.reason}`
+    );
+    setTimeout(() => setToast(null), 4000);
   };
 
   const handleCopyMessage = async () => {
@@ -224,40 +234,8 @@ export default function OrderDocumentPage({
     if (!order) return;
     const text = buildCustomerMessage(order, branch);
     const res = await sendToLineOA(order.id, text);
-    setToast(
-      res.ok ? "ส่งเข้า LINE OA สำเร็จ" : res.reason ?? "ส่งไม่สำเร็จ"
-    );
+    setToast(res.ok ? "ส่งเข้า LINE OA สำเร็จ" : res.reason ?? "ส่งไม่สำเร็จ");
     setTimeout(() => setToast(null), 4500);
-  };
-
-  const handleSaveImage = async () => {
-    if (typeof window === "undefined") return;
-    const card = document.getElementById("careu-document-card");
-    if (!card) return;
-    setToast("กำลังสร้างรูปภาพ...");
-    try {
-      const { toJpeg } = await import("html-to-image");
-      const dataUrl = await toJpeg(card as HTMLElement, {
-        pixelRatio: 2,
-        quality: 0.95,
-        backgroundColor: "#ffffff",
-        cacheBust: true,
-      });
-      const link = document.createElement("a");
-      link.download = `careu-${order?.id.slice(0, 8).toUpperCase() ?? "document"}.jpg`;
-      link.href = dataUrl;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setToast("บันทึกเป็นรูปภาพเรียบร้อย");
-    } catch (err) {
-      setToast(
-        err instanceof Error
-          ? `บันทึกรูปไม่สำเร็จ: ${err.message}`
-          : "บันทึกรูปไม่สำเร็จ"
-      );
-    }
-    setTimeout(() => setToast(null), 4000);
   };
 
   const handleSaveCosts = async () => {
@@ -321,9 +299,7 @@ export default function OrderDocumentPage({
       }
     } catch (err) {
       setSheetSyncStatus("failed");
-      setSheetSyncError(
-        err instanceof Error ? err.message : "Network error"
-      );
+      setSheetSyncError(err instanceof Error ? err.message : "Network error");
       setToast("ซิงค์ไป Google Sheet ไม่สำเร็จ — เครือข่ายขัดข้อง");
     }
     setTimeout(() => setToast(null), 4000);
@@ -354,13 +330,14 @@ export default function OrderDocumentPage({
     setPaymentSaving(false);
   };
 
+  // ---- Render ------------------------------------------------------------
+
   if (isLoading) {
     return (
       <div className="p-8 text-center text-gray-500">กำลังโหลดเอกสาร...</div>
     );
   }
-
-  if (errorMessage || !order) {
+  if (errorMessage || !order || !receipt) {
     return (
       <div className="p-8">
         <div className="max-w-md mx-auto rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -370,16 +347,12 @@ export default function OrderDocumentPage({
     );
   }
 
-  const subtotal =
-    order.subtotal !== null
-      ? order.subtotal
-      : Math.max(0, order.price + order.discount - order.urgent_fee);
-
-  const categoryLabel = categoryLabelFor(order);
-  const serviceLabel = serviceLabelFor(order);
-  const promotionLabel = promotionLabelFor(order);
-  const customerTypeLabel = getCustomerTypeByCode(order.customer_type ?? undefined)?.nameTh ?? null;
-  const paymentStatus = order.payment_status ?? "unpaid";
+  const ReceiptForMode =
+    printMode === "thermal"
+      ? ReceiptThermal
+      : printMode === "mobile"
+      ? ReceiptMobile
+      : ReceiptA4;
 
   return (
     <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-4 md:p-8 pt-20 md:pt-8">
@@ -392,7 +365,8 @@ export default function OrderDocumentPage({
           >
             ← กลับไปคำสั่งซ่อม
           </Link>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <PrintModeSelector value={printMode} onChange={setPrintMode} />
             <button
               onClick={handlePrint}
               className="px-3 py-2 rounded-lg bg-green-700 hover:bg-green-800 text-white text-sm font-medium"
@@ -457,337 +431,92 @@ export default function OrderDocumentPage({
           </div>
         )}
 
-        {/* Document card */}
-        <div
-          id="careu-document-card"
-          data-receipt-id={order.id}
-          className="bg-white rounded-2xl shadow-md border border-green-100 overflow-hidden"
-        >
-          {/* Brand header */}
-          <div
-            className={`bg-gradient-to-r ${branch.accentClass} px-6 py-5 border-b-4 border-yellow-400 text-white`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <BrandLogo size="lg" variant="onColor" />
-                <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-widest text-yellow-200/90 font-semibold">
-                    CareU OPS • {branch.shortLabel}
-                  </p>
-                  <p className="text-lg font-bold leading-tight truncate">
-                    {branch.receiptName}
-                  </p>
-                  <p className="text-[11px] text-white/80 truncate">
-                    {branch.address}
-                  </p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-widest opacity-90">
-                  ใบรับงาน / ใบเสนอราคา
+        {/* Receipt — one of three templates based on print mode */}
+        <ReceiptForMode receipt={receipt} />
+
+        {/* Internal staff controls — never printed */}
+        <div className="mt-4 space-y-4 print:hidden">
+          {/* Cost panel */}
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+                  ต้นทุนภายใน (ไม่แสดงในเอกสารลูกค้า)
                 </p>
-                <p className="font-mono text-sm">
-                  #{order.id.slice(0, 8).toUpperCase()}
-                </p>
-                <p className="text-[11px] text-white/80 mt-0.5">
-                  {new Date(order.created_at).toLocaleString("th-TH", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  บันทึกค่าแรงและค่าวัสดุเพื่อให้แดชบอร์ดคำนวณกำไรรายงานนี้
                 </p>
               </div>
+              {laborCost !== null && materialCost !== null && (
+                <p className="text-sm font-semibold text-green-700 whitespace-nowrap">
+                  กำไรงานนี้:{" "}
+                  {formatCurrency(
+                    order.price - (laborCost ?? 0) - (materialCost ?? 0)
+                  )}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <label className="block">
+                <span className="block text-[11px] text-gray-500 mb-1">
+                  ค่าแรงช่าง
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={laborInput}
+                  onChange={(e) => setLaborInput(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] text-gray-500 mb-1">
+                  ค่าวัสดุ
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={materialInput}
+                  onChange={(e) => setMaterialInput(e.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleSaveCosts()}
+                disabled={costSaving}
+                className="rounded-lg bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white text-sm font-semibold py-2"
+              >
+                {costSaving ? "กำลังบันทึก..." : "บันทึกต้นทุน"}
+              </button>
             </div>
           </div>
 
-          {/* Customer */}
-          <section className="px-6 pt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                ลูกค้า
-              </p>
-              <p className="text-base font-semibold text-gray-800">
-                {order.customer_name || "-"}
-              </p>
-              <p className="text-sm text-gray-600">
-                {order.customer_phone || "-"}
-              </p>
-              {customerTypeLabel && (
-                <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-800 text-[11px] font-medium">
-                  {customerTypeLabel}
-                </span>
-              )}
-            </div>
-            <div className="sm:text-right">
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                สถานะงาน
-              </p>
-              <span
-                className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium border ${
-                  statusBadgeClasses[order.status] ??
-                  "bg-gray-100 text-gray-700 border-gray-300"
-                }`}
+          {/* Payment status selector (data persisted on the order) */}
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-2">
+              เปลี่ยนสถานะการชำระ
+            </p>
+            <div className="flex items-center gap-2">
+              <select
+                value={order.payment_status ?? "unpaid"}
+                onChange={(e) => void handlePaymentChange(e.target.value)}
+                disabled={paymentSaving}
+                className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
               >
-                {statusLabelTh[order.status] ?? order.status}
+                {PAYMENT_OPTIONS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-gray-500">
+                บันทึกอัตโนมัติเมื่อเลือก
               </span>
             </div>
-          </section>
-
-          {/* Service / Job card */}
-          <section className="px-6 mt-5">
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                    รายละเอียดงาน
-                  </p>
-                  {categoryLabel && (
-                    <p className="text-[11px] text-green-700 font-semibold mt-0.5">
-                      {categoryLabel}
-                    </p>
-                  )}
-                  <p className="text-lg font-semibold text-gray-800 mt-0.5 break-words">
-                    {serviceLabel}
-                    {order.quantity > 1 && (
-                      <span className="ml-2 text-sm text-gray-500">
-                        × {order.quantity}
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <p className="text-right text-sm font-semibold text-green-700 whitespace-nowrap">
-                  {formatCurrency(subtotal)}
-                </p>
-              </div>
-              {order.template_text && (
-                <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">
-                  {order.template_text}
-                </p>
-              )}
-              {order.notes && (
-                <div className="mt-3 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-widest text-gray-500">
-                    บันทึก
-                  </p>
-                  <p className="text-sm text-gray-800 whitespace-pre-wrap">
-                    {order.notes}
-                  </p>
-                </div>
-              )}
-              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
-                ภาพ/วิดีโอ/เอกสารแนบจะปรากฏที่นี่เมื่อระบบ Storage พร้อมใช้งาน
-              </div>
-            </div>
-          </section>
-
-          {/* Price summary box */}
-          <section className="px-6 mt-4">
-            <div className="rounded-xl border border-green-200 bg-gradient-to-b from-green-50/60 to-white p-4">
-              <p className="text-[10px] uppercase tracking-widest text-green-700 font-semibold mb-2">
-                สรุปยอด
-              </p>
-              <div className="text-sm space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">
-                    ยอดก่อนส่วนลด ({order.quantity} ×{" "}
-                    {formatCurrency(
-                      subtotal > 0 ? Math.round(subtotal / order.quantity) : 0
-                    )}
-                    )
-                  </span>
-                  <span className="text-gray-800">
-                    {formatCurrency(subtotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">ค่างานด่วน</span>
-                  <span className="text-gray-800">
-                    {formatCurrency(order.urgent_fee)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">
-                    ส่วนลด{promotionLabel ? ` (${promotionLabel})` : ""}
-                  </span>
-                  <span className="text-gray-800">
-                    -{formatCurrency(order.discount)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center pt-2 mt-1 border-t border-green-200">
-                  <span className="text-gray-800 font-semibold">ยอดรวมสุทธิ</span>
-                  <span className="text-3xl font-extrabold text-green-700 leading-none">
-                    {formatCurrency(order.price)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Cost breakdown — internal use, hidden from print */}
-          <section className="px-6 mt-4 print:hidden">
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
-                    ต้นทุนภายใน (ไม่แสดงในเอกสารลูกค้า)
-                  </p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">
-                    บันทึกค่าแรงและค่าวัสดุเพื่อให้แดชบอร์ดคำนวณกำไรรายงานนี้
-                  </p>
-                </div>
-                {laborCost !== null && materialCost !== null && (
-                  <p className="text-sm font-semibold text-green-700 whitespace-nowrap">
-                    กำไรงานนี้:{" "}
-                    {formatCurrency(
-                      order.price - (laborCost ?? 0) - (materialCost ?? 0)
-                    )}
-                  </p>
-                )}
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <label className="block">
-                  <span className="block text-[11px] text-gray-500 mb-1">
-                    ค่าแรงช่าง
-                  </span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={laborInput}
-                    onChange={(e) => setLaborInput(e.target.value)}
-                    placeholder="0"
-                    className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] text-gray-500 mb-1">
-                    ค่าวัสดุ
-                  </span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    value={materialInput}
-                    onChange={(e) => setMaterialInput(e.target.value)}
-                    placeholder="0"
-                    className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveCosts()}
-                  disabled={costSaving}
-                  className="rounded-lg bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white text-sm font-semibold py-2"
-                >
-                  {costSaving ? "กำลังบันทึก..." : "บันทึกต้นทุน"}
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Payment box */}
-          <section className="px-6 mt-4">
-            <div className="rounded-xl border border-yellow-200 bg-yellow-50/40 p-4">
-              <p className="text-[10px] uppercase tracking-widest text-yellow-700 font-semibold mb-3">
-                ช่องชำระเงิน
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="rounded-lg border border-yellow-300 bg-white p-3 flex items-center gap-3">
-                  <div className="w-24 h-24 flex-shrink-0 grid place-items-center bg-yellow-50 border border-yellow-300 rounded-md text-[10px] text-gray-400 text-center leading-tight">
-                    QR
-                    <br />
-                    Code
-                  </div>
-                  <div className="text-xs text-gray-600">
-                    <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
-                    <p>สแกนเพื่อชำระ — รูป QR จะอัปโหลดต่อสาขาในเฟสถัดไป</p>
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700">
-                  <p className="font-medium text-gray-800">โอนผ่านบัญชีธนาคาร</p>
-                  <p className="mt-1 text-gray-500">
-                    เลขที่บัญชี:{" "}
-                    <span className="text-gray-700">ระบุภายหลัง</span>
-                  </p>
-                  <p className="text-gray-500">
-                    ชื่อบัญชี:{" "}
-                    <span className="text-gray-700">{branch.receiptName}</span>
-                  </p>
-                  <p className="text-gray-500">
-                    สาขา:{" "}
-                    <span className="text-gray-700">{branch.shortLabel}</span>
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                    สถานะการชำระ
-                  </p>
-                  <span
-                    className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium border ${
-                      paymentBadgeClasses[paymentStatus] ??
-                      "bg-gray-100 text-gray-700 border-gray-300"
-                    }`}
-                  >
-                    {formatPaymentStatus(paymentStatus)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 print:hidden">
-                  <label className="text-xs text-gray-500">เปลี่ยนสถานะ</label>
-                  <select
-                    value={paymentStatus}
-                    onChange={(e) => void handlePaymentChange(e.target.value)}
-                    disabled={paymentSaving}
-                    className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm"
-                  >
-                    {PAYMENT_OPTIONS.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <p className="text-sm text-gray-700">
-                  ยอดที่ต้องชำระ:{" "}
-                  <span className="font-bold text-green-700">
-                    {formatCurrency(
-                      paymentStatus === "paid" ? 0 : order.price
-                    )}
-                  </span>
-                </p>
-              </div>
-            </div>
-          </section>
-
-          {/* Next steps */}
-          <section className="px-6 mt-5 pt-4 border-t border-gray-200">
-            <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-2">
-              ขั้นตอนถัดไป
-            </p>
-            <ol className="text-sm text-gray-700 list-decimal pl-5 space-y-1">
-              <li>ยืนยันราคาและชำระเงิน</li>
-              <li>ร้านรับงานเข้าระบบ</li>
-              <li>แจ้งเมื่องานเสร็จ</li>
-              <li>รับงานตามกำหนด</li>
-            </ol>
-          </section>
-
-          {/* Footer */}
-          <footer className="mt-6 bg-yellow-50 border-t border-yellow-200 px-6 py-4 text-center">
-            <p className="text-sm font-medium text-gray-700">
-              {branch.receiptName} • {branch.shortLabel}
-            </p>
-            <p className="text-xs text-gray-600">{branch.address}</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              เปิดบริการ จันทร์–เสาร์ 09:00–18:00 (เวลาทำการอาจปรับตามสาขา)
-            </p>
-            <p className="text-xs text-green-700 mt-1 italic">
-              {branch.tagline}
-            </p>
-            <p className="text-[11px] text-gray-500 mt-2">
-              รับประกันงานซ่อม 7 วัน นับจากวันรับของกลับ
-              (ไม่ครอบคลุมความเสียหายจากการใช้งาน)
-            </p>
-          </footer>
+          </div>
         </div>
       </div>
     </div>
