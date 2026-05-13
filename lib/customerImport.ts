@@ -9,9 +9,14 @@ export type ParsedCustomerRow = {
 
 export type ImportResult = {
   inserted: number;
-  skipped: number;
+  skipped: number;     // rows missing name or phone
+  duplicates: number;  // rows skipped because phone already exists
   error: string | null;
 };
+
+export function normalizePhone(value: string): string {
+  return (value ?? "").replace(/\D/g, "");
+}
 
 function splitCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -40,7 +45,6 @@ function splitCsvLine(line: string): string[] {
 /**
  * Parse CSV text with a header row. Expected columns (case-insensitive,
  * any order): name, phone, email, address. Email/address are optional.
- * Returns rows with whitespace trimmed; missing optional values become "".
  */
 export function parseCustomersCsv(text: string): ParsedCustomerRow[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
@@ -66,8 +70,13 @@ export function parseCustomersCsv(text: string): ParsedCustomerRow[] {
 }
 
 /**
- * Insert parsed rows into public.customers. Rows missing name or phone are
- * skipped. Empty email/address are stored as "N/A" to match the rest of the app.
+ * Insert parsed rows into public.customers. Behavior:
+ *   - Rows missing name OR phone are skipped (counted in `skipped`).
+ *   - Empty email/address default to "N/A".
+ *   - Duplicate phones (against existing customers and within the same
+ *     batch) are skipped (counted in `duplicates`). Phone is normalized
+ *     to digits-only for comparison.
+ *   - Surviving rows are inserted with the provided branch_id.
  */
 export async function importCustomerRows(
   rows: ParsedCustomerRow[],
@@ -84,10 +93,39 @@ export async function importCustomerRows(
 
   const skipped = rows.length - valid.length;
   if (valid.length === 0) {
-    return { inserted: 0, skipped, error: null };
+    return { inserted: 0, skipped, duplicates: 0, error: null };
   }
 
-  const payload = valid.map((r) => ({
+  const { data: existing, error: fetchError } = await supabase
+    .from("customers")
+    .select("phone");
+  if (fetchError) {
+    return { inserted: 0, skipped, duplicates: 0, error: fetchError.message };
+  }
+
+  const existingPhones = new Set(
+    (existing ?? [])
+      .map((r) => normalizePhone((r as { phone: string | null }).phone ?? ""))
+      .filter((p) => p.length > 0)
+  );
+
+  const seen = new Set<string>();
+  const unique = valid.filter((r) => {
+    const key = normalizePhone(r.phone);
+    if (!key) return false;
+    if (existingPhones.has(key)) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const duplicates = valid.length - unique.length;
+
+  if (unique.length === 0) {
+    return { inserted: 0, skipped, duplicates, error: null };
+  }
+
+  const payload = unique.map((r) => ({
     ...r,
     branch_id: branchId,
     notes: null,
@@ -95,8 +133,9 @@ export async function importCustomerRows(
 
   const { error } = await supabase.from("customers").insert(payload);
   return {
-    inserted: error ? 0 : valid.length,
+    inserted: error ? 0 : unique.length,
     skipped,
+    duplicates,
     error: error?.message ?? null,
   };
 }

@@ -59,6 +59,8 @@ export default function CustomersPage() {
   const [importPreview, setImportPreview] = useState<ParsedCustomerRow[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
@@ -162,6 +164,35 @@ export default function CustomersPage() {
     }
   };
 
+  const handleSyncFromSheet = async () => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch("/api/sync-customers", { method: "POST" });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        inserted?: number;
+        duplicates?: number;
+        skipped?: number;
+        totalRows?: number;
+        error?: string;
+      };
+      if (!res.ok || json.error) {
+        setSyncMessage(json.error ?? `Sync failed (HTTP ${res.status})`);
+      } else {
+        setSyncMessage(
+          language === "th"
+            ? `ซิงค์สำเร็จ • เพิ่ม ${json.inserted ?? 0} • ซ้ำ ${json.duplicates ?? 0} • ข้าม ${json.skipped ?? 0}`
+            : `Synced • added ${json.inserted ?? 0}, duplicates ${json.duplicates ?? 0}, skipped ${json.skipped ?? 0}`
+        );
+        await fetchCustomers();
+      }
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : "Sync failed");
+    }
+    setIsSyncing(false);
+  };
+
   const handleImportConfirm = async () => {
     if (importPreview.length === 0) return;
     setIsSubmitting(true);
@@ -189,8 +220,8 @@ export default function CustomersPage() {
 
     setImportMessage(
       language === "th"
-        ? `นำเข้าสำเร็จ ${result.inserted} ราย / ข้าม ${result.skipped} ราย`
-        : `Imported ${result.inserted}, skipped ${result.skipped}`
+        ? `นำเข้าสำเร็จ ${result.inserted} ราย • ซ้ำ ${result.duplicates} • ข้าม ${result.skipped}`
+        : `Imported ${result.inserted}, duplicates ${result.duplicates}, skipped ${result.skipped}`
     );
     setImportPreview([]);
     setIsSubmitting(false);
@@ -248,6 +279,19 @@ export default function CustomersPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <button
+            onClick={() => void handleSyncFromSheet()}
+            disabled={isSubmitting || isSyncing}
+            className="bg-green-700 hover:bg-green-800 text-white px-5 py-2 rounded-lg transition font-medium disabled:opacity-50"
+          >
+            {isSyncing
+              ? language === "th"
+                ? "กำลังซิงค์..."
+                : "Syncing..."
+              : language === "th"
+              ? "ซิงค์จาก Google Sheet"
+              : "Sync from Google Sheet"}
+          </button>
+          <button
             onClick={() => {
               setImportPreview([]);
               setImportMessage(null);
@@ -256,7 +300,7 @@ export default function CustomersPage() {
             disabled={isSubmitting}
             className="border border-green-600 text-green-700 hover:bg-green-50 px-5 py-2 rounded-lg transition font-medium disabled:opacity-50"
           >
-            {language === "th" ? "นำเข้าลูกค้า" : "Import customers"}
+            {language === "th" ? "นำเข้าลูกค้า (CSV)" : "Import CSV (backup)"}
           </button>
           <button
             onClick={() => setIsAddModalOpen(true)}
@@ -267,6 +311,20 @@ export default function CustomersPage() {
           </button>
         </div>
       </div>
+
+      {syncMessage && (
+        <div className="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-900 flex items-start justify-between gap-3">
+          <span>{syncMessage}</span>
+          <button
+            type="button"
+            onClick={() => setSyncMessage(null)}
+            className="text-yellow-800 hover:text-yellow-900"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       <div className="mb-4">
