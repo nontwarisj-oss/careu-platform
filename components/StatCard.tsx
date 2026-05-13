@@ -1,14 +1,12 @@
 "use client";
 
 import React from "react";
-import { useLanguage } from "@/lib/languageContext";
-import { t } from "@/lib/translations";
 
 interface StatCardProps {
   title: string;
   value: string | number;
   icon: React.ReactNode;
-  color: "blue" | "green" | "orange" | "red" | "purple";
+  color: "blue" | "green" | "orange" | "red" | "purple" | "yellow";
 }
 
 const colorClasses = {
@@ -17,6 +15,7 @@ const colorClasses = {
   orange: "bg-orange-50 border-orange-200 text-orange-700",
   red: "bg-red-50 border-red-200 text-red-700",
   purple: "bg-purple-50 border-purple-200 text-purple-700",
+  yellow: "bg-yellow-50 border-yellow-200 text-yellow-700",
 };
 
 const iconBgClasses = {
@@ -25,6 +24,7 @@ const iconBgClasses = {
   orange: "bg-orange-100 text-orange-600",
   red: "bg-red-100 text-red-600",
   purple: "bg-purple-100 text-purple-600",
+  yellow: "bg-yellow-100 text-yellow-700",
 };
 
 export const StatCard: React.FC<StatCardProps> = ({ title, value, icon, color }) => {

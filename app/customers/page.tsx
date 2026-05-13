@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
 import { useLanguage } from "@/lib/languageContext";
 import { t } from "@/lib/translations";
@@ -8,6 +8,11 @@ import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
 import { Customer } from "@/types";
 import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
+import {
+  parseCustomersCsv,
+  importCustomerRows,
+  type ParsedCustomerRow,
+} from "@/lib/customerImport";
 
 type CustomerRow = {
   id: string;
@@ -48,6 +53,10 @@ export default function CustomersPage() {
     email: "",
     address: "",
   });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState<ParsedCustomerRow[]>([]);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   const fetchCustomers = useCallback(async () => {
     setIsLoading(true);
@@ -121,6 +130,71 @@ export default function CustomersPage() {
     await fetchCustomers();
   };
 
+  const filteredCustomers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter((c) => {
+      const fields = [c.name, c.phone, c.email ?? "", c.address ?? ""];
+      return fields.some((f) => f.toLowerCase().includes(q));
+    });
+  }, [customers, searchQuery]);
+
+  const handleImportFile = async (file: File) => {
+    setImportMessage(null);
+    try {
+      const text = await file.text();
+      const rows = parseCustomersCsv(text);
+      setImportPreview(rows);
+      if (rows.length === 0) {
+        setImportMessage(
+          language === "th"
+            ? "ไม่พบข้อมูลในไฟล์ CSV (ต้องมีหัวคอลัมน์ name,phone,email,address)"
+            : "No data found in CSV (expected header: name,phone,email,address)"
+        );
+      }
+    } catch (err) {
+      setImportMessage(
+        err instanceof Error ? err.message : "Failed to read file"
+      );
+      setImportPreview([]);
+    }
+  };
+
+  const handleImportConfirm = async () => {
+    if (importPreview.length === 0) return;
+    setIsSubmitting(true);
+    setImportMessage(null);
+
+    const { data: branches, error: branchError } = await supabase
+      .from("branches")
+      .select("id")
+      .limit(1);
+
+    if (branchError || !branches?.[0]) {
+      setImportMessage(
+        branchError?.message ?? "No branch found. Please seed at least one branch first."
+      );
+      setIsSubmitting(false);
+      return;
+    }
+
+    const result = await importCustomerRows(importPreview, (branches[0] as BranchRow).id);
+    if (result.error) {
+      setImportMessage(result.error);
+      setIsSubmitting(false);
+      return;
+    }
+
+    setImportMessage(
+      language === "th"
+        ? `นำเข้าสำเร็จ ${result.inserted} ราย / ข้าม ${result.skipped} ราย`
+        : `Imported ${result.inserted}, skipped ${result.skipped}`
+    );
+    setImportPreview([]);
+    setIsSubmitting(false);
+    await fetchCustomers();
+  };
+
   const columns = [
     {
       key: "name",
@@ -164,19 +238,54 @@ export default function CustomersPage() {
   return (
     <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8">
       {/* Page Header */}
-      <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
             {t("customers.title", language)}
           </h1>
         </div>
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          disabled={isSubmitting}
-          className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
-        >
-          + {t("customers.addCustomer", language)}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => {
+              setImportPreview([]);
+              setImportMessage(null);
+              setIsImportModalOpen(true);
+            }}
+            disabled={isSubmitting}
+            className="border border-green-600 text-green-700 hover:bg-green-50 px-5 py-2 rounded-lg transition font-medium disabled:opacity-50"
+          >
+            {language === "th" ? "นำเข้าลูกค้า" : "Import customers"}
+          </button>
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            disabled={isSubmitting}
+            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition font-medium disabled:opacity-50"
+          >
+            + {t("customers.addCustomer", language)}
+          </button>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="mb-4">
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={
+            language === "th"
+              ? "ค้นหาด้วย ชื่อ / เบอร์ / อีเมล / ที่อยู่"
+              : "Search by name, phone, email, or address"
+          }
+          className="w-full md:max-w-md px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        {searchQuery && (
+          <p className="text-xs text-gray-500 mt-1">
+            {language === "th"
+              ? `พบ ${filteredCustomers.length} จาก ${customers.length} รายการ`
+              : `${filteredCustomers.length} of ${customers.length} customers`}
+          </p>
+        )}
       </div>
 
       {errorMessage && (
@@ -193,7 +302,7 @@ export default function CustomersPage() {
       ) : (
         <Table
           columns={columns}
-          data={customers}
+          data={filteredCustomers}
           onEdit={(customer) => {
             setSelectedCustomer(customer);
             setFormData({
@@ -275,6 +384,58 @@ export default function CustomersPage() {
               placeholder={language === "th" ? "กรอกที่อยู่" : "Enter address"}
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* Import Customers Modal */}
+      <Modal
+        isOpen={isImportModalOpen}
+        onClose={() => {
+          setIsImportModalOpen(false);
+          setImportPreview([]);
+          setImportMessage(null);
+        }}
+        title={language === "th" ? "นำเข้าลูกค้าจากไฟล์ CSV" : "Import customers from CSV"}
+        onSubmit={importPreview.length > 0 ? handleImportConfirm : undefined}
+        submitLabel={language === "th" ? "นำเข้า" : "Import"}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            {language === "th"
+              ? "ต้องมีหัวคอลัมน์: name, phone, email, address"
+              : "Expected header row: name, phone, email, address"}
+            <br />
+            <span className="text-xs text-gray-500">
+              {language === "th"
+                ? "ชื่อและเบอร์ต้องมี — อีเมล/ที่อยู่ว่างได้ (เก็บเป็น N/A)"
+                : "Name and phone are required. Empty email/address are stored as N/A."}
+            </span>
+          </p>
+
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleImportFile(file);
+            }}
+            disabled={isSubmitting}
+            className="block w-full text-sm text-gray-700 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700 hover:file:bg-green-100"
+          />
+
+          {importPreview.length > 0 && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+              {language === "th"
+                ? `พบ ${importPreview.length} แถวในไฟล์`
+                : `${importPreview.length} rows found in file`}
+            </div>
+          )}
+
+          {importMessage && (
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+              {importMessage}
+            </div>
+          )}
         </div>
       </Modal>
     </div>

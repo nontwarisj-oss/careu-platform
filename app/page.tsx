@@ -90,7 +90,20 @@ export default function Dashboard() {
     const totalPending = orders.filter((o) => o.status === "pending").length;
     const totalInProgress = orders.filter((o) => o.status === "in-progress").length;
     const totalCompleted = orders.filter((o) => o.status === "completed").length;
-    return { dailyRevenue, todayOrderCount, totalPending, totalInProgress, totalCompleted };
+    const activeWorkload = totalPending + totalInProgress;
+    const totalCount = orders.length;
+    const completionRate =
+      totalCount > 0 ? Math.round((totalCompleted / totalCount) * 100) : 0;
+    return {
+      dailyRevenue,
+      todayOrderCount,
+      totalPending,
+      totalInProgress,
+      totalCompleted,
+      activeWorkload,
+      totalCount,
+      completionRate,
+    };
   }, [orders, todaysOrders]);
 
   const recentOrders: RecentOrder[] = useMemo(
@@ -138,18 +151,22 @@ export default function Dashboard() {
     {
       key: "price",
       label: language === "th" ? "ราคา (บาท)" : "Price (฿)",
-      render: (price: number) => `฿${price.toLocaleString()}`,
+      render: (price: number) => (
+        <span className="font-semibold text-green-700">
+          ฿{price.toLocaleString()}
+        </span>
+      ),
     },
   ];
 
   return (
-    <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8">
+    <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8 bg-gradient-to-br from-green-50/40 via-white to-yellow-50/40 min-h-screen">
       {/* Page Header */}
-      <div className="mb-8">
+      <div className="mb-6 md:mb-8 border-l-4 border-yellow-400 pl-4">
         <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
           {t("dashboard.title", language)}
         </h1>
-        <p className="text-gray-600 mt-2">
+        <p className="text-gray-600 mt-1 text-sm md:text-base">
           {t("dashboard.welcomeMessage", language)}
         </p>
       </div>
@@ -160,64 +177,119 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6 mb-8">
-        <StatCard
-          title={t("dashboard.dailySales", language)}
-          value={`฿${stats.dailyRevenue.toLocaleString()}`}
-          icon="💰"
-          color="green"
-        />
-        <StatCard
-          title={t("dashboard.totalOrders", language)}
-          value={stats.todayOrderCount}
-          icon="🔧"
-          color="blue"
-        />
+      {/* Today Hero */}
+      <div className="bg-gradient-to-r from-green-700 to-green-600 rounded-2xl shadow-md p-6 md:p-8 mb-6 md:mb-8 border-b-4 border-yellow-400 text-white">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-widest text-yellow-200 font-semibold">
+              {language === "th" ? "วันนี้" : "Today"}
+            </p>
+            <p className="text-4xl md:text-5xl font-extrabold mt-1">
+              ฿{stats.dailyRevenue.toLocaleString()}
+            </p>
+            <p className="text-sm text-green-100 mt-1">
+              {t("dashboard.dailySales", language)}
+            </p>
+          </div>
+          <div className="flex flex-col items-start md:items-end">
+            <p className="text-3xl md:text-4xl font-bold text-yellow-300">
+              {stats.todayOrderCount}
+            </p>
+            <p className="text-sm text-green-100">
+              {language === "th" ? "คำสั่งซ่อมวันนี้" : "Orders today"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Status Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
         <StatCard
           title={t("orders.pending", language)}
           value={stats.totalPending}
-          icon="⏳"
-          color="orange"
+          icon={<span className="text-xl font-bold">P</span>}
+          color="yellow"
         />
         <StatCard
           title={t("orders.inProgress", language)}
           value={stats.totalInProgress}
-          icon="🛠️"
+          icon={<span className="text-xl font-bold">W</span>}
           color="blue"
         />
         <StatCard
           title={t("orders.completed", language)}
           value={stats.totalCompleted}
-          icon="✅"
-          color="purple"
+          icon={<span className="text-xl font-bold">C</span>}
+          color="green"
         />
       </div>
 
-      {/* Recent Orders Section */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-800">
-            {language === "th" ? "คำสั่งซ่อมล่าสุด" : "Recent Orders"}
-          </h2>
-          <Link
-            href="/orders"
-            className="text-blue-600 hover:text-blue-800 font-medium text-sm"
-          >
-            {language === "th" ? "ดูทั้งหมด →" : "View All →"}
-          </Link>
-        </div>
-        {isLoading ? (
-          <div className="p-8 text-center text-gray-500">
-            {language === "th" ? "กำลังโหลด..." : "Loading..."}
+      {/* Recent Orders + Operational Summary */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-200 p-5 md:p-6">
+          <div className="flex items-center justify-between mb-4 md:mb-6">
+            <h2 className="text-lg md:text-xl font-bold text-gray-800">
+              {language === "th" ? "คำสั่งซ่อมล่าสุด" : "Recent Orders"}
+            </h2>
+            <Link
+              href="/orders"
+              className="text-green-700 hover:text-green-800 font-medium text-sm"
+            >
+              {language === "th" ? "ดูทั้งหมด →" : "View All →"}
+            </Link>
           </div>
-        ) : (
-          <Table
-            columns={columns}
-            data={recentOrders}
-            emptyMessage={language === "th" ? "ไม่มีคำสั่งซ่อม" : "No orders yet"}
-          />
-        )}
+          {isLoading ? (
+            <div className="p-8 text-center text-gray-500">
+              {language === "th" ? "กำลังโหลด..." : "Loading..."}
+            </div>
+          ) : (
+            <Table
+              columns={columns}
+              data={recentOrders}
+              emptyMessage={language === "th" ? "ไม่มีคำสั่งซ่อม" : "No orders yet"}
+            />
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 md:p-6">
+          <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 md:mb-6">
+            {language === "th" ? "สรุปการดำเนินงาน" : "Operations Summary"}
+          </h2>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <span className="text-sm text-gray-600">
+                {language === "th" ? "งานที่ยังไม่เสร็จ" : "Active workload"}
+              </span>
+              <span className="text-2xl font-bold text-gray-800">
+                {stats.activeWorkload}
+              </span>
+            </div>
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <span className="text-sm text-gray-600">
+                {language === "th" ? "คำสั่งซ่อมทั้งหมด" : "Total orders"}
+              </span>
+              <span className="text-2xl font-bold text-gray-800">
+                {stats.totalCount}
+              </span>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-600">
+                  {language === "th" ? "อัตราเสร็จสิ้น" : "Completion rate"}
+                </span>
+                <span className="text-sm font-semibold text-green-700">
+                  {stats.completionRate}%
+                </span>
+              </div>
+              <div className="w-full h-2 rounded-full bg-gray-100 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-green-500 to-yellow-400"
+                  style={{ width: `${stats.completionRate}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
