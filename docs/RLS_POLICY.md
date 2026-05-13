@@ -19,6 +19,9 @@
 | `pricing_audit_logs` | **ON** | SELECT restricted to owner/hq_admin (`pricing_audit_admin_read`); writes via the `log_pricing_change` trigger (SECURITY DEFINER) only — no INSERT policy for any role. |
 | `expense_audit_log` | **ON** | SELECT restricted to owner/hq_admin (`expense_audit_admin_read`); writes via the `log_expense_change` trigger only. Append-only. |
 | `sync_failures` | **ON** | SELECT restricted to owner/hq_admin (`sync_failures_admin_read`); writes via service-role only (no INSERT/UPDATE/DELETE policy for any authenticated role). |
+| `customer_line_links` | **ON** | `customer_line_links_admin_full` (owner/hq_admin FOR ALL); `customer_line_links_branch_read` (branch_manager/front_staff SELECT for customers in own branch). No write for non-admin — consent is PDPA-controlled. |
+| `line_message_log` | **ON** | `line_message_log_admin_read` (owner/hq_admin); `line_message_log_branch_read` (branch_manager own branch). No INSERT policy — only orchestrator writes via service role. |
+| `branch_line_configs` | **ON** | No read policy. Channel access tokens live here; only service-role reads via `lib/lineConfig.ts`. |
 | `order_audit_log` | OFF | Written by server routes via service role only. |
 | `users` (legacy) | OFF | Being phased out in favour of `profiles`. |
 

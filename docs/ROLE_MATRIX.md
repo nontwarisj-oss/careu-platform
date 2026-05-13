@@ -81,6 +81,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Receipt — internal cost panel (labor/material)** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
 | **Receipt — payment status edit** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ❌ |
 | **Receipt — sync to Google Sheet** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 (on own orders) |
+| **LINE OA — trigger send** | ✅ all kinds | ✅ all kinds | ✅ 🏢 all kinds | ✅ 🏢 all kinds | ❌ |
+| **`customer_line_links` — view** | ✅ all | ✅ all | ✅ 🏢 (via customer.branch_id) | ✅ 🏢 | ❌ |
+| **`customer_line_links` — create / unsubscribe** | ✅ | ✅ | ❌ (PDPA — admin-controlled) | ❌ | ❌ |
+| **`line_message_log` — read** | ✅ all branches | ✅ all branches | 👁 🏢 (own branch) | ❌ | ❌ |
+| **`branch_line_configs` — view / rotate tokens** | ✅ (via service role) | ✅ (via service role) | ❌ | ❌ | ❌ |
 
 ---
 

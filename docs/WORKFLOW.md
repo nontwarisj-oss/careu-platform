@@ -420,6 +420,43 @@ The trigger-driven tables (pricing / expense) are impossible to forget — every
 2. **Failures land in two places.** [`lib/syncFailures.ts::logSyncFailure`](../lib/syncFailures.ts) emits a parseable `[sync-failure]` log line AND inserts a row into `public.sync_failures` (when `SUPABASE_SERVICE_ROLE_KEY` is set). The DB queue is owner / hq_admin readable + the basis for a future cron retry.
 3. **Recovery is one module.** [`lib/recoveryService.ts`](../lib/recoveryService.ts) — `listFailedSyncs`, `markSyncResolved`, `resyncOrderToSheet`, `rebuildReceiptData`. A future `/admin/recovery` page imports all four.
 
+### 8.5b LINE OA messaging (MVP)
+
+Four customer-facing message kinds, all triggered manually from the staff UI in the MVP:
+
+| Kind | When | Trigger today |
+|---|---|---|
+| `order_received` | Right after `/intake` create | Manual button (future: auto via `branch_line_configs.auto_send_order_received`) |
+| `order_ready` | Status flips to `completed` / `ready-for-pickup` | Manual button on `/orders/[id]/document` |
+| `pickup_reminder` | Ready job hasn't been picked up | Manual button (future: cron) |
+| `receipt` | Customer asks for receipt link | "Send LINE OA" button → falls through `buildCustomerMessage` |
+
+Flow:
+1. Browser calls `sendLineMessage(kind, orderId)` from [`lib/lineOA.ts`](../lib/lineOA.ts).
+2. `POST /api/line/send` re-checks role (owner / hq_admin / branch_manager / front_staff).
+3. Orchestrator in [`lib/lineDelivery.ts`](../lib/lineDelivery.ts):
+   - Loads order + customer + branch via service role.
+   - Looks up `customer_line_links` for the customer. **No link → skip** (logged).
+   - Reads notification prefs + unsubscribed status. **Pref off / unsubscribed → skip**.
+   - Resolves channel config via [`lib/lineConfig.ts`](../lib/lineConfig.ts) (per-branch row → env fallback).
+   - Builds message text via [`lib/lineMessageBuilders.ts`](../lib/lineMessageBuilders.ts).
+   - Pushes via [`lib/lineMessaging.ts`](../lib/lineMessaging.ts).
+   - Writes one row to `public.line_message_log` regardless of outcome.
+
+Failures never block the order workflow — the route returns 200 with `ok: false` and the UI shows a toast.
+
+### 8.5c LINE customer linkage
+
+`public.customer_line_links` maps `customer_id ↔ line_user_id`. Populated three ways:
+
+| Method | Status |
+|---|---|
+| LINE follow webhook | **Next phase** (customer scans OA QR → server captures userId → upsert link with `consented_at`) |
+| Admin SQL | Works today (`INSERT INTO public.customer_line_links …`) |
+| `/admin/customer-line` UI | Future — same admin flow as the planned `/admin/staff` page |
+
+Per-kind notification prefs are on the link row (`notify_order_received`, `notify_order_ready`, etc.). Unsubscribe sets `unsubscribed_at` and overrides every per-kind flag.
+
 ### 8.6 Validation rules
 Three layers:
 

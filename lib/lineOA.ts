@@ -1,13 +1,66 @@
-// Client-side wrapper around /api/line/send.
+// Browser-side LINE OA client wrappers. Forward to the server route at
+// /api/line/send so LINE_CHANNEL_ACCESS_TOKEN never leaves the server.
+// Never use NEXT_PUBLIC_LINE_* — secrets stay server-side.
 //
-// The real LINE Messaging API call lives in the server route handler at
-// app/api/line/send/route.ts so that LINE_CHANNEL_ACCESS_TOKEN never leaves
-// the server. Never use NEXT_PUBLIC_LINE_* — secrets must stay server-side.
-//
-// Required env vars (set in Vercel / .env.local, see .env.example):
-//   LINE_CHANNEL_ACCESS_TOKEN  — long-lived channel access token
-//   LINE_CHANNEL_SECRET        — channel secret (webhook signature verify)
-//   LINE_OA_ID                 — friend / Basic ID for deep links
+// Two surface shapes:
+//   • sendLineMessage(kind, orderId)  — typed kind, no payload override.
+//     Use this for every new call site. The server builds the message via
+//     lib/lineMessageBuilders and respects per-branch config + customer
+//     prefs + RLS.
+//   • sendToLineOA(orderId, message)  — legacy free-form text. Kept for
+//     the existing "Send LINE OA" button on /orders/[id]/document until
+//     the page migrates to the typed variant.
+
+export type LineMessageKind =
+  | "order_received"
+  | "order_ready"
+  | "pickup_reminder"
+  | "receipt";
+
+export type LineSendResult = {
+  ok: boolean;
+  status?: "sent" | "skipped" | "failed";
+  kind?: LineMessageKind;
+  reason?: string;
+  lineUserId?: string;
+  logId?: string | null;
+  requestId?: string | null;
+};
+
+/**
+ * Typed sender. Triggers the orchestrator's build-and-send for a known
+ * message kind. Auth-gated server-side — the route requires one of
+ * owner / hq_admin / branch_manager / front_staff.
+ */
+export async function sendLineMessage(
+  kind: LineMessageKind,
+  orderId: string
+): Promise<LineSendResult> {
+  if (typeof window === "undefined") {
+    return {
+      ok: false,
+      reason: "sendLineMessage must be called from the browser",
+    };
+  }
+  if (!orderId) return { ok: false, reason: "Missing order id" };
+
+  try {
+    const res = await fetch("/api/line/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId, kind }),
+    });
+    const json = (await res.json()) as LineSendResult;
+    return json;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
+}
+
+// ---------- Legacy wrapper (kept for /orders/[id]/document) --------------
 
 export type LineOAResult = {
   ok: boolean;
@@ -15,25 +68,22 @@ export type LineOAResult = {
 };
 
 /**
- * Forwards an outbound message request to the server route. The route is
- * inert until LINE_CHANNEL_ACCESS_TOKEN is present AND we have the
- * customer's LINE user id captured via the follow flow.
+ * Backwards-compatible wrapper. The server route now interprets a
+ * payload with `message` (but no `kind`) as a receipt-style send.
+ * Prefer `sendLineMessage('receipt', orderId)` for new code.
  */
 export async function sendToLineOA(
   orderId: string,
   message: string,
   to?: string
 ): Promise<LineOAResult> {
-  if (!orderId) {
-    return { ok: false, reason: "Missing order id" };
-  }
+  if (!orderId) return { ok: false, reason: "Missing order id" };
   if (typeof window === "undefined") {
     return {
       ok: false,
       reason: "sendToLineOA must be called from the browser",
     };
   }
-
   try {
     const res = await fetch("/api/line/send", {
       method: "POST",

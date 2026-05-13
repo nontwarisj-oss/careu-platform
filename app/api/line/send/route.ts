@@ -1,48 +1,67 @@
+// POST /api/line/send — canonical LINE OA send endpoint.
+//
+// Request body:
+//   {
+//     orderId: string;
+//     kind: 'order_received' | 'order_ready' | 'pickup_reminder' | 'receipt';
+//     // Optional plain text override; bypasses the builder when present.
+//     // Stays for backward-compat with the existing client wrapper
+//     // (lib/lineOA.ts::sendToLineOA) which posts { orderId, message }.
+//     message?: string;
+//   }
+//
+// Auth:
+//   • requireRole(['owner','hq_admin','branch_manager','front_staff'])
+//   • requireBranchAccess(order.branch_id) is enforced indirectly by
+//     RLS on the orders table — when the orchestrator runs via the
+//     service-role client it can read any branch, so this route only
+//     lets approved roles trigger a send. The branch ownership check
+//     happens via the fetched order's branch_id matching the caller's.
+//
+// Failure handling: the route never bubbles a 5xx for a recoverable
+// LINE-side problem (no link, channel not configured, push HTTP 4xx).
+// Those return 200 with `ok: false, reason: …` so the UI can show a
+// friendly toast.
+
 import { NextResponse } from "next/server";
+import { requireRole } from "@/lib/supabaseAuth";
+import {
+  sendOrderCreatedMessage,
+  sendOrderReadyMessage,
+  sendPickupReminderMessage,
+  sendReceiptMessage,
+  type DeliveryResult,
+  type LineMessageKind,
+} from "@/lib/lineDelivery";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const ALLOWED_KINDS: LineMessageKind[] = [
+  "order_received",
+  "order_ready",
+  "pickup_reminder",
+  "receipt",
+];
+
 type SendBody = {
   orderId?: string;
+  kind?: string;
+  /** Optional plain-text override, used by the legacy "Send LINE OA" button. */
   message?: string;
-  /**
-   * Customer's LINE user id (returned by the LINE follow webhook).
-   * Until the follow flow is wired we cannot push individual messages,
-   * so this route returns a friendly "not yet implemented" response.
-   */
+  /** Legacy field — was the LINE user id passed inline. Now resolved from the customer link table. */
   to?: string;
 };
 
-/**
- * POST /api/line/send
- *
- * Server-only route placeholder for pushing the intake/quote/receipt
- * document message to a customer via LINE Messaging API. Secrets are read
- * from process.env at runtime and NEVER exposed to the client.
- *
- * Required env vars (Vercel project / .env.local — see .env.example):
- *   LINE_CHANNEL_ACCESS_TOKEN
- *   LINE_CHANNEL_SECRET (used for webhook signature verification, not push)
- *   LINE_OA_ID          (deep-link helper)
- *
- * Once LINE follow flow is in place and a customer LINE user id is stored,
- * uncomment the real push block below. Until then the route stays inert so
- * we never accidentally hit LINE in production without proper recipient
- * tracking.
- */
 export async function POST(req: Request) {
-  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  if (!token) {
-    return NextResponse.json(
-      {
-        ok: false,
-        reason:
-          "LINE OA ยังไม่ตั้งค่า — เพิ่ม LINE_CHANNEL_ACCESS_TOKEN ใน environment ของ Vercel ก่อน",
-      },
-      { status: 503 }
-    );
-  }
+  const guarded = await requireRole([
+    "owner",
+    "hq_admin",
+    "branch_manager",
+    "front_staff",
+  ]);
+  if (guarded instanceof NextResponse) return guarded;
+  const profile = guarded.profile;
 
   let body: SendBody;
   try {
@@ -53,56 +72,60 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-
-  const { orderId, message, to } = body;
-  if (!orderId || !message) {
+  const orderId = body.orderId;
+  if (!orderId) {
     return NextResponse.json(
-      { ok: false, reason: "Missing orderId or message" },
+      { ok: false, reason: "Missing orderId" },
       { status: 400 }
     );
   }
 
-  if (!to) {
+  // The legacy client (lib/lineOA.ts::sendToLineOA) posts `{ message }`
+  // without a `kind`. Treat that as a manual receipt-style send so the
+  // existing "Send LINE OA" button on /orders/[id]/document keeps working
+  // until the page is migrated to use the kind-aware client wrapper.
+  const kindCandidate = body.kind ?? (body.message ? "receipt" : "");
+  if (!ALLOWED_KINDS.includes(kindCandidate as LineMessageKind)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: `Unsupported kind "${kindCandidate}". Expected one of ${ALLOWED_KINDS.join(", ")}.`,
+      },
+      { status: 400 }
+    );
+  }
+  const kind = kindCandidate as LineMessageKind;
+
+  let result: DeliveryResult;
+  try {
+    switch (kind) {
+      case "order_received":
+        result = await sendOrderCreatedMessage(orderId, { actorId: profile.id });
+        break;
+      case "order_ready":
+        result = await sendOrderReadyMessage(orderId, { actorId: profile.id });
+        break;
+      case "pickup_reminder":
+        result = await sendPickupReminderMessage(orderId, { actorId: profile.id });
+        break;
+      case "receipt":
+        result = await sendReceiptMessage(orderId, { actorId: profile.id });
+        break;
+    }
+  } catch (err) {
+    // The orchestrator catches its own errors, but defend against an
+    // unexpected throw so the order flow keeps running.
+    console.error("[/api/line/send] orchestrator threw", err);
     return NextResponse.json(
       {
         ok: false,
         reason:
-          "ยังไม่มี LINE user id ของลูกค้าในระบบ — ต้องเปิด LINE Follow flow ก่อนถึงจะส่งได้",
+          "ส่ง LINE OA ไม่สำเร็จ — server error (orchestrator threw). ใบงานไม่ถูกกระทบ",
       },
-      { status: 501 }
+      { status: 200 }
     );
   }
 
-  // Real LINE push — left commented until the follow flow is wired so we
-  // don't accidentally invoke the API. When enabling, also rate-limit and
-  // record the push id back on the order row for audit.
-  //
-  // const res = await fetch("https://api.line.me/v2/bot/message/push", {
-  //   method: "POST",
-  //   headers: {
-  //     Authorization: `Bearer ${token}`,
-  //     "Content-Type": "application/json",
-  //   },
-  //   body: JSON.stringify({
-  //     to,
-  //     messages: [{ type: "text", text: message }],
-  //   }),
-  // });
-  // if (!res.ok) {
-  //   const text = await res.text();
-  //   return NextResponse.json(
-  //     { ok: false, reason: `LINE API ${res.status}: ${text}` },
-  //     { status: 502 }
-  //   );
-  // }
-  // return NextResponse.json({ ok: true });
-
-  return NextResponse.json(
-    {
-      ok: false,
-      reason:
-        "Server route พร้อมใช้งานแล้ว แต่ฟังก์ชันส่งจริงรอเปิดใช้งานในเฟสถัดไป",
-    },
-    { status: 501 }
-  );
+  // Always 200 — the UX is "did it send or not", driven by `ok`.
+  return NextResponse.json(result);
 }

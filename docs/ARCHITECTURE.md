@@ -187,6 +187,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260524_technician_foundation.sql` | `technician_profiles` table + RLS; orders `assigned_technician_id` / `assigned_at` / `production_value` / `assignment_notes`; `touch_assignment` trigger; `technician_daily_kpi` view |
 | `20260525_payroll_foundation.sql` | `current_user_branch_id()` helper; `expenses` standardised (`created_by_uuid`, `updated_at`, `updated_by`, triggers) + RLS; `payroll_periods` + `technician_payroll_items` tables; `branch_monthly_profit` view; RLS on all new objects |
 | `20260526_operational_hardening.sql` | `sync_failures` durable queue + RLS; `expense_audit_log` + trigger; `order_audit_log.action` enum extended (+ assigned, receipt_regenerated, sync_failed); `orders` NOT VALID CHECK constraints (status / payment_status / quantity / non-negative numerics); `validate_order_assignment` trigger (rejects inactive-tech + cross-branch); search indexes (orders.customer_name lower, orders(branch_id,status,created_at desc), pg_trgm GIN on customers.name + normalized_name) |
+| `20260527_line_oa_foundation.sql` | `customer_line_links` (line_user_id ↔ customer_id + per-kind prefs + consent); `line_message_log` (every send attempt); `branch_line_configs` (per-branch channel token, env fallback); RLS on all three |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -340,20 +341,88 @@ The printer page-size swap happens in [`app/globals.css`](../app/globals.css) vi
 
 ---
 
-## 12. LINE OA integration preparation
+## 12. LINE OA integration (MVP)
 
-Status: **stubbed**. The route handler at `/app/api/line/send/route.ts` and the client helper `lib/lineOA.ts` are wired but inert until these env vars are set:
+Status: **MVP foundation live** as of `20260527_line_oa_foundation.sql`. Four message kinds wired end-to-end. Customer-facing webhook (LINE follow flow that populates `customer_line_links`) is the next phase — until it lands, admins seed links via SQL or the upcoming `/admin/customer-line` UI.
+
+### 12.1 Layered architecture
 
 ```
-LINE_CHANNEL_ACCESS_TOKEN
-LINE_CHANNEL_SECRET
-LINE_OA_ID
+┌────────────────────────────────────────────────────────────┐
+│  Browser: /orders/[id]/document or /admin/* (future)       │
+│    • sendLineMessage(kind, orderId)   (typed)              │
+│    • sendToLineOA(orderId, message)   (legacy free-form)   │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  POST /api/line/send                                       │
+│    • requireRole(['owner','hq_admin','branch_manager',     │
+│                   'front_staff'])                          │
+│    • Returns 200 always; { ok, status, reason } shape      │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  lib/lineDelivery.ts          (orchestrator)               │
+│    sendOrderCreatedMessage / sendOrderReadyMessage /       │
+│    sendPickupReminderMessage / sendReceiptMessage          │
+│    • Loads order + customer + branch via service role      │
+│    • Resolves customer LINE link + prefs                   │
+│    • Resolves channel config (DB → env fallback)           │
+│    • Builds text via lib/lineMessageBuilders               │
+│    • Pushes via lib/lineMessaging.pushTextMessage          │
+│    • Writes one row to line_message_log regardless         │
+│      of outcome (sent / failed / skipped)                  │
+│    • Failures also reach lib/syncFailures.logSyncFailure   │
+└──────┬──────────┬──────────────────┬───────────────────────┘
+       ▼          ▼                  ▼
+   ┌─────────┐ ┌──────────┐ ┌──────────────────────┐
+   │ Builder │ │  Config  │ │  Messaging client    │
+   │ (pure)  │ │ resolver │ │  (LINE push API)     │
+   └─────────┘ └──────────┘ └──────────────────────┘
 ```
 
-Future flow:
-1. Order created → "Send to LINE OA" button on document page.
-2. Server: push a Flex/Text message to the customer's LINE userId (looked up by phone or stored on the customer row).
-3. Audit: write `order_audit_log` row with `action='sync_pushed'`, `after_value='line_oa'`.
+### 12.2 Data model
+
+| Table | Purpose | Writes |
+|---|---|---|
+| `public.customer_line_links` | Customer ↔ LINE user mapping + per-kind opt-in prefs + consent / unsubscribe timestamps | Admin / future follow-webhook |
+| `public.line_message_log` | Every send attempt (sent / failed / skipped). Branch-tagged + role-scoped RLS | `lib/lineDelivery.ts` only |
+| `public.branch_line_configs` | Per-branch channel access token + auto-send toggles. Tokens are service-role-only-read | Admin via SQL until a future UI |
+
+### 12.3 Channel resolution
+`lib/lineConfig.ts::resolveLineChannelConfig(branchUuid)`:
+1. If the branch has a `branch_line_configs` row with a non-null `channel_access_token` → use that.
+2. Otherwise fall back to env vars (`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` / `LINE_OA_ID`).
+3. If neither → returns null → orchestrator records `status='skipped'` with reason.
+
+This makes the platform franchise-ready: a new franchise plugs in their own LINE OA by inserting one row; until they do, they share the HQ default channel.
+
+### 12.4 Failure handling
+- LINE failure NEVER blocks the calling flow. `/api/line/send` always returns 200; the UI inspects `result.ok`.
+- Every attempt — including skips — writes a row to `line_message_log` so admins can see "why didn't this customer get a message?".
+- Push HTTP failures also reach `lib/syncFailures.ts::logSyncFailure`, which double-writes to `public.sync_failures` for the future retry worker.
+
+### 12.5 Permissions
+- Trigger send: `owner`, `hq_admin`, `branch_manager`, `front_staff`. `technician` cannot.
+- Read `line_message_log`: `owner` / `hq_admin` see all; `branch_manager` sees own-branch rows; everyone else denied.
+- Read `customer_line_links`: `owner` / `hq_admin` full; `branch_manager` / `front_staff` can read links for customers in their branch; everyone else denied.
+- `branch_line_configs.channel_access_token` is never readable by any authenticated client — service-role only.
+
+### 12.6 Future expansion path
+| Step | What |
+|---|---|
+| LINE follow webhook | Customer scans the OA QR; server captures `line_user_id`; new row in `customer_line_links` with `consented_at = now()`. |
+| Auto-send | Flip `branch_line_configs.auto_send_*` flags; the existing orchestrator is called from the order-create / status-change flow instead of the manual button. |
+| Image / Flex receipt | Replace `pushTextMessage` with a Flex Message variant in `lib/lineMessaging.ts`; reuse `lib/printService.saveReceiptAsImage` to host the JPG and link it. |
+| Broadcast / segmentation | Out of MVP scope. New `line_broadcast_jobs` table reads `customer_line_links` with a segment filter. |
+
+### 12.7 Env vars
+```
+LINE_CHANNEL_ACCESS_TOKEN  # global / HQ-default OA push token
+LINE_CHANNEL_SECRET        # webhook signature verify (future)
+LINE_OA_ID                 # friend / Basic ID for deep links
+```
+Per-branch overrides go in `public.branch_line_configs` and take precedence.
 
 ---
 
@@ -503,7 +572,12 @@ lib/
 ├── auditService.ts   ← unified recordAudit(domain, action, target, …)
 ├── validation.ts     ← validateOrderInput / Expense / Pricing / BranchAssignment / TechnicianAssignment
 ├── recoveryService.ts ← listFailedSyncs / markSyncResolved / resyncOrderToSheet / rebuildReceiptData
-└── syncFailures.ts   ← console.error + fire-and-forget public.sync_failures persist
+├── syncFailures.ts   ← console.error + fire-and-forget public.sync_failures persist
+├── lineConfig.ts     ← per-branch channel token resolver (DB → env fallback)
+├── lineMessaging.ts  ← server-only LINE Messaging API push client
+├── lineMessageBuilders.ts ← pure Thai-text builders for 4 message kinds
+├── lineDelivery.ts   ← orchestrator: send + log + per-customer prefs
+└── lineOA.ts         ← browser-side wrappers (sendLineMessage + legacy sendToLineOA)
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
