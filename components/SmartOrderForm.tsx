@@ -16,10 +16,11 @@ import {
   CUSTOMER_TYPES,
   URGENT_MODIFIERS,
   computeDiscount,
-  getServiceByCode,
   getPromotionByCode,
   type ServiceCategoryKey,
+  type ServiceItem,
 } from "@/lib/pricing";
+import { fetchPricingCatalog } from "@/lib/pricingDb";
 import { createSmartOrder } from "@/lib/orderCreate";
 import { normalizePhone } from "@/lib/phone";
 
@@ -102,6 +103,10 @@ export function SmartOrderForm({
   // ---- UI state ----------------------------------------------------------
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Live service catalog — fetched from service_prices with hardcoded fallback.
+  // Initialised to SERVICES so the form is usable on the very first render
+  // before the network call returns.
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceItem[]>(SERVICES);
 
   // ---- Data fetch --------------------------------------------------------
   const fetchCustomers = useCallback(async () => {
@@ -122,6 +127,22 @@ export function SmartOrderForm({
   useEffect(() => {
     void fetchCustomers();
   }, [fetchCustomers]);
+
+  // Pricing catalog — fetch once on mount, biased by the active branch so
+  // branch-specific overrides win. Failures fall back silently to the
+  // hardcoded SERVICES already loaded into state.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetchPricingCatalog({ branchId: branch.id });
+      if (!cancelled && res.services.length > 0) {
+        setServiceCatalog(res.services);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branch.id]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId) ?? null,
@@ -159,8 +180,8 @@ export function SmartOrderForm({
 
   // Auto-fill template + price when a service is selected
   const selectedService = useMemo(
-    () => getServiceByCode(serviceCode),
-    [serviceCode]
+    () => serviceCatalog.find((s) => s.code === serviceCode),
+    [serviceCatalog, serviceCode]
   );
 
   useEffect(() => {
@@ -175,12 +196,16 @@ export function SmartOrderForm({
           : String(selectedService.basePrice)
       );
     }
+    if (selectedService.urgentFeeDefault && selectedService.urgentFeeDefault > 0) {
+      setUrgentFee(String(selectedService.urgentFeeDefault));
+    }
   }, [selectedService, templateTouched, unitPriceTouched]);
 
   // ---- Derived totals ----------------------------------------------------
   const filteredServices = useMemo(
-    () => SERVICES.filter((s) => !category || s.category === category),
-    [category]
+    () =>
+      serviceCatalog.filter((s) => !category || s.category === category),
+    [serviceCatalog, category]
   );
 
   const unitPrice = Math.max(0, Number(unitPriceInput) || 0);

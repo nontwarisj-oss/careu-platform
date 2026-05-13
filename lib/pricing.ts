@@ -43,6 +43,8 @@ export type ServiceItem = {
   templateTh: string;
   templateEn?: string;
   isSpecial?: boolean;
+  /** Default urgent surcharge applied when the staff toggles "งานด่วน". */
+  urgentFeeDefault?: number;
 };
 
 export const SERVICES: ServiceItem[] = [

@@ -27,7 +27,8 @@ export type PageKey =
   | "orders"
   | "invoices"
   | "expenses"
-  | "reports";
+  | "reports"
+  | "pricing";
 
 export type RoleDefinition = {
   role: Role;
@@ -93,6 +94,7 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
       "invoices",
       "expenses",
       "reports",
+      "pricing",
     ],
     allBranches: false,
     seesFinancials: true,
