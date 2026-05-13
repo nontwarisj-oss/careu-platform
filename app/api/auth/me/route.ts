@@ -10,6 +10,10 @@ import {
 import { isLineLoginConfigured } from "@/lib/lineLogin";
 import supabase from "@/lib/supabase";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  isSupabaseJwtConfigured,
+  mintSupabaseJwt,
+} from "@/lib/supabaseJwt";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,6 +21,7 @@ export const runtime = "nodejs";
 export async function GET() {
   const sessionConfigured = isSessionConfigured();
   const lineConfigured = isLineLoginConfigured();
+  const jwtBridgeConfigured = isSupabaseJwtConfigured();
   // Strict mode kicks in once the operator has done both: set SESSION_SECRET
   // and wired LINE Login. Until then the platform behaves as before (preview
   // mode, role/branch from localStorage).
@@ -28,6 +33,7 @@ export async function GET() {
       authRequired,
       sessionConfigured,
       lineConfigured,
+      jwtBridgeConfigured,
       session: null,
     });
   }
@@ -48,6 +54,7 @@ export async function GET() {
       authRequired,
       sessionConfigured,
       lineConfigured,
+      jwtBridgeConfigured,
       session: null,
     });
   }
@@ -66,21 +73,36 @@ export async function GET() {
       authRequired,
       sessionConfigured,
       lineConfigured,
+      jwtBridgeConfigured,
       session: null,
       reason: "account_disabled",
     });
   }
 
+  // Mint a short-lived PostgREST-compatible JWT so the browser supabase
+  // client can satisfy RLS (auth.uid() = profiles.id). When the JWT secret
+  // is unset, supabaseAccessToken comes back null and queries run as anon —
+  // RLS-protected tables will return 0 rows, which is the correct (locked)
+  // behaviour until the operator configures the bridge.
+  const minted = mintSupabaseJwt({
+    profileId: user.id,
+    email: null,
+  });
+
   return NextResponse.json({
     authRequired,
     sessionConfigured,
     lineConfigured,
+    jwtBridgeConfigured,
     session: {
       uid: user.id,
       name: user.display_name,
       role: user.role ?? session.role,
       branchId: user.branch_id ?? session.branchId,
       pictureUrl: user.picture_url ?? null,
+      supabaseAccessToken: minted?.token ?? null,
+      supabaseExpiresAt: minted?.expiresAt ?? null,
+      supabaseExpiresIn: minted?.expiresIn ?? null,
     },
   });
 }

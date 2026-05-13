@@ -144,6 +144,14 @@ The platform was designed so that today's two branches can grow to N franchises 
 `careu_session = base64url(payload).base64url(HMAC-SHA256(payload, SESSION_SECRET))`
 Payload: `{ uid, sub, role, branchId, name, iat, exp }`. TTL 7 days.
 
+### 6.1b Supabase JWT bridge
+
+After login, `/api/auth/me` mints a **short-lived HS256 JWT** signed with `SUPABASE_JWT_SECRET` — the same secret PostgREST uses to validate session tokens. The browser's supabase client injects it as `Authorization: Bearer …` on every request via a `fetch` interceptor in [`lib/supabase.ts`](../lib/supabase.ts). PostgREST decodes the JWT → `auth.uid()` = `profiles.id` → the RLS policies in `20260522` apply.
+
+- TTL: 8 hours. `AuthProvider` schedules a proactive `/api/auth/me` refresh 5 minutes before expiry.
+- No matching `auth.users` row is created. PostgREST only validates the signature; it does not require an existing user row.
+- When `SUPABASE_JWT_SECRET` is unset, the JWT comes back null and the client runs as anon — RLS denies orders / customers reads (this is the locked state until the bridge is configured).
+
 ### 6.2 Strict vs preview mode
 
 The platform runs in two modes automatically:
@@ -174,6 +182,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260519_pricing_master.sql` | service_prices (versioned) |
 | `20260520_auth_audit.sql` | user identity columns, order_audit_log, orders.job_id (initial), system_settings |
 | `20260521_enterprise_foundation.sql` | branches, profiles, business_type, due_date, tech, customers extras, job_id_sequence, generate_ezy_job_id, scoped job_id index, RLS on new tables |
+| `20260522_auth_bridge_rls.sql` | helper functions `current_user_role()` + `current_user_branch_code()`; strict RLS on orders + customers; admin/branch read policies on profiles |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -329,7 +338,9 @@ lib/
 ├── session.ts        ← HMAC cookie codec
 ├── lineLogin.ts      ← LINE OAuth client
 ├── supabaseAdmin.ts  ← service-role client (server-only)
-├── supabase.ts       ← anon client (browser-safe)
+├── supabaseJwt.ts    ← HS256 bridge JWT minter (server-only)
+├── supabaseAuth.ts   ← getCurrentUser/Profile + requireRole/BranchAccess (server-only)
+├── supabase.ts       ← anon client with bridge-JWT fetch interceptor
 ├── roles.ts          ← 5-role taxonomy + legacy mapping
 ├── permissions.ts    ← capability helpers
 ├── orderCreate.ts    ← createSmartOrder with progressive schema fallback

@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -13,6 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { normalizeRole, type Role } from "@/lib/roles";
 import { useRole } from "@/lib/roleContext";
 import { useBranch } from "@/lib/branchContext";
+import { setBridgeJwt } from "@/lib/supabase";
 
 export type AuthUser = {
   uid: string;
@@ -26,6 +28,8 @@ export type AuthState = {
   authRequired: boolean;
   sessionConfigured: boolean;
   lineConfigured: boolean;
+  /** True when SUPABASE_JWT_SECRET is set — the bridge can mint JWTs. */
+  jwtBridgeConfigured: boolean;
   user: AuthUser | null;
   /** True until the first /me call lands. */
   isLoading: boolean;
@@ -45,14 +49,21 @@ type MeResponse = {
   authRequired: boolean;
   sessionConfigured: boolean;
   lineConfigured: boolean;
+  jwtBridgeConfigured?: boolean;
   session: {
     uid: string;
     name: string;
     role: string;
     branchId: string | null;
     pictureUrl: string | null;
+    supabaseAccessToken?: string | null;
+    supabaseExpiresAt?: number | null;
+    supabaseExpiresIn?: number | null;
   } | null;
 };
+
+/** Re-fetch /api/auth/me this many seconds before the JWT expires. */
+const JWT_REFRESH_LEAD_SECONDS = 5 * 60;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -64,15 +75,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authRequired: boolean;
     sessionConfigured: boolean;
     lineConfigured: boolean;
+    jwtBridgeConfigured: boolean;
     user: AuthUser | null;
     isLoading: boolean;
   }>({
     authRequired: false,
     sessionConfigured: false,
     lineConfigured: false,
+    jwtBridgeConfigured: false,
     user: null,
     isLoading: true,
   });
+
+  // Timer handle for the proactive JWT refresh — cleared on every refresh()
+  // so we never stack multiple timers.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -88,10 +105,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pictureUrl: json.session.pictureUrl,
           }
         : null;
+
+      // Install the bridge JWT into the supabase singleton so RLS-enabled
+      // tables (orders, customers post-20260522) see auth.uid().
+      const accessToken = json.session?.supabaseAccessToken ?? null;
+      setBridgeJwt(accessToken);
+
       setState({
         authRequired: json.authRequired,
         sessionConfigured: json.sessionConfigured,
         lineConfigured: json.lineConfigured,
+        jwtBridgeConfigured: json.jwtBridgeConfigured ?? false,
         user,
         isLoading: false,
       });
@@ -99,15 +123,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(user.role);
         if (user.branchId) setBranchId(user.branchId);
       }
+
+      // Schedule a proactive refresh so the JWT never silently expires
+      // while the user is mid-flow.
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      const expiresIn = json.session?.supabaseExpiresIn ?? null;
+      if (expiresIn && expiresIn > JWT_REFRESH_LEAD_SECONDS) {
+        const delayMs = (expiresIn - JWT_REFRESH_LEAD_SECONDS) * 1000;
+        refreshTimerRef.current = setTimeout(() => {
+          void refresh();
+        }, delayMs);
+      }
     } catch {
       // /me unreachable — stay in preview mode silently. AuthContext default
       // values keep the platform usable while the API recovers.
+      setBridgeJwt(null);
       setState((prev) => ({ ...prev, isLoading: false }));
     }
   }, [setRole, setBranchId]);
 
   useEffect(() => {
     void refresh();
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
   }, [refresh]);
 
   // Auth-required + no session → bounce to /login (except /login itself).
@@ -122,6 +167,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
+    setBridgeJwt(null);
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
     setState((prev) => ({ ...prev, user: null }));
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("careu.role");
@@ -134,6 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authRequired: state.authRequired,
       sessionConfigured: state.sessionConfigured,
       lineConfigured: state.lineConfigured,
+      jwtBridgeConfigured: state.jwtBridgeConfigured,
       user: state.user,
       isLoading: state.isLoading,
       isAuthenticated: state.authRequired && !!state.user,

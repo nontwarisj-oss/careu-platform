@@ -4,24 +4,24 @@
 
 ---
 
-## 1. Current state (as of commit 4805d3b)
+## 1. Current state (as of migration `20260522_auth_bridge_rls.sql`)
 
 | Table | RLS | Effective enforcement |
 |---|---|---|
 | `branches` | **ON** | Read-only for everyone; writes require service role. |
-| `profiles` | **ON** | Authenticated user can read their own row only; service role writes. |
+| `profiles` | **ON** | Self-read for the authenticated user + admin / branch policies in `20260522`. |
+| `orders` | **ON (strict)** | `orders_admin_full` (owner/hq_admin) + `orders_branch_scoped` (branch roles). |
+| `customers` | **ON (strict)** | `customers_admin_full` + `customers_branch_scoped`. |
 | `job_id_sequence` | **ON** | Service role only (no policies). |
 | `roles` | OFF | Reference data, no sensitive content. |
-| `orders` | **OFF (transitional)** | Strict policies in [§6](#6-next-phase-strict-policies-for-orders--customers) ship commented-out. |
-| `customers` | **OFF (transitional)** | Same. |
-| `expense_log` | OFF | Same. |
-| `service_prices` | OFF | Same. |
-| `order_audit_log` | OFF | Same. |
+| `expense_log` | OFF | Manager-only UI; RLS flip pairs with the next reports/dashboard pass. |
+| `service_prices` | OFF | Read-mostly catalog; RLS flip pairs with the pricing engine refactor. |
+| `order_audit_log` | OFF | Written by server routes via service role only. |
 | `users` (legacy) | OFF | Being phased out in favour of `profiles`. |
 
-**Why orders / customers are still RLS-off:** today's session layer is the LINE-cookie HMAC, not Supabase Auth, so `auth.uid()` is NULL inside Postgres and any policy that references it would deny every read. The strict policy SQL is staged in the migration. Once the LINE → Supabase Auth bridge ships, flip them in a one-line migration.
+**Auth bridge approach.** Today's session is still the HMAC-signed `careu_session` cookie. After every login `/api/auth/me` mints a **short-lived HS256 JWT** signed with `SUPABASE_JWT_SECRET` and the browser supabase client injects it as `Authorization: Bearer …` on every request. PostgREST decodes that JWT → `auth.uid()` = `profiles.id` → the policies below work.
 
-**This is the only sanctioned exception** to the "RLS always on" rule. It exists for one upgrade window and ends with the next auth migration.
+This means we did **not** create rows in `auth.users` — there is no parallel Supabase Auth user system, no magic-link redirect, no extra dependency. The JWT secret is the trust anchor.
 
 ---
 
@@ -41,17 +41,19 @@ Legacy codes (`CEO`, `AREA_MANAGER`, `BRANCH_MANAGER`, `FRONT_DESK`, `TECHNICIAN
 
 ---
 
-## 3. Helper functions (next-phase)
+## 3. Helper functions (live)
 
-These are declared in the migration but commented out. They MUST be created and made `SECURITY DEFINER` before any strict policy is enabled.
+Both are created by `20260522_auth_bridge_rls.sql`, are `SECURITY DEFINER`, and have a locked `search_path` so a caller cannot redirect them at a shadow table.
 
 ```sql
 create or replace function public.current_user_role() returns text
 language sql stable security definer
+set search_path = public, pg_temp
 as $$ select role from public.profiles where id = auth.uid() $$;
 
 create or replace function public.current_user_branch_code() returns text
 language sql stable security definer
+set search_path = public, pg_temp
 as $$
   select b.code from public.profiles p
   join public.branches b on b.id = p.branch_id
@@ -176,38 +178,48 @@ where p.id = auth.uid();
 
 ---
 
-## 6. Next-phase strict policies for orders + customers
+## 6. Live strict policies for orders + customers
 
-The full SQL below ships commented in `20260521_enterprise_foundation.sql`. Uncomment in the auth-bridge migration after switching the cookie session to Supabase Auth.
+These are applied by `20260522_auth_bridge_rls.sql` — exact text:
 
 ```sql
 alter table public.orders   enable row level security;
 alter table public.customers enable row level security;
 
-create policy orders_all_branches on public.orders
+create policy orders_admin_full on public.orders
   for all to authenticated
-  using (current_user_role() in ('owner','hq_admin'))
-  with check (current_user_role() in ('owner','hq_admin'));
+  using (public.current_user_role() in ('owner','hq_admin'))
+  with check (public.current_user_role() in ('owner','hq_admin'));
 
-create policy orders_own_branch on public.orders
+create policy orders_branch_scoped on public.orders
   for all to authenticated
-  using (current_user_role() in ('branch_manager','front_staff','technician')
-         and branch_id = current_user_branch_code())
-  with check (current_user_role() in ('branch_manager','front_staff','technician')
-         and branch_id = current_user_branch_code());
+  using (
+    public.current_user_role() in ('branch_manager','front_staff','technician')
+    and branch_id = public.current_user_branch_code()
+  )
+  with check (
+    public.current_user_role() in ('branch_manager','front_staff','technician')
+    and branch_id = public.current_user_branch_code()
+  );
 
-create policy customers_all_branches on public.customers
+create policy customers_admin_full on public.customers
   for all to authenticated
-  using (current_user_role() in ('owner','hq_admin'))
-  with check (current_user_role() in ('owner','hq_admin'));
+  using (public.current_user_role() in ('owner','hq_admin'))
+  with check (public.current_user_role() in ('owner','hq_admin'));
 
-create policy customers_own_branch on public.customers
+create policy customers_branch_scoped on public.customers
   for all to authenticated
-  using (current_user_role() in ('branch_manager','front_staff','technician')
-         and (branch_id = current_user_branch_code() or branch_id is null))
-  with check (current_user_role() in ('branch_manager','front_staff','technician')
-         and branch_id = current_user_branch_code());
+  using (
+    public.current_user_role() in ('branch_manager','front_staff','technician')
+    and (branch_id = public.current_user_branch_code() or branch_id is null)
+  )
+  with check (
+    public.current_user_role() in ('branch_manager','front_staff','technician')
+    and branch_id = public.current_user_branch_code()
+  );
 ```
+
+Server routes (e.g. `/api/auth/me`, `/api/sync-order-to-sheet`) bypass these policies because they use the service-role client.
 
 ---
 
@@ -243,4 +255,4 @@ Automate the above in a Vitest / Playwright suite (next phase).
 
 ---
 
-**Last updated:** 2026-05-13 (commit 4805d3b)
+**Last updated:** 2026-05-13 (migration 20260522_auth_bridge_rls.sql)
