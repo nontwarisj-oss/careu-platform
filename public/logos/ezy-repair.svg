@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Ezy Repair by Care U">
+  <circle cx="100" cy="100" r="100" fill="#0c5f31"/>
+  <circle cx="45" cy="85" r="40" fill="#1f8a4d" opacity="0.45"/>
+  <circle cx="160" cy="150" r="32" fill="#1f8a4d" opacity="0.45"/>
+  <g font-family="Arial, Helvetica, sans-serif" text-anchor="middle">
+    <text x="100" y="92" font-weight="800" font-size="46" fill="#ffffff">Ez<tspan fill="#f3d54c">y</tspan></text>
+    <text x="100" y="124" font-weight="700" font-size="22" fill="#f3d54c">Repair</text>
+    <text x="100" y="146" font-style="italic" font-size="12" fill="#ffffff">by Care U</text>
+  </g>
+</svg>

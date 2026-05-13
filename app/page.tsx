@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useLanguage } from "@/lib/languageContext";
+import { useBranch } from "@/lib/branchContext";
 import { t } from "@/lib/translations";
 import { StatCard } from "@/components/StatCard";
 import { Table } from "@/components/Table";
+import { BrandLogo } from "@/components/BrandLogo";
 import supabase from "@/lib/supabase";
 import Link from "next/link";
 
@@ -59,6 +61,7 @@ function isToday(iso: string): boolean {
 
 export default function Dashboard() {
   const { language } = useLanguage();
+  const { branch } = useBranch();
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -162,13 +165,29 @@ export default function Dashboard() {
   return (
     <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8 bg-gradient-to-br from-green-50/40 via-white to-yellow-50/40 min-h-screen">
       {/* Page Header */}
-      <div className="mb-6 md:mb-8 border-l-4 border-yellow-400 pl-4">
-        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
-          {t("dashboard.title", language)}
-        </h1>
-        <p className="text-gray-600 mt-1 text-sm md:text-base">
-          {t("dashboard.welcomeMessage", language)}
-        </p>
+      <div className="mb-6 md:mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-l-4 border-yellow-400 pl-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">
+            {branch.receiptName}
+          </p>
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-800">
+            {t("dashboard.title", language)}
+          </h1>
+          <p className="text-gray-600 mt-1 text-sm md:text-base">
+            {t("dashboard.welcomeMessage", language)}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 bg-white rounded-2xl border border-green-100 shadow-sm px-4 py-2">
+          <BrandLogo size="sm" variant="onLight" />
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-widest text-gray-500">
+              {language === "th" ? "สาขาปัจจุบัน" : "Current branch"}
+            </p>
+            <p className="text-sm font-semibold text-gray-800 truncate max-w-[200px]">
+              {branch.name}
+            </p>
+          </div>
+        </div>
       </div>
 
       {errorMessage && (

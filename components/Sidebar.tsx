@@ -4,93 +4,149 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLanguage } from "@/lib/languageContext";
-import { t, Language } from "@/lib/translations";
+import { useBranch } from "@/lib/branchContext";
+import { t } from "@/lib/translations";
+import { BrandLogo } from "@/components/BrandLogo";
+
+interface NavItem {
+  href: string;
+  label: string;
+  iconPath: string;
+}
+
+const ICON_PATHS = {
+  dashboard: "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z",
+  customers:
+    "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
+  orders:
+    "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z",
+  invoices:
+    "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
+};
+
+const Icon = ({ d }: { d: string }) => (
+  <svg
+    viewBox="0 0 24 24"
+    className="w-5 h-5"
+    fill="currentColor"
+    aria-hidden
+  >
+    <path d={d} />
+  </svg>
+);
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const { language, setLanguage } = useLanguage();
+  const { branch, setBranchId, branches } = useBranch();
   const [isOpen, setIsOpen] = useState(false);
 
-  const navItems = [
-    { href: "/", label: t("nav.dashboard", language), icon: "📊" },
-    { href: "/customers", label: t("nav.customers", language), icon: "👥" },
-    { href: "/orders", label: t("nav.orders", language), icon: "🔧" },
-    { href: "/invoices", label: t("nav.invoices", language), icon: "📄" },
+  const navItems: NavItem[] = [
+    { href: "/", label: t("nav.dashboard", language), iconPath: ICON_PATHS.dashboard },
+    { href: "/customers", label: t("nav.customers", language), iconPath: ICON_PATHS.customers },
+    { href: "/orders", label: t("nav.orders", language), iconPath: ICON_PATHS.orders },
+    { href: "/invoices", label: t("nav.invoices", language), iconPath: ICON_PATHS.invoices },
   ];
 
-  const isActive = (href: string) => {
-    if (href === "/") return pathname === "/";
-    return pathname.startsWith(href);
-  };
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
     <>
       {/* Mobile Menu Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="md:hidden fixed top-4 left-4 z-40 p-2 bg-blue-600 text-white rounded-lg"
+        className="md:hidden fixed top-4 left-4 z-40 p-2.5 bg-green-700 text-white rounded-lg shadow-lg ring-1 ring-white/10"
+        aria-label="menu"
       >
         {isOpen ? "✕" : "☰"}
       </button>
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:relative h-screen w-64 bg-gradient-to-b from-blue-600 to-blue-800 text-white transition-transform duration-300 z-30 ${
+        className={`fixed md:relative h-screen w-64 bg-gradient-to-b from-green-800 via-green-800 to-green-950 text-white shadow-xl transition-transform duration-300 z-30 ${
           isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        }`}
+        } flex flex-col`}
       >
-        <div className="p-6">
-          <h1 className="text-2xl font-bold">CareU</h1>
-          <p className="text-blue-100 text-sm mt-1">ระบบจัดการร้านซ่อม</p>
+        {/* Brand */}
+        <div className="px-5 py-6 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <BrandLogo size="md" variant="onColor" />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-yellow-300/90 font-semibold">
+                CareU OPS
+              </p>
+              <h1 className="text-base font-bold leading-tight truncate">
+                {branch.shortName}
+              </h1>
+            </div>
+          </div>
+
+          {/* Branch selector */}
+          <div className="mt-4">
+            <label className="block text-[10px] uppercase tracking-widest text-white/60 mb-1.5">
+              {language === "th" ? "สาขา" : "Branch"}
+            </label>
+            <select
+              value={branch.id}
+              onChange={(e) => setBranchId(e.target.value)}
+              className="w-full rounded-lg bg-green-950/50 text-white text-sm py-2 px-3 border border-white/15 focus:outline-none focus:ring-2 focus:ring-yellow-300"
+              aria-label={language === "th" ? "เลือกสาขา" : "Select branch"}
+            >
+              {branches.map((b) => (
+                <option key={b.id} value={b.id} className="text-gray-800">
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* Navigation */}
-        <nav className="px-3 py-6 space-y-2">
+        <nav className="px-3 py-5 space-y-1 flex-1">
           {navItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               onClick={() => setIsOpen(false)}
-              className={`block px-4 py-3 rounded-lg transition-colors ${
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors border-l-4 ${
                 isActive(item.href)
-                  ? "bg-blue-400 font-semibold"
-                  : "hover:bg-blue-500"
+                  ? "bg-white/15 border-yellow-300 font-semibold"
+                  : "border-transparent hover:bg-white/10"
               }`}
             >
-              <span className="mr-3">{item.icon}</span>
-              {item.label}
+              <Icon d={item.iconPath} />
+              <span className="text-sm">{item.label}</span>
             </Link>
           ))}
         </nav>
 
         {/* Language Selector */}
-        <div className="absolute bottom-8 left-0 right-0 px-6">
-          <div className="bg-blue-500 rounded-lg p-3">
-            <p className="text-xs font-semibold mb-2 opacity-75">
-              {language === "th" ? "ภาษา" : "Language"}
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setLanguage("th")}
-                className={`flex-1 py-1 px-2 rounded text-xs font-medium transition ${
-                  language === "th"
-                    ? "bg-white text-blue-600"
-                    : "bg-blue-400 text-white hover:bg-blue-300"
-                }`}
-              >
-                ไทย
-              </button>
-              <button
-                onClick={() => setLanguage("en")}
-                className={`flex-1 py-1 px-2 rounded text-xs font-medium transition ${
-                  language === "en"
-                    ? "bg-white text-blue-600"
-                    : "bg-blue-400 text-white hover:bg-blue-300"
-                }`}
-              >
-                EN
-              </button>
-            </div>
+        <div className="p-5 border-t border-white/10">
+          <p className="text-[10px] uppercase tracking-widest text-white/60 mb-2">
+            {language === "th" ? "ภาษา" : "Language"}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setLanguage("th")}
+              className={`flex-1 py-1.5 rounded text-xs font-semibold transition ${
+                language === "th"
+                  ? "bg-yellow-300 text-green-900"
+                  : "bg-white/10 hover:bg-white/20"
+              }`}
+            >
+              ไทย
+            </button>
+            <button
+              onClick={() => setLanguage("en")}
+              className={`flex-1 py-1.5 rounded text-xs font-semibold transition ${
+                language === "en"
+                  ? "bg-yellow-300 text-green-900"
+                  : "bg-white/10 hover:bg-white/20"
+              }`}
+            >
+              EN
+            </button>
           </div>
         </div>
       </aside>

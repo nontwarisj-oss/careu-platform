@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
+import { useBranch } from "@/lib/branchContext";
+import { BrandLogo } from "@/components/BrandLogo";
 
 type InvoiceRow = {
   id: string;
@@ -32,8 +34,6 @@ function getTotal(inv: InvoiceRow): number {
   return getSubtotal(inv) - getDiscount(inv) + getUrgentFee(inv);
 }
 
-const SLOGAN_TH = "แคร์ยู ดูแลเสื้อผ้าคุณด้วยใจ";
-
 const statusLabelsTh: Record<string, string> = {
   pending: "รอดำเนิน",
   "in-progress": "กำลังซ่อม",
@@ -48,29 +48,8 @@ const statusColors: Record<string, string> = {
   "ready-for-pickup": "bg-purple-100 text-purple-800 border-purple-300",
 };
 
-// Logo: tries /public/logo.png; falls back to "CareU" text if missing.
-// Drop a logo.png in /public to enable the image version — no other code change needed.
-function Logo() {
-  const [imageFailed, setImageFailed] = useState(false);
-  if (imageFailed) {
-    return (
-      <span className="text-2xl font-extrabold tracking-tight text-white">
-        Care<span className="text-yellow-300">U</span>
-      </span>
-    );
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src="/logo.png"
-      alt="CareU"
-      className="h-10 w-auto"
-      onError={() => setImageFailed(true)}
-    />
-  );
-}
-
 export default function InvoicesPage() {
+  const { branch } = useBranch();
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -116,9 +95,12 @@ export default function InvoicesPage() {
 
   return (
     <div className="flex-1 p-4 md:p-8 pt-20 md:pt-8">
-      <h1 className="text-3xl md:text-4xl font-bold text-gray-800 mb-6">
-        ใบเสร็จ
-      </h1>
+      <div className="mb-6 border-l-4 border-yellow-400 pl-4">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">
+          {branch.receiptName}
+        </p>
+        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">ใบเสร็จ</h1>
+      </div>
 
       {errorMessage && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -142,10 +124,25 @@ export default function InvoicesPage() {
               data-receipt-id={inv.id}
               className="bg-white rounded-2xl shadow-md border border-green-100 overflow-hidden"
             >
-              {/* Brand header */}
-              <div className="bg-gradient-to-r from-green-700 to-green-600 px-6 py-4 flex items-center justify-between border-b-4 border-yellow-400">
-                <Logo />
-                <div className="text-right text-white">
+              {/* Brand header (accent gradient driven by branch) */}
+              <div
+                className={`bg-gradient-to-r ${branch.accentClass} px-6 py-4 flex items-center justify-between border-b-4 border-yellow-400 text-white`}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <BrandLogo size="md" variant="onColor" />
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-widest text-yellow-200/90 font-semibold">
+                      CareU OPS
+                    </p>
+                    <p className="text-base font-bold leading-tight truncate">
+                      {branch.receiptName}
+                    </p>
+                    <p className="text-[11px] text-white/80 truncate">
+                      {branch.address}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
                   <div className="text-[10px] uppercase tracking-widest opacity-90">
                     Receipt
                   </div>
@@ -242,10 +239,10 @@ export default function InvoicesPage() {
               {/* Thank-you footer */}
               <div className="bg-yellow-50 border-t border-yellow-200 px-6 py-4 text-center">
                 <p className="text-sm font-medium text-gray-700">
-                  ขอบคุณที่ใช้บริการ
+                  ขอบคุณที่ใช้บริการ {branch.receiptName}
                 </p>
                 <p className="text-xs text-green-700 mt-1 italic">
-                  {SLOGAN_TH}
+                  {branch.tagline}
                 </p>
               </div>
 
