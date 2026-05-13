@@ -625,4 +625,15 @@ supabase/migrations/
 
 ---
 
-**Last updated:** 2026-05-14 (operational UI polish phase — admin/staff foundation, shared status badges, grouped sidebar)
+## 17. Known operational risks
+
+See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity ratings, and production-readiness assessment from the operational testing phase. Key carry-forward risks:
+
+- Deploying with `SUPABASE_JWT_SECRET` unset silently empties every RLS-protected screen. A red banner (`components/AuthHealthBanner.tsx`) now warns operators, but the deploy checklist should still verify the secret is set before rollout.
+- A profile with `branch_id IS NULL` for a non-admin role shows the default branch label with a disabled select. Audit profile rows after promotion or harden the auth callback to reject null branch for branch-scoped roles.
+- `customers.total_orders / latest_service / customer_tier` columns exist but no writer maintains them. Either ship a trigger or stop reading them until the maintenance phase lands.
+- `sync_failures.kind` does not yet distinguish LINE pushes from Sheet syncs. A future retry worker must extend the CHECK constraint before consuming the queue.
+
+---
+
+**Last updated:** 2026-05-14 (operational testing + bug sweep — sync-order-to-sheet auth/RLS fix, line/send branch guard, JWT bridge warning banner)

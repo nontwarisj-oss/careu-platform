@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import { AuthHealthBanner } from "@/components/AuthHealthBanner";
 import { LanguageProvider } from "@/lib/languageContext";
 import { BranchProvider } from "@/lib/branchContext";
 import { RoleProvider } from "@/lib/roleContext";
@@ -37,6 +38,7 @@ export default function RootLayout({
           <RoleProvider>
             <BranchProvider>
               <AuthProvider>
+                <AuthHealthBanner />
                 <div className="flex min-h-screen">
                   <Sidebar />
                   <main className="flex-1 md:ml-0">{children}</main>

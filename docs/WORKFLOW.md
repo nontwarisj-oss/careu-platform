@@ -63,7 +63,8 @@
 
 ### 1.8 Google Sheet sync
 1. `SmartOrderForm` immediately POSTs `/api/sync-order-to-sheet` with the new order id (fire-and-forget — order creation never blocks on the sheet round-trip).
-2. The route handler calls `writeOrderRow` ([`lib/sheetWriters.ts`](../lib/sheetWriters.ts)) which routes through `insertFormattedRow` because Front_Desk has `preserveFormatting: true` in [`SHEET_CONFIGS`](../lib/sheetConfigs.ts). The exact A–O column mapping lives in [GOOGLE_SHEET_SYNC.md](./GOOGLE_SHEET_SYNC.md) — dropdowns / checkboxes / borders are preserved.
+2. The route requires an authenticated session (`requireRole` for any of owner / hq_admin / branch_manager / front_staff / technician), reads the order via the service-role client, and **re-verifies branch ownership** with `requireBranchAccess(order.branch_id)`. Branch-scoped roles cannot sync orders that belong to other branches.
+3. The route handler calls `writeOrderRow` ([`lib/sheetWriters.ts`](../lib/sheetWriters.ts)) which routes through `insertFormattedRow` because Front_Desk has `preserveFormatting: true` in [`SHEET_CONFIGS`](../lib/sheetConfigs.ts). The exact A–O column mapping lives in [GOOGLE_SHEET_SYNC.md](./GOOGLE_SHEET_SYNC.md) — dropdowns / checkboxes / borders are preserved.
 3. On success: row appended, `order_audit_log(action='sync_pushed')` written by the document page when staff hits the retry button.
 4. On failure: `logSyncFailure` (`lib/syncFailures.ts`) emits a parseable `[sync-failure]` log line in the Vercel function log; the route returns 502 with the reason; the frontend remains uninterrupted.
 5. The document page shows a **sync status pill** (รอซิงค์ / กำลังซิงค์ / ซิงค์แล้ว / ล้มเหลว) + retry button. The retry button re-POSTs the same route.
@@ -478,7 +479,7 @@ Four customer-facing message kinds, all triggered manually from the staff UI in 
 
 Flow:
 1. Browser calls `sendLineMessage(kind, orderId)` from [`lib/lineOA.ts`](../lib/lineOA.ts).
-2. `POST /api/line/send` re-checks role (owner / hq_admin / branch_manager / front_staff).
+2. `POST /api/line/send` re-checks role (owner / hq_admin / branch_manager / front_staff) **AND** re-checks branch ownership: it loads `orders.branch_id` via the service-role client and calls `requireBranchAccess(branch)` before invoking the orchestrator. Branch-scoped roles cannot trigger LINE sends for foreign-branch orders.
 3. Orchestrator in [`lib/lineDelivery.ts`](../lib/lineDelivery.ts):
    - Loads order + customer + branch via service role.
    - Looks up `customer_line_links` for the customer. **No link → skip** (logged).

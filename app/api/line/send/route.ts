@@ -24,7 +24,8 @@
 // friendly toast.
 
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/supabaseAuth";
+import { requireBranchAccess, requireRole } from "@/lib/supabaseAuth";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import {
   sendOrderCreatedMessage,
   sendOrderReadyMessage,
@@ -95,6 +96,27 @@ export async function POST(req: Request) {
     );
   }
   const kind = kindCandidate as LineMessageKind;
+
+  // Branch ownership: the orchestrator below reads the order via the
+  // service-role client (which bypasses RLS), so without this re-check a
+  // branch-scoped role could trigger a LINE send for another branch's
+  // order. Owner / hq_admin pass through automatically.
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    const orderRes = await admin
+      .from("orders")
+      .select("branch_id")
+      .eq("id", orderId)
+      .maybeSingle();
+    const orderBranchCode =
+      orderRes.data && typeof (orderRes.data as { branch_id?: unknown }).branch_id === "string"
+        ? ((orderRes.data as { branch_id: string }).branch_id)
+        : null;
+    if (orderBranchCode) {
+      const branchGuard = await requireBranchAccess(orderBranchCode);
+      if (branchGuard instanceof NextResponse) return branchGuard;
+    }
+  }
 
   let result: DeliveryResult;
   try {

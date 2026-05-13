@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import supabase from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { requireBranchAccess, requireRole } from "@/lib/supabaseAuth";
 import { readGoogleSheetsConfig } from "@/lib/googleSheets";
 import { writeOrderRow } from "@/lib/sheetWriters";
 import { logSyncFailure } from "@/lib/syncFailures";
@@ -27,6 +28,19 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export async function POST(req: Request) {
+  // Require an authenticated session before reading any order. Technicians
+  // sync their own orders from the document page, so they're in the allow-
+  // list. Branch enforcement happens further down once we know the order's
+  // branch_id.
+  const guarded = await requireRole([
+    "owner",
+    "hq_admin",
+    "branch_manager",
+    "front_staff",
+    "technician",
+  ]);
+  if (guarded instanceof NextResponse) return guarded;
+
   let body: { orderId?: string };
   try {
     body = (await req.json()) as { orderId?: string };
@@ -66,11 +80,27 @@ export async function POST(req: Request) {
     );
   }
 
+  // Use the service-role client for the DB read. The browser-side anon client
+  // would run as `anon` in this Node context (no bridge JWT is injected
+  // server-side), and after the strict RLS migration that means 0 rows. We
+  // re-verify branch ownership explicitly below via requireBranchAccess.
+  const admin = getSupabaseAdmin();
+  if (!admin) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason:
+          "SUPABASE_SERVICE_ROLE_KEY ยังไม่ได้ตั้งค่า — sync ใช้งานไม่ได้",
+      },
+      { status: 503 }
+    );
+  }
+
   // Fetch the order with the widest column set; fall back if any column is
   // missing so a partially-migrated DB still syncs the basics.
   const wideCols =
     "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status";
-  const orderRes = await supabase
+  const orderRes = await admin
     .from("orders")
     .select(wideCols)
     .eq("id", orderId)
@@ -80,10 +110,10 @@ export async function POST(req: Request) {
   if (!orderRes.error && orderRes.data) {
     raw = orderRes.data as unknown as Record<string, unknown>;
   } else {
-    const narrow = await supabase
+    const narrow = await admin
       .from("orders")
       .select(
-        "id, customer_id, customer_name, item_name, price, status, created_at"
+        "id, customer_id, customer_name, item_name, price, status, created_at, branch_id"
       )
       .eq("id", orderId)
       .maybeSingle();
@@ -99,10 +129,20 @@ export async function POST(req: Request) {
     );
   }
 
+  // Branch ownership: owner / hq_admin always pass; branch-scoped roles must
+  // own the order's branch. The service-role read above bypassed RLS, so this
+  // check is the only enforcement.
+  const orderBranchCode =
+    typeof raw.branch_id === "string" ? raw.branch_id : null;
+  if (orderBranchCode) {
+    const branchGuard = await requireBranchAccess(orderBranchCode);
+    if (branchGuard instanceof NextResponse) return branchGuard;
+  }
+
   // Pull the customer phone if we have a customer_id; missing customer is fine.
   let customerPhone: string | null = null;
   if (raw.customer_id) {
-    const cust = await supabase
+    const cust = await admin
       .from("customers")
       .select("phone")
       .eq("id", raw.customer_id as string)
