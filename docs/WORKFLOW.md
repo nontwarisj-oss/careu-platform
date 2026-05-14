@@ -593,6 +593,44 @@ The orchestrator in `lib/lineDelivery.ts` looks up by `customer_id`, so an unmap
 - Permanently-failed count (sync_failures `status='dead'`).
 - The full per-kind policy table (kind → autoRetry / maxAttempts / cooldown / reason).
 
+### 9c.5d Customer linker + reconcile (post-`20260530`)
+
+> Status: **foundation live**. See [CUSTOMER_IDENTITY.md](./CUSTOMER_IDENTITY.md) for the full identity model.
+
+#### 9c.5d.1 Customer ↔ LINE linker
+
+`/admin/customer-line` (owner / hq_admin) surfaces every `customer_line_links` row the webhook captured with `customer_id=NULL`. Two tabs:
+
+- **Unmatched** — un-linked + un-ignored rows. Click "จับคู่" → modal with recent follow events + suggested customers (phone exact match → name match → recently active). Score + reason visible per suggestion.
+- **Linked** — paired rows. Click "ดู" to review; "ถอนการผูก" resets `customer_id=NULL` while preserving the follow audit.
+
+API surface (owner / hq_admin only):
+- `POST /api/admin/customer-line/link` — body `{ linkId, customerId }`. Idempotent on no-op rebind.
+- `POST /api/admin/customer-line/unlink` — body `{ linkId }`. Idempotent on already-unlinked.
+- `POST /api/admin/customer-line/ignore` — body `{ linkId }`. Hides the row from the unmatched view; linking automatically clears it.
+
+Matching helpers in [`lib/customerMatching.ts`](../lib/customerMatching.ts) (`findCustomerByPhone`, `findCustomersByNormalizedName`, `findRecentlyActiveCustomers`, `suggestLikelyCustomerMatches`) are reusable from any caller (server route, future CRM automation) — they all take an explicit Supabase client so RLS scoping is honest.
+
+#### 9c.5d.2 Reconcile job
+
+`/admin/recovery` → "Reconcile" tab. `POST /api/admin/reconcile/run` (owner / hq_admin / branch_manager — branch_manager scoped to their own branch) calls [`lib/reconcile.ts::runReconcileTick`](../lib/reconcile.ts), which performs three checks in one pass and enqueues mismatches into `sync_failures`:
+
+| Check | What | Auto-retry? |
+|---|---|---|
+| Orders vs Sheet | Order in DB but no Front_Desk!B row for its Job ID | ✅ `reconcile_missing_sheet` → worker calls `syncOrderToSheetCore` (dedup ensures no dup rows) |
+| Duplicate Sheet rows | Front_Desk!B has the same Job ID more than once | ❌ `reconcile_duplicate_sheet` — admin picks the canonical row |
+| Orphan LINE links | `customer_line_links` unlinked + un-ignored 7+ days | ❌ `reconcile_orphan_link` — admin pairs in linker UI |
+
+**Idempotency.** Re-running reconcile is safe — it checks for an open `sync_failures` row with the same `(kind, target_id)` before enqueuing. Existing mismatches don't get duplicated.
+
+**Reuse rationale.** Reconcile mismatches go into `sync_failures` so the existing recovery UI handles them. Trade-off is semantic; if reconcile complexity grows beyond a CHECK constraint can capture, a dedicated table is a future migration.
+
+**Heartbeat.** Every invocation writes a `public.reconcile_runs` row — `/admin/recovery` shows "Last reconcile: 12m ago • 3 mismatches".
+
+#### 9c.5d.3 Identity rules in one paragraph
+
+Phone is the canonical join key (normalized via `lib/phone.ts`). One LINE user → at most one active customer link (unique DB index). The webhook captures every follow with `customer_id=NULL` and `consented_at` set; an admin pairs the LINE user with a real customer in the linker UI. Until linkage, no message is ever sent to that LINE user — the orchestrator looks up by `customer_id` and finds nothing. After 7 days a still-unlinked row becomes a `reconcile_orphan_link` mismatch so it stays on the admin's radar.
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.

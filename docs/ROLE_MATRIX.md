@@ -69,6 +69,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **LINE follow webhook `/api/line/webhook`** | ⚠ machine-only (LINE platform; verified by HMAC over LINE_CHANNEL_SECRET) | same | same | same | same |
 | **`worker_runs` read** | ✅ all branches | ✅ all branches | ❌ (admin-only RLS policy) | ❌ | ❌ |
 | **`line_follow_events` read** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/customer-line` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Link / unlink / ignore LINE follower (`/api/admin/customer-line/*`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Run reconcile (`/api/admin/reconcile/run`)** | ✅ any/all branches | ✅ any/all branches | ✅ 🏢 (branchCode forced to own) | ❌ | ❌ |
+| **`reconcile_runs` read** | ✅ | ✅ | ❌ (admin-only RLS) | ❌ | ❌ |
+| **`customer_line_links` write (link / unlink / ignore)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -229,4 +234,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (cron + per-kind retry policy + LINE follow webhook phase)
+**Last updated:** 2026-05-14 (customer linker + reconcile foundation)

@@ -52,6 +52,18 @@ const CARDS: AdminCard[] = [
       "M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z",
     enabled: true,
   },
+  {
+    href: "/admin/customer-line",
+    titleTh: "ผูกลูกค้ากับ LINE",
+    titleEn: "Customer ↔ LINE linker",
+    descTh:
+      "จัดการ customer_line_links ที่ยังไม่จับคู่ลูกค้า — สำคัญสำหรับการส่งข้อความให้ลูกค้าที่ถูกคน",
+    descEn:
+      "Pair captured LINE followers with real customers — required for accurate notifications.",
+    iconPath:
+      "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

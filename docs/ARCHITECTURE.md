@@ -190,6 +190,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260527_line_oa_foundation.sql` | `customer_line_links` (line_user_id ↔ customer_id + per-kind prefs + consent); `line_message_log` (every send attempt); `branch_line_configs` (per-branch channel token, env fallback); RLS on all three |
 | `20260528_recovery_foundation.sql` | `sync_failures.kind` CHECK extended with `'line_send'` + `'receipt_rebuild'`; `sync_failures_branch_read` RLS policy so branch_manager sees own-branch failures in `/admin/recovery` |
 | `20260529_cron_and_line_follow.sql` | `worker_runs` heartbeat table (one row per retry-tick — cron or manual); `line_follow_events` audit table (every LINE webhook event, signature_verified flag, consented_at for verified follows); admin-read RLS on both |
+| `20260530_customer_linker_and_reconcile.sql` | `customer_line_links.ignored_at` + `ignored_by` for admin triage; `sync_failures.kind` CHECK extended with `reconcile_missing_sheet` + `reconcile_duplicate_sheet` + `reconcile_orphan_link`; new `reconcile_runs` heartbeat table |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -635,6 +636,76 @@ Tabs that are append-only by design (`Pricing`, `Expense_Log`, `Debug`) skip ded
 
 ---
 
+## 12g. Customer identity foundation (post-`20260530`)
+
+> Status: **foundation live**. See [CUSTOMER_IDENTITY.md](./CUSTOMER_IDENTITY.md) for the full identity contract.
+
+### 12g.1 Linker UI
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  /admin/customer-line  (owner / hq_admin only)           │
+│    • Unmatched tab: customer_line_links where            │
+│        customer_id IS NULL AND ignored_at IS NULL         │
+│    • Linked tab: rows with customer_id set                │
+│    • Review modal:                                       │
+│        - fetchRecentFollowEvents(lineUserId, 10)         │
+│        - suggestLikelyCustomerMatches({...})             │
+│            phone exact (95) > name exact (75) > prefix    │
+│            (60) > substring (50) > recent activity (30)   │
+│        - Phone + name hint inputs to refine suggestions  │
+└──────────────┬───────────────────────────────────────────┘
+               │
+               ▼ POST /api/admin/customer-line/{link|unlink|ignore}
+               │   (each enforces requireRole(owner / hq_admin) +
+               │    admin-client write so RLS doesn't block branch-
+               │    spanning customer pairing)
+               ▼
+        UPDATE customer_line_links SET ...
+```
+
+### 12g.2 Reconcile job
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  POST /api/admin/reconcile/run                           │
+│    requireRole(owner / hq_admin / branch_manager)        │
+│    branch_manager: branchCode FORCED to profile branch   │
+└──────────────┬───────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────────────────┐
+│  lib/reconcile.ts::runReconcileTick(opts)                │
+│    1. Fetch Front_Desk!B once → Map<jobId, rows[]>       │
+│    2. Last-N-days orders scan:                           │
+│         - missing from sheet  → reconcile_missing_sheet  │
+│         - duplicate in column → reconcile_duplicate_sheet│
+│    3. customer_line_links unlinked + un-ignored 7+ days  │
+│         → reconcile_orphan_link                          │
+│    4. For each new mismatch: enqueueMismatch()           │
+│         - checks for an open (kind, target_id) first     │
+│         - inserts a sync_failures row otherwise          │
+│    5. Persist a reconcile_runs row (heartbeat).          │
+│    Returns RetryTickResult-shaped summary.               │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 12g.3 Why reconcile reuses sync_failures
+
+Operationally, "platform tried X and failed" and "platform noticed a divergence" both need the same admin actions: filter, retry, resolve, inspect. Reusing the recovery UI saves a parallel surface; the retry-worker auto-handles `reconcile_missing_sheet` via the existing dedup-safe sync path. Manual-only kinds (`reconcile_duplicate_sheet`, `reconcile_orphan_link`) sit in the queue until an admin resolves them by hand.
+
+Trade-off: `sync_failures` semantics widens. Documented as a known compromise; a dedicated `reconcile_mismatches` table is a clean future migration if reconcile complexity outgrows the CHECK constraint.
+
+### 12g.4 Branch isolation summary
+
+| Layer | Linker (`/admin/customer-line`) | Reconcile (`/admin/recovery`) |
+|---|---|---|
+| Page key | `admin` (owner / hq_admin only — branch_manager doesn't have it) | `recovery` (owner / hq_admin / branch_manager) |
+| RLS read | `customer_line_links_admin_full` / `customer_line_links_branch_read` (read-only for managers) | `sync_failures_admin_read` + `sync_failures_branch_read` |
+| Server route | `requireRole(['owner','hq_admin'])` on every write | `requireRole(['owner','hq_admin','branch_manager'])` + branch_manager's branchCode forced |
+| Heartbeat read | n/a | `reconcile_runs` admin-read only |
+
+---
+
 ## 12f. LINE follow webhook foundation (post-`20260529`)
 
 > Status: **webhook receive path live**. Customer linker UI deferred — once an admin pairs a `line_user_id` with a real customer row, the existing send orchestrator picks up the link automatically.
@@ -759,10 +830,15 @@ app/
 │   └── sync-pricing-to-sheet/route.ts  ← DB → Sheet (Pricing snapshot)
 ├── admin/page.tsx                      ← Admin centre landing (owner / hq_admin)
 ├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
-├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild + bulk actions
+├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild + reconcile tab + bulk actions
+├── admin/customer-line/page.tsx        ← Customer ↔ LINE linker (unmatched + linked tabs)
 ├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
 ├── api/admin/recovery/bulk-resolve/route.ts  ← Bulk resolve (≤100 ids)
 ├── api/admin/recovery/run-worker/route.ts    ← Manual retry-worker trigger
+├── api/admin/reconcile/run/route.ts          ← Manual reconcile trigger
+├── api/admin/customer-line/link/route.ts     ← Pair LINE follower with customer
+├── api/admin/customer-line/unlink/route.ts   ← Break a LINE-customer pairing
+├── api/admin/customer-line/ignore/route.ts   ← Hide a probe / non-customer follower
 ├── api/cron/retry-worker/route.ts            ← Scheduled retry-worker (CRON_SECRET)
 ├── api/line/webhook/route.ts                 ← LINE follow / unfollow webhook
 ├── customers/page.tsx
@@ -825,7 +901,10 @@ lib/
 ├── orderSheetSync.ts ← syncOrderToSheetCore (route + worker share this)
 ├── retryWorker.ts    ← runRetryTick + retryFailureItem + worker_runs heartbeat
 ├── retryPolicy.ts    ← per-kind RETRY_POLICIES map + getRetryPolicy helper
-└── lineWebhook.ts    ← verifyLineSignature + processLineWebhookBody
+├── lineWebhook.ts    ← verifyLineSignature + processLineWebhookBody
+├── customerMatching.ts ← findCustomerByPhone / Name / Recently + suggestion combiner
+├── customerLinker.ts ← fetchUnmatched / Linked + link / unlink / ignore wrappers
+└── reconcile.ts      ← runReconcileTick + 3 checks (orders↔sheet, duplicate, orphan)
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -851,4 +930,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (cron + per-kind retry policy + LINE follow webhook — `/api/cron/retry-worker`, `lib/retryPolicy.ts`, `/api/line/webhook`, `20260529` migration)
+**Last updated:** 2026-05-14 (customer linker + reconcile foundation — `/admin/customer-line`, `lib/reconcile.ts`, `20260530` migration, new `CUSTOMER_IDENTITY.md`)

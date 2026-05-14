@@ -20,7 +20,16 @@ export type SyncFailureKind =
   | "customer_from_sheet"
   | "expense_from_sheet"
   | "line_send"
-  | "receipt_rebuild";
+  | "receipt_rebuild"
+  /** Order is in the DB but no Front_Desk Sheet row matches. Auto-retried
+   *  via syncOrderToSheetCore — dedup contract makes the retry safe. */
+  | "reconcile_missing_sheet"
+  /** Two or more Front_Desk rows share the same Job ID. Manual-only —
+   *  requires human judgment about which row stays. */
+  | "reconcile_duplicate_sheet"
+  /** customer_line_links row has been unlinked for too long. Manual-only —
+   *  admin pairs in the linker UI. */
+  | "reconcile_orphan_link";
 
 export type SyncFailure = {
   kind: SyncFailureKind;

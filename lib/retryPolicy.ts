@@ -105,6 +105,33 @@ export const RETRY_POLICIES: Record<SyncFailureKind, RetryPolicy> = {
       en: "Diagnostic only — never retried by the worker.",
     },
   },
+  reconcile_missing_sheet: {
+    autoRetry: true,
+    maxAttempts: 5,
+    cooldownSeconds: 60,
+    description: {
+      th: "ใบงานยังไม่อยู่ใน Sheet — retry อัตโนมัติ (dedup ป้องกันแถวซ้ำ)",
+      en: "Order missing from Sheet — auto-retry (dedup prevents dup rows).",
+    },
+  },
+  reconcile_duplicate_sheet: {
+    autoRetry: false,
+    maxAttempts: 0,
+    cooldownSeconds: 0,
+    description: {
+      th: "Sheet มีหลายแถวต่อ Job ID เดียว — admin ต้องตัดสินใจเลือกแถวที่ถูกต้อง",
+      en: "Multiple Sheet rows for one Job ID — admin must pick the canonical row.",
+    },
+  },
+  reconcile_orphan_link: {
+    autoRetry: false,
+    maxAttempts: 0,
+    cooldownSeconds: 0,
+    description: {
+      th: "LINE follower ยังไม่ถูกผูกกับลูกค้านานเกินไป — admin จัดการที่ /admin/customer-line",
+      en: "LINE follower stayed unlinked too long — admin pairs in /admin/customer-line.",
+    },
+  },
 };
 
 export function getRetryPolicy(kind: string): RetryPolicy {

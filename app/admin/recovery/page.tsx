@@ -28,7 +28,7 @@ import {
 import { RETRY_POLICIES, type RetryPolicy } from "@/lib/retryPolicy";
 import type { ReceiptData } from "@/lib/receiptData";
 
-type Tab = "sync" | "line" | "receipt";
+type Tab = "sync" | "line" | "receipt" | "reconcile";
 
 type SyncStatusFilter = "all" | SyncFailureRow["status"];
 type SyncKindFilter = "all" | string;
@@ -48,6 +48,18 @@ const SYNC_KIND_LABELS: Record<string, { th: string; en: string }> = {
   },
   line_send: { th: "LINE OA push", en: "LINE OA push" },
   receipt_rebuild: { th: "สร้างใบเสร็จใหม่", en: "Receipt rebuild" },
+  reconcile_missing_sheet: {
+    th: "เทียบข้อมูล: ขาดใน Sheet",
+    en: "Reconcile: missing from Sheet",
+  },
+  reconcile_duplicate_sheet: {
+    th: "เทียบข้อมูล: แถวซ้ำใน Sheet",
+    en: "Reconcile: duplicate Sheet row",
+  },
+  reconcile_orphan_link: {
+    th: "เทียบข้อมูล: LINE link ค้าง",
+    en: "Reconcile: orphan LINE link",
+  },
 };
 
 const LINE_KIND_LABELS: Record<LineMessageLogRow["kind"], { th: string; en: string }> = {
@@ -541,10 +553,13 @@ function RecoveryInner() {
         <TabButton active={tab === "receipt"} onClick={() => setTab("receipt")}>
           {language === "th" ? "สร้างใบเสร็จใหม่" : "Receipt rebuild"}
         </TabButton>
+        <TabButton active={tab === "reconcile"} onClick={() => setTab("reconcile")}>
+          {language === "th" ? "เทียบข้อมูล (reconcile)" : "Reconcile"}
+        </TabButton>
       </div>
 
       {/* Filters bar — common to sync + line tabs */}
-      {tab !== "receipt" && (
+      {tab !== "receipt" && tab !== "reconcile" && (
         <div className="grid gap-2 sm:grid-cols-4 mb-4">
           {tab === "sync" ? (
             <>
@@ -681,6 +696,15 @@ function RecoveryInner() {
           error={rebuildError}
           receipt={rebuiltReceipt}
           language={language}
+        />
+      )}
+      {tab === "reconcile" && (
+        <ReconcilePanel
+          language={language}
+          canRetry={canRetry}
+          onRefresh={load}
+          onMessage={setMessage}
+          onError={setErrorMessage}
         />
       )}
 
@@ -1410,6 +1434,165 @@ function LineLogTable({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ReconcileSummary = {
+  ordersScanned: number;
+  missingSheet: number;
+  duplicateSheet: number;
+  orphanLink: number;
+  totalMismatches: number;
+  startedAt: string;
+  finishedAt: string;
+};
+
+function ReconcilePanel({
+  language,
+  canRetry,
+  onRefresh,
+  onMessage,
+  onError,
+}: {
+  language: "th" | "en";
+  canRetry: boolean;
+  onRefresh: () => Promise<void> | void;
+  onMessage: (s: string | null) => void;
+  onError: (s: string | null) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [summary, setSummary] = useState<ReconcileSummary | null>(null);
+  const [lookbackDays, setLookbackDays] = useState(30);
+
+  const runReconcile = async () => {
+    if (!canRetry) return;
+    setRunning(true);
+    onMessage(null);
+    onError(null);
+    try {
+      const res = await fetch("/api/admin/reconcile/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lookbackDays }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+      } & ReconcileSummary;
+      if (!res.ok || !json.ok) {
+        onError(
+          language === "th"
+            ? `รัน reconcile ไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`
+            : `Reconcile failed: ${json.reason ?? `HTTP ${res.status}`}`
+        );
+      } else {
+        setSummary({
+          ordersScanned: json.ordersScanned,
+          missingSheet: json.missingSheet,
+          duplicateSheet: json.duplicateSheet,
+          orphanLink: json.orphanLink,
+          totalMismatches: json.totalMismatches,
+          startedAt: json.startedAt,
+          finishedAt: json.finishedAt,
+        });
+        onMessage(
+          language === "th"
+            ? `เทียบข้อมูลเสร็จ — ตรวจ ${json.ordersScanned} ใบงาน พบ ${json.totalMismatches} mismatch (missing ${json.missingSheet} · duplicate ${json.duplicateSheet} · orphan ${json.orphanLink})`
+            : `Reconcile done — scanned ${json.ordersScanned} orders, ${json.totalMismatches} mismatches (missing ${json.missingSheet} · dup ${json.duplicateSheet} · orphan ${json.orphanLink})`
+        );
+        // The sync tab refresh will pick up the new sync_failures rows.
+        await onRefresh();
+      }
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Network error");
+    }
+    setRunning(false);
+  };
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-5 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-gray-900">
+          {language === "th"
+            ? "เทียบข้อมูล DB ↔ Google Sheet ↔ LINE link"
+            : "Reconcile DB ↔ Google Sheet ↔ LINE links"}
+        </h2>
+        <p className="text-xs text-gray-500 mt-1">
+          {language === "th"
+            ? "ตรวจสอบ 3 อย่าง: ใบงานที่ขาดใน Sheet, แถวซ้ำใน Sheet, และ LINE follower ที่ยังไม่จับคู่ลูกค้านานเกินไป — ทุก mismatch ที่เจอจะถูกบันทึกใน sync_failures ให้กดลองส่งซ้ำในแท็บข้างต้น"
+            : "Three checks: orders missing from Sheet, duplicate Sheet rows, and LINE followers unlinked for 7+ days. Every detected mismatch is enqueued in sync_failures so you can retry / resolve from the Sync failures tab."}
+        </p>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2 items-end">
+        <label className="text-xs text-gray-700 flex flex-col gap-1">
+          <span>
+            {language === "th" ? "ย้อนหลัง (วัน)" : "Lookback (days)"}
+          </span>
+          <input
+            type="number"
+            value={lookbackDays}
+            min={1}
+            max={90}
+            onChange={(e) => setLookbackDays(Number(e.target.value) || 30)}
+            className="w-24 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void runReconcile()}
+          disabled={!canRetry || running}
+          className="rounded-xl bg-green-700 hover:bg-green-800 text-white font-semibold px-5 py-3 text-sm disabled:opacity-50 min-h-[44px]"
+        >
+          {running
+            ? language === "th"
+              ? "กำลังเทียบข้อมูล..."
+              : "Reconciling..."
+            : language === "th"
+            ? "รัน reconcile"
+            : "Run reconcile"}
+        </button>
+      </div>
+
+      {summary && (
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm">
+          <p className="font-semibold text-blue-900">
+            {language === "th" ? "ผลล่าสุด" : "Latest result"}
+          </p>
+          <div className="mt-2 grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+            <span className="rounded-lg border border-blue-200 bg-white px-2 py-1">
+              {language === "th" ? "สแกน" : "Scanned"}:{" "}
+              <strong>{summary.ordersScanned}</strong>
+            </span>
+            <span className="rounded-lg border border-yellow-200 bg-white px-2 py-1">
+              {language === "th" ? "ขาดใน Sheet" : "Missing"}:{" "}
+              <strong>{summary.missingSheet}</strong>
+            </span>
+            <span className="rounded-lg border border-red-200 bg-white px-2 py-1">
+              {language === "th" ? "ซ้ำใน Sheet" : "Duplicate"}:{" "}
+              <strong>{summary.duplicateSheet}</strong>
+            </span>
+            <span className="rounded-lg border border-purple-200 bg-white px-2 py-1">
+              {language === "th" ? "LINE orphan" : "LINE orphan"}:{" "}
+              <strong>{summary.orphanLink}</strong>
+            </span>
+            <span className="rounded-lg border border-gray-200 bg-white px-2 py-1">
+              {language === "th" ? "รวม" : "Total"}:{" "}
+              <strong>{summary.totalMismatches}</strong>
+            </span>
+          </div>
+          <p className="text-[11px] text-blue-700 mt-2">
+            {language === "th"
+              ? `เริ่ม ${new Date(summary.startedAt).toLocaleTimeString("th-TH")} • เสร็จ ${new Date(summary.finishedAt).toLocaleTimeString("th-TH")}`
+              : `started ${new Date(summary.startedAt).toLocaleTimeString()} • finished ${new Date(summary.finishedAt).toLocaleTimeString()}`}
+          </p>
+          <p className="text-[11px] text-blue-700 mt-1">
+            {language === "th"
+              ? "คลิกแท็บ \"Sync failures\" ด้านบนเพื่อดู mismatch ที่ถูก enqueue และ retry / mark resolved ได้"
+              : "Open the Sync failures tab above to see the enqueued mismatches — retry or mark resolved from there."}
+          </p>
         </div>
       )}
     </div>
