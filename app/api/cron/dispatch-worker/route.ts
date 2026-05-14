@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { runDispatchTick } from "@/lib/notificationDispatchWorker";
+import { withCronHeartbeat } from "@/lib/cronHeartbeat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -45,7 +46,21 @@ async function handle(req: Request) {
     Number.isFinite(raw) && raw > 0
       ? Math.min(Math.floor(raw), MAX_LIMIT)
       : DEFAULT_LIMIT;
-  const result = await runDispatchTick({ limit, actorId: "cron" });
+  const result = await withCronHeartbeat("dispatch-worker", async () => {
+    const r = await runDispatchTick({ limit, actorId: "cron" });
+    return {
+      result: r,
+      payload: {
+        rowsProcessed: r.processed,
+        details: {
+          succeeded: r.succeeded,
+          failed: r.failed,
+          dead: r.dead,
+          skipped: r.skipped,
+        },
+      },
+    };
+  });
   return NextResponse.json({ ok: true, actorId: "cron", ...result });
 }
 

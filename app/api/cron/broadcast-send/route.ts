@@ -15,6 +15,7 @@
 
 import { NextResponse } from "next/server";
 import { runBroadcastSendTick } from "@/lib/broadcastSendWorker";
+import { withCronHeartbeat } from "@/lib/cronHeartbeat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,7 +40,21 @@ async function handle(req: Request) {
     1,
     Math.min(Number(url.searchParams.get("limit") ?? 5), 25)
   );
-  const result = await runBroadcastSendTick({ jobLimit: limit, actorId: null });
+  const result = await withCronHeartbeat("broadcast-send", async () => {
+    const r = await runBroadcastSendTick({ jobLimit: limit, actorId: null });
+    const dispatched = r.jobs.reduce((acc, j) => acc + j.dispatched, 0);
+    return {
+      result: r,
+      payload: {
+        rowsProcessed: dispatched,
+        details: {
+          jobs: r.jobs.length,
+          skipped: r.jobs.reduce((acc, j) => acc + j.skipped, 0),
+          failed: r.jobs.reduce((acc, j) => acc + j.failed, 0),
+        },
+      },
+    };
+  });
   return NextResponse.json({ ok: true, ...result });
 }
 

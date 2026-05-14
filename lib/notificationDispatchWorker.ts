@@ -27,6 +27,7 @@ import {
 } from "@/lib/lineConfig";
 import { pushTextMessage } from "@/lib/lineMessaging";
 import { checkPerCustomerRateLimits } from "@/lib/customerRateLimit";
+import { sendEmail } from "@/lib/channels/email";
 
 // ---------- Safety constants ---------------------------------------------
 
@@ -205,6 +206,44 @@ async function dispatchLine(row: NotificationRow): Promise<DispatchOutcome> {
   };
 }
 
+async function dispatchEmail(row: NotificationRow): Promise<DispatchOutcome> {
+  const payload = row.payload ?? {};
+  const to = typeof payload.email === "string" ? payload.email : "";
+  const subject =
+    typeof payload.subject === "string" ? payload.subject : "";
+  const body = typeof payload.body === "string" ? payload.body : "";
+  if (!to) {
+    return { ok: false, reason: "payload.email missing", retryable: false };
+  }
+  if (!subject) {
+    return { ok: false, reason: "payload.subject missing", retryable: false };
+  }
+  if (!body) {
+    return { ok: false, reason: "payload.body missing", retryable: false };
+  }
+  const res = await sendEmail({
+    to,
+    subject,
+    body,
+    meta: { notificationId: row.id, kind: row.kind },
+  });
+  if (res.ok) {
+    return {
+      ok: true,
+      details: {
+        provider: res.provider,
+        providerMessageId: res.providerMessageId,
+      },
+    };
+  }
+  return {
+    ok: false,
+    reason: res.reason,
+    retryable: res.retryable,
+    details: { provider: res.provider },
+  };
+}
+
 function dispatchManualOnly(row: NotificationRow): DispatchOutcome {
   return {
     ok: false,
@@ -221,6 +260,7 @@ async function dispatchRow(row: NotificationRow): Promise<DispatchOutcome> {
       case "line":
         return await dispatchLine(row);
       case "email":
+        return await dispatchEmail(row);
       case "in_app":
         return dispatchManualOnly(row);
       default:

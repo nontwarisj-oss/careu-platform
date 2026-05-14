@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { notifyLifecycleEvent } from "@/lib/lifecycleNotifier";
+import { withCronHeartbeat } from "@/lib/cronHeartbeat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -92,9 +93,19 @@ async function handle(req: Request) {
     });
   }
 
+  const swept = rows.length;
+  const enqueuedTotal = outcomes.reduce((acc, o) => acc + o.enqueued, 0);
+  await withCronHeartbeat("overdue-pickup-sweep", async () => ({
+    result: null,
+    payload: {
+      rowsProcessed: swept,
+      details: { enqueued: enqueuedTotal },
+    },
+  }));
+
   return NextResponse.json({
     ok: true,
-    swept: rows.length,
+    swept,
     outcomes,
     sweptAt: new Date().toISOString(),
   });

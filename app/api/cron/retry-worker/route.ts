@@ -44,6 +44,7 @@
 
 import { NextResponse } from "next/server";
 import { runRetryTick } from "@/lib/retryWorker";
+import { withCronHeartbeat } from "@/lib/cronHeartbeat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -92,9 +93,27 @@ async function handle(req: Request) {
   }
 
   const limit = parseLimit(req);
-  const result = await runRetryTick({
-    limit,
-    actorId: "cron",
+  const result = await withCronHeartbeat("retry-worker", async () => {
+    const r = await runRetryTick({ limit, actorId: "cron" });
+    // runRetryTick result shape varies; use whatever counters it returns
+    // by reflecting onto the top-level numeric fields.
+    const summary = r as unknown as {
+      processed?: number;
+      succeeded?: number;
+      failed?: number;
+      dead?: number;
+    };
+    return {
+      result: r,
+      payload: {
+        rowsProcessed: summary.processed ?? 0,
+        details: {
+          succeeded: summary.succeeded ?? 0,
+          failed: summary.failed ?? 0,
+          dead: summary.dead ?? 0,
+        },
+      },
+    };
   });
 
   return NextResponse.json({

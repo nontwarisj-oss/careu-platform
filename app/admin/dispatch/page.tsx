@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
+import { WorkerHealthBanner } from "@/components/WorkerHealthBanner";
 
 type Counts = {
   queued: number;
@@ -253,6 +254,8 @@ function DispatchInner() {
           <span>/</span>
           <span className="text-gray-700 font-medium">Dispatch monitor</span>
         </div>
+
+        <WorkerHealthBanner />
 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>

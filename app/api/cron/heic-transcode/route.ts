@@ -21,6 +21,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { transcodeHeicToJpeg } from "@/lib/heicTranscoder";
+import { withCronHeartbeat } from "@/lib/cronHeartbeat";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -178,6 +179,16 @@ async function handle(req: Request) {
       reason: transcoded.reason,
     });
   }
+
+  const done = outcomes.filter((o) => o.status === "done").length;
+  const dead = outcomes.filter((o) => o.status === "dead_letter").length;
+  await withCronHeartbeat("heic-transcode", async () => ({
+    result: null,
+    payload: {
+      rowsProcessed: rows.length,
+      details: { done, dead, transcoderMode: TRANSCODER_MODE },
+    },
+  }));
 
   return NextResponse.json({
     ok: true,

@@ -104,6 +104,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Send job monitoring (`/admin/crm/broadcasts/[id]/jobs/[jobId]`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
 | **Feature flags CRUD (`feature_flags` table)** | ✅ | ✅ | 👁 read-only | 👁 read | 👁 read |
 | **Cron broadcast-send (`/api/cron/broadcast-send`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **Worker telemetry (`/admin/system/workers`, `/api/admin/system/workers`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Self-heal (`/api/admin/system/recover-workers`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Communications settings UI (`/admin/settings/communications`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Per-branch flag overrides (`/api/admin/settings/communications`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Alert rules CRUD (`/api/admin/system/alert-rules`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`feature_flags` read** | ✅ | ✅ | 👁 | 👁 | 👁 |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
 | **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron HEIC transcode (`/api/cron/heic-transcode`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |

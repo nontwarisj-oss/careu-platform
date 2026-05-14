@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
+import { WorkerHealthBanner } from "@/components/WorkerHealthBanner";
 import { useLanguage } from "@/lib/languageContext";
 import { useRole } from "@/lib/roleContext";
 import { canManageStaff } from "@/lib/permissions";
@@ -124,6 +125,30 @@ const CARDS: AdminCard[] = [
       "M21 11.5a.5.5 0 0 0-.5-.5h-2.93l1.04-1.04a.502.502 0 0 0 0-.71l-.71-.71a.502.502 0 0 0-.71 0L15 10.79V3.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v9l-3.5-3.5a.5.5 0 0 0-.71 0l-.71.71a.5.5 0 0 0 0 .71L12.79 14H3.5a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h13l4.5-4.5z",
     enabled: true,
   },
+  {
+    href: "/admin/settings/communications",
+    titleTh: "Comms settings (per-branch)",
+    titleEn: "Communications settings",
+    descTh:
+      "เปิด/ปิดช่อง · quiet hours · caps · cross-branch — ตั้งระดับ global หรือ override ต่อสาขา — Owner / HQ",
+    descEn:
+      "Channels · quiet hours · caps · cross-branch — global or per-branch overrides.",
+    iconPath:
+      "M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65c-.04-.24-.24-.42-.49-.42h-4c-.24 0-.45.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.49.42h4c.24 0 .45-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z",
+    enabled: true,
+  },
+  {
+    href: "/admin/system/workers",
+    titleTh: "Worker telemetry",
+    titleEn: "Worker telemetry",
+    descTh:
+      "ดู cron · queue · stuck jobs · alerts · self-heal — Owner / HQ",
+    descEn:
+      "Cron heartbeats + queue depth + alerts + self-heal.",
+    iconPath:
+      "M19 8h-1V3H6v5H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zM8 5h8v3H8V5zm8 14H8v-4h8v4zm2-4v-2H6v2H4v-4c0-.55.45-1 1-1h14c.55 0 1 .45 1 1v4h-2z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {
@@ -154,6 +179,12 @@ function AdminLandingInner() {
             : "Owner / HQ Admin only — staff, pricing, and recovery"}
         </p>
       </div>
+
+      {hasStaffPower && (
+        <div className="mb-4">
+          <WorkerHealthBanner />
+        </div>
+      )}
 
       {!hasStaffPower && (
         <div className="mb-4 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">

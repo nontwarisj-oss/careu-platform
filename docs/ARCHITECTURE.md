@@ -1520,6 +1520,59 @@ Default 09:00–19:00 Bangkok. Bangkok hour resolved via `Intl.DateTimeFormat({ 
 
 ---
 
+## 12r. Worker telemetry + self-heal (post-`20260541`)
+
+> Status: **observable**. Every cron writes a heartbeat. Dashboard surfaces queue depth, stuck jobs, cron silence, alert breaches. One-click self-heal unlocks stale rows. Email channel foundation in place.
+
+See [WORKER_TELEMETRY.md](./WORKER_TELEMETRY.md) for the operator runbook.
+
+### 12r.1 New schema
+
+| Table | Purpose |
+|---|---|
+| `cron_heartbeat_logs` | append-only, one row per cron invocation. |
+| `communication_alert_rules` | operator-defined thresholds. 5 metric kinds × 2 comparisons × per-branch scope. |
+| `feature_flags` (PK fix) | now uniquely keyed on `(key, branch_id)` via partial indexes, enabling per-branch overrides to coexist with global rows. |
+
+### 12r.2 New libraries
+
+- `lib/cronHeartbeat.ts` — `withCronHeartbeat(cronName, handler)` wraps every cron handler. Best-effort logging; re-throws on failure.
+- `lib/workerHealth.ts` — aggregates heartbeats + queue scan + alert evaluation into one snapshot. Three "stuck" detectors: cron silence, queue stall, sending stall.
+- `lib/channels/email/index.ts` — `EmailProvider` interface + console default + Resend placeholder.
+
+### 12r.3 New routes
+
+| Route | What |
+|---|---|
+| `GET /api/admin/system/workers` | telemetry snapshot |
+| `POST /api/admin/system/recover-workers` | self-heal (owner/HQ, 5/10min/IP) |
+| `GET/POST /api/admin/system/alert-rules` | rule CRUD |
+| `GET/POST /api/admin/settings/communications` | per-branch flag management |
+
+### 12r.4 UI surfaces
+
+- `/admin/system/workers` — full dashboard. Per-cron table, queue KPIs, active alerts, self-heal button. Polls every 30 s.
+- `/admin/settings/communications` — per-branch toggle UI. Save invalidates the in-process cache.
+- `components/WorkerHealthBanner.tsx` — embedded on `/admin` + `/admin/dispatch`. Auto-hides when healthy; auto-shows on warning/critical; 30-min session dismiss.
+
+### 12r.5 Email channel
+
+`customer_notifications.channel='email'` is now drained by the dispatch worker (`dispatchEmail`). `payload.{email, subject, body}` required. Default provider logs to console; flipping `EMAIL_PROVIDER=resend` + setting `RESEND_API_KEY` + `EMAIL_FROM` activates the real adapter.
+
+### 12r.6 Unified communications timeline
+
+`/admin/customers/[id]` interleaves `customer_notifications` + `notification_dispatch_log` + `line_delivery_log` into one chronological feed (30 most recent). The three structured tables remain for operators who prefer the columnar view.
+
+### 12r.7 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| All `/api/admin/system/*` | owner / hq_admin | system-wide |
+| `/api/admin/settings/communications` | owner / hq_admin | writes per-branch override rows |
+| `feature_flags` SELECT RLS | authenticated | read open; writes admin-only |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
