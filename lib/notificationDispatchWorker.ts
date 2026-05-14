@@ -26,6 +26,7 @@ import {
   resolveLineChannelConfig,
 } from "@/lib/lineConfig";
 import { pushTextMessage } from "@/lib/lineMessaging";
+import { checkPerCustomerRateLimits } from "@/lib/customerRateLimit";
 
 // ---------- Safety constants ---------------------------------------------
 
@@ -363,6 +364,59 @@ export async function runDispatchTick(
     const nextAttempts = row.attempts + 1;
     const now = new Date().toISOString();
 
+    // ----- Per-customer rate limit gate ---------------------------------
+    // Check BEFORE flagging the row as 'sending' — if we're over the
+    // cap, mark the row as 'skipped' and move on without consuming an
+    // attempt. The notifier's pre-enqueue dedup catches duplicates
+    // within 6h; this catches the across-kind / cross-channel cases
+    // (e.g. status thrashing through 5 different lifecycle events in
+    // an hour).
+    if (row.customer_id) {
+      const orderIdFromPayload =
+        typeof row.payload?.orderId === "string"
+          ? (row.payload.orderId as string)
+          : null;
+      const rl = await checkPerCustomerRateLimits({
+        customerId: row.customer_id,
+        channel: row.channel,
+        kind: row.kind,
+        orderId: orderIdFromPayload,
+      });
+      if (!rl.ok) {
+        if (!opts.dryRun) {
+          await admin
+            .from("customer_notifications")
+            .update({
+              status: "skipped",
+              error_reason: `rate-limit: ${rl.bucket} — ${rl.reason}`,
+            })
+            .eq("id", row.id)
+            .eq("status", "queued");
+          await writeDispatchLog(admin, {
+            row,
+            outcome: "skipped",
+            retryable: false,
+            attempt: row.attempts,
+            latencyMs: 0,
+            details: { rateLimitBucket: rl.bucket },
+            reason: rl.reason,
+          });
+        }
+        items.push({
+          notificationId: row.id,
+          channel: row.channel,
+          kind: row.kind,
+          succeeded: false,
+          dead: false,
+          skipped: true,
+          retryable: false,
+          reason: `rate-limit: ${rl.reason}`,
+          details: { rateLimitBucket: rl.bucket },
+        });
+        continue;
+      }
+    }
+
     if (!opts.dryRun) {
       const flagged = await admin
         .from("customer_notifications")
@@ -390,14 +444,28 @@ export async function runDispatchTick(
     const reachedDead = nextAttempts >= MAX_ATTEMPTS;
 
     if (outcome.ok) {
+      // Capture provider_message_id if the channel adapter returned
+      // one (Twilio SID, LINE request id). This is the key the Twilio
+      // delivery webhook later joins on to mark the row as 'delivered'.
+      const providerMessageId =
+        (outcome.details &&
+          typeof outcome.details.providerMessageId === "string" &&
+          (outcome.details.providerMessageId as string)) ||
+        (outcome.details &&
+          typeof outcome.details.requestId === "string" &&
+          (outcome.details.requestId as string)) ||
+        null;
+
       if (!opts.dryRun) {
+        const patch: Record<string, unknown> = {
+          status: "sent",
+          sent_at: now,
+          error_reason: null,
+        };
+        if (providerMessageId) patch.provider_message_id = providerMessageId;
         await admin
           .from("customer_notifications")
-          .update({
-            status: "sent",
-            sent_at: now,
-            error_reason: null,
-          })
+          .update(patch)
           .eq("id", row.id);
         await writeDispatchLog(admin, {
           row,
@@ -429,7 +497,13 @@ export async function runDispatchTick(
         error_reason: outcome.reason,
       };
       if (willDeadLetter) {
-        patch.status = "failed";
+        // The new 'dead_letter' state is distinct from 'failed':
+        //   • 'failed' — transient, waiting on backoff window
+        //   • 'dead_letter' — gave up, outside the retry loop
+        // Older rows that predate this migration may still carry
+        // 'failed' as their terminal state; the admin UI surfaces
+        // both as "dead" for the operator.
+        patch.status = "dead_letter";
       } else {
         patch.status = "queued";
         patch.send_after = new Date(

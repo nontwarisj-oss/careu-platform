@@ -34,6 +34,11 @@ const CUSTOMER_SAFE_KINDS = new Set([
   "upload_added",
   // CRM-tier transitions (customer-friendly versions only)
   "tier_upgraded",
+  // Phase 14 — communication deliveries
+  "notification_delivered",
+  "notification_failed",
+  "notification_resent",
+  "notification_cancelled",
 ]);
 
 const KIND_LABEL: Record<string, string> = {
@@ -46,6 +51,10 @@ const KIND_LABEL: Record<string, string> = {
   quote_submitted: "ส่งคำขอประเมินราคา",
   upload_added: "อัปโหลดรูปภาพ",
   tier_upgraded: "เลื่อนระดับสมาชิก",
+  notification_delivered: "ข้อความถึงคุณแล้ว",
+  notification_failed: "ส่งข้อความไม่สำเร็จ",
+  notification_resent: "ส่งข้อความซ้ำ",
+  notification_cancelled: "ยกเลิกการส่ง",
   // Synthesised from customer_notifications:
   notification_sent: "ส่งข้อความถึงคุณ",
 };
@@ -178,6 +187,17 @@ function summariseActivityPayload(
     const tier = (payload as { tier?: string }).tier;
     if (typeof tier === "string") return `สู่ระดับ ${tier.toUpperCase()}`;
     return null;
+  }
+  if (
+    kind === "notification_delivered" ||
+    kind === "notification_failed" ||
+    kind === "notification_resent" ||
+    kind === "notification_cancelled"
+  ) {
+    const ch = (payload as { channel?: string }).channel;
+    const nk = (payload as { notificationKind?: string }).notificationKind;
+    const bits = [ch?.toUpperCase(), nk].filter(Boolean);
+    return bits.length > 0 ? bits.join(" · ") : null;
   }
   return null;
 }

@@ -393,6 +393,7 @@ function Inner() {
                     <Th>Attempts</Th>
                     <Th>Sent</Th>
                     <Th>Error</Th>
+                    <Th>Action</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -404,10 +405,16 @@ function Inner() {
                         <Pill
                           text={n.status}
                           tone={
-                            n.status === "sent"
+                            n.status === "delivered"
+                              ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                              : n.status === "sent"
                               ? "border-green-200 bg-green-50 text-green-800"
                               : n.status === "failed"
                               ? "border-red-200 bg-red-50 text-red-800"
+                              : n.status === "dead_letter"
+                              ? "border-red-300 bg-red-100 text-red-900"
+                              : n.status === "cancelled"
+                              ? "border-gray-300 bg-gray-100 text-gray-700"
                               : "border-yellow-200 bg-yellow-50 text-yellow-800"
                           }
                         />
@@ -418,6 +425,13 @@ function Inner() {
                       </Td>
                       <Td className="text-xs text-red-700 max-w-xs truncate">
                         {n.error_reason ?? "—"}
+                      </Td>
+                      <Td>
+                        <NotificationActionButton
+                          notificationId={n.id}
+                          status={n.status}
+                          onDone={load}
+                        />
                       </Td>
                     </tr>
                   ))}
@@ -555,6 +569,70 @@ function Td({
   className?: string;
 }) {
   return <td className={`px-3 py-2 ${className ?? ""}`}>{children}</td>;
+}
+
+function NotificationActionButton({
+  notificationId,
+  status,
+  onDone,
+}: {
+  notificationId: string;
+  status: string;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  // Cancellable iff queued/sending; resendable otherwise.
+  const isCancellable = status === "queued" || status === "sending";
+  const action = isCancellable ? "cancel" : "resend";
+  const handle = async () => {
+    if (busy) return;
+    if (isCancellable && !window.confirm("ยกเลิกข้อความนี้ก่อนส่ง?")) return;
+    const reason =
+      window.prompt(
+        isCancellable
+          ? "เหตุผลในการยกเลิก (optional)"
+          : "เหตุผลในการส่งซ้ำ (optional)"
+      ) ?? null;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/admin/notifications/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notificationId, reason }),
+        }
+      );
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        window.alert(
+          `${isCancellable ? "ยกเลิก" : "ส่งซ้ำ"}ไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`
+        );
+      } else {
+        onDone();
+      }
+    } catch (err) {
+      window.alert(
+        `ล้มเหลว: ${err instanceof Error ? err.message : "Network error"}`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handle}
+      disabled={busy}
+      className={`rounded-md border px-2 py-1 text-[10px] font-semibold disabled:opacity-50 ${
+        isCancellable
+          ? "border-red-200 bg-red-50 hover:bg-red-100 text-red-800"
+          : "border-green-200 bg-green-50 hover:bg-green-100 text-green-800"
+      }`}
+    >
+      {busy ? "..." : isCancellable ? "ยกเลิก" : "ส่งซ้ำ"}
+    </button>
+  );
 }
 
 function PrefRow({

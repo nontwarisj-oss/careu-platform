@@ -406,6 +406,10 @@ export default function OrderDocumentPage({
                 ? "ลองซิงค์ Google Sheet อีกครั้ง"
                 : "ซิงค์ไป Google Sheet"}
             </button>
+            <ManualSendMenu orderId={order.id} onResult={(msg) => {
+              setToast(msg);
+              setTimeout(() => setToast(null), 4000);
+            }} />
             <span
               className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium border ${
                 sheetSyncStatus === "success"
@@ -523,6 +527,100 @@ export default function OrderDocumentPage({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+type ManualSendEvent =
+  | "ready_for_pickup"
+  | "overdue_pickup"
+  | "payment_received"
+  | "order_completed";
+
+const MANUAL_SEND_OPTIONS: Array<{ value: ManualSendEvent; label: string }> = [
+  { value: "ready_for_pickup", label: "แจ้งพร้อมรับ" },
+  { value: "overdue_pickup", label: "เตือนยังไม่รับ" },
+  { value: "payment_received", label: "แจ้งรับชำระ" },
+  { value: "order_completed", label: "แจ้งงานเสร็จ" },
+];
+
+function ManualSendMenu({
+  orderId,
+  onResult,
+}: {
+  orderId: string;
+  onResult: (msg: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<ManualSendEvent | null>(null);
+
+  const handle = async (event: ManualSendEvent, label: string) => {
+    if (busy) return;
+    setBusy(event);
+    setOpen(false);
+    try {
+      const res = await fetch("/api/admin/notifications/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event, orderId }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        skippedReason?: string | null;
+        outcomes?: Array<{ enqueued: boolean; reason: string | null; channel: string }>;
+      };
+      if (!res.ok || !json.ok) {
+        onResult(`ส่งไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`);
+        return;
+      }
+      const enqueued = (json.outcomes ?? []).filter((o) => o.enqueued).length;
+      const skipped = (json.outcomes ?? []).filter((o) => !o.enqueued);
+      if (enqueued > 0) {
+        onResult(`${label} — ส่งเข้าคิวแล้ว (${enqueued} ช่องทาง)`);
+      } else {
+        const skipReasons = skipped
+          .map((s) => `${s.channel}: ${s.reason ?? "—"}`)
+          .join(" / ");
+        onResult(
+          `${label} — ไม่มีช่องทางส่ง${
+            json.skippedReason ? ` (${json.skippedReason})` : ` (${skipReasons})`
+          }`
+        );
+      }
+    } catch (err) {
+      onResult(
+        `ส่งไม่สำเร็จ: ${err instanceof Error ? err.message : "Network error"}`
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="px-3 py-2 rounded-lg border border-purple-600 text-purple-700 hover:bg-purple-50 text-sm font-medium"
+      >
+        แจ้งลูกค้าด้วยตนเอง ▾
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-56 rounded-xl border border-gray-200 bg-white shadow-lg z-10 overflow-hidden">
+          {MANUAL_SEND_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => void handle(opt.value, opt.label)}
+              disabled={busy !== null}
+              className="block w-full text-left px-3 py-2 text-sm hover:bg-purple-50 disabled:opacity-50"
+            >
+              {busy === opt.value ? "กำลังส่ง..." : opt.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

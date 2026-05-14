@@ -1322,6 +1322,68 @@ observability   ──► /api/admin/dispatch/summary
 
 ---
 
+## 12o. Communications maturity (post-`20260538`)
+
+> Status: **delivery-aware**. Twilio status webhook verifies delivery. Per-customer rate limiter protects against spam loops. Operator resend / cancel / manual-send controls with full audit. HEIC transcode pipeline wired (transcoder pluggable).
+
+See [SMS_AND_DISPATCH.md](./SMS_AND_DISPATCH.md) for the runbook.
+
+### 12o.1 Expanded delivery state machine
+
+```
+queued ──► sending ──► sent ──► delivered    (Twilio webhook confirms)
+                            └─► failed       (Twilio webhook says failed/undelivered)
+                  └──► queued                (transient failure, backoff)
+                  └──► dead_letter           (non-retryable OR attempts ≥ MAX_ATTEMPTS)
+                  └──► skipped               (rate-limit / no recipient)
+queued / sending ──► cancelled               (operator action)
+```
+
+`failed` (Phase 14+) is "transient, awaiting retry"; `dead_letter` is "out of the retry loop". Old pre-migration rows that landed in `failed` as terminal still show up in the admin dead-letter view.
+
+### 12o.2 Twilio delivery webhook
+
+`POST /api/webhooks/twilio-status` — signed by `X-Twilio-Signature`, verified with `TWILIO_AUTH_TOKEN`. Maps Twilio MessageStatus (`queued|sent|delivered|failed|undelivered`) to internal status with monotonic ordering — no downgrade ever applied. Join key is `provider_message_id` (the Twilio SID, captured by the dispatch worker from the send response).
+
+### 12o.3 Per-customer rate limiter
+
+`lib/customerRateLimit.ts::checkPerCustomerRateLimits` runs in the worker BEFORE each dispatch. Five buckets: same-kind cooldown (30 min), per-channel hour cap, per-channel day cap, total per-hour customer cap, total per-day order cap. Trips mark the row `skipped` with a structured reason; the observability panel counts triggers per bucket so operators can tune.
+
+### 12o.4 Resend + cancel APIs
+
+```
+POST /api/admin/notifications/resend  → creates a new queue row with resent_from=original.id
+POST /api/admin/notifications/cancel  → flips queued/sending row to status='cancelled'
+POST /api/admin/notifications/send    → operator manual lifecycle send (force=true; bypasses 6h dedup)
+```
+
+All three audit into `notification_resend_log` with the operator id + reason + IP. The customer-facing `customer_activity` feed surfaces `notification_resent` / `notification_cancelled` rows so the customer can see "we re-sent this on Tuesday".
+
+### 12o.5 HEIC transcode pipeline
+
+`media_transcode_queue` table — populated by `/api/portal/upload-url` when an HEIC upload lands. `/api/cron/heic-transcode` drains it. The actual transcoder is a placeholder (`HEIC_TRANSCODER=stub`); the orchestration (status transitions, dead-letter, optimistic concurrency) is wired so swapping in `sharp+libheif` or a Supabase Edge Function is a single function replace.
+
+### 12o.6 Dispatch observability extensions
+
+`/admin/dispatch` Observability panel now shows:
+
+- Success rate, retry depth, provider latency (carried over from Phase 13).
+- **Resends (24h)** — total + breakdown by action.
+- **Rate-limit triggers (24h)** — total + breakdown by bucket; turns amber when > 0.
+- **Per-channel breakdown** (carried over).
+
+KPI bar extended to 8 cards: queued / sending / sent / delivered / failed / dead_letter / skipped / cancelled.
+
+### 12o.7 Branch isolation reuse
+
+| Surface | Auth | Branch scope |
+|---|---|---|
+| `/api/admin/notifications/{resend,cancel,send}` | operator role | `requireBranchAccess(notification.branch_id)` |
+| `/api/webhooks/twilio-status` | Twilio signature | n/a — vendor callback |
+| `/api/cron/heic-transcode` | Bearer CRON_SECRET | n/a — machine endpoint |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

@@ -33,13 +33,17 @@ export async function GET() {
     );
   }
 
-  const [queued, sending, sent, failed, skipped] = await Promise.all([
-    count(admin, "queued"),
-    count(admin, "sending"),
-    count(admin, "sent"),
-    count(admin, "failed"),
-    count(admin, "skipped"),
-  ]);
+  const [queued, sending, sent, delivered, failed, deadLetter, skipped, cancelled] =
+    await Promise.all([
+      count(admin, "queued"),
+      count(admin, "sending"),
+      count(admin, "sent"),
+      count(admin, "delivered"),
+      count(admin, "failed"),
+      count(admin, "dead_letter"),
+      count(admin, "skipped"),
+      count(admin, "cancelled"),
+    ]);
 
   // Recent rows for the table view. 25 most-recent failures + 25 most-
   // recent queued so the operator can spot patterns at a glance.
@@ -80,11 +84,56 @@ export async function GET() {
           created_at: string;
         }>);
 
-  const observability = computeObservability(obsRows);
+  // Resend log slice — feeds the observability resend-trend gauge.
+  const resendRes = await admin
+    .from("notification_resend_log")
+    .select("id, action, created_at, branch_id")
+    .gte("created_at", since24h)
+    .limit(1000);
+  const resendRows =
+    resendRes.error || !resendRes.data
+      ? []
+      : (resendRes.data as Array<{
+          id: string;
+          action: string;
+          created_at: string;
+          branch_id: string | null;
+        }>);
+
+  // Rate-limit trigger slice — dispatch log skipped rows with bucket
+  // info. These tell the operator "our per-customer caps fired N times
+  // today" — useful for tuning the caps.
+  const rateLimitRes = await admin
+    .from("notification_dispatch_log")
+    .select("id, channel, details, created_at, reason")
+    .eq("outcome", "skipped")
+    .gte("created_at", since24h)
+    .limit(500);
+  const rateLimitRows =
+    rateLimitRes.error || !rateLimitRes.data
+      ? []
+      : (rateLimitRes.data as Array<{
+          id: string;
+          channel: string;
+          details: Record<string, unknown>;
+          created_at: string;
+          reason: string | null;
+        }>);
+
+  const observability = computeObservability(obsRows, resendRows, rateLimitRows);
 
   return NextResponse.json({
     ok: true,
-    counts: { queued, sending, sent, failed, skipped },
+    counts: {
+      queued,
+      sending,
+      sent,
+      delivered,
+      failed,
+      dead_letter: deadLetter,
+      skipped,
+      cancelled,
+    },
     recentFailures: failuresRes.data ?? [],
     pendingPreview: queuedRes.data ?? [],
     smsProvider: (process.env.SMS_PROVIDER ?? "console").toLowerCase(),
@@ -100,7 +149,17 @@ type DispatchLogSlice = Array<{
   created_at: string;
 }>;
 
-function computeObservability(rows: DispatchLogSlice) {
+function computeObservability(
+  rows: DispatchLogSlice,
+  resendRows: Array<{ id: string; action: string; created_at: string }>,
+  rateLimitRows: Array<{
+    id: string;
+    channel: string;
+    details: Record<string, unknown>;
+    created_at: string;
+    reason: string | null;
+  }>
+) {
   const total = rows.length;
   const sent = rows.filter((r) => r.outcome === "sent").length;
   const failed = rows.filter((r) => r.outcome === "failed").length;
@@ -173,6 +232,23 @@ function computeObservability(rows: DispatchLogSlice) {
       slot.total > 0 ? Math.round((slot.sent / slot.total) * 1000) / 10 : null;
   });
 
+  // Resend totals — operator manual sends + dead-letter retries.
+  const resendsByAction: Record<string, number> = {};
+  resendRows.forEach((r) => {
+    resendsByAction[r.action] = (resendsByAction[r.action] ?? 0) + 1;
+  });
+
+  // Rate-limit triggers — count by bucket name so the operator sees
+  // which limit is firing.
+  const rateLimitByBucket: Record<string, number> = {};
+  rateLimitRows.forEach((r) => {
+    const bucket =
+      typeof r.details?.rateLimitBucket === "string"
+        ? (r.details.rateLimitBucket as string)
+        : "other";
+    rateLimitByBucket[bucket] = (rateLimitByBucket[bucket] ?? 0) + 1;
+  });
+
   return {
     windowHours: 24,
     sampleSize: total,
@@ -184,6 +260,14 @@ function computeObservability(rows: DispatchLogSlice) {
     providerLatencyMs: { p50, p95, samples: latencies.length },
     deadLetterTrend: trend,
     byChannel,
+    resends: {
+      total: resendRows.length,
+      byAction: resendsByAction,
+    },
+    rateLimitTriggers: {
+      total: rateLimitRows.length,
+      byBucket: rateLimitByBucket,
+    },
   };
 }
 

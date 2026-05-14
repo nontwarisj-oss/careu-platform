@@ -331,6 +331,11 @@ export type NotifyLifecycleInput = {
   event: LifecycleEvent;
   orderId: string;
   actorId?: string | null;
+  /** Bypass the 6-hour dedup window. Operator manual sends use this
+   *  ("resend pickup reminder") — they know they're re-firing. The
+   *  per-customer rate limiter still applies (that's the real spam
+   *  guard). */
+  force?: boolean;
 };
 
 export async function notifyLifecycleEvent(
@@ -456,12 +461,15 @@ export async function notifyLifecycleEvent(
       });
       continue;
     }
-    const isDup = await alreadyEnqueuedRecently({
-      customerId: order.customer_id,
-      kind,
-      orderId: order.id,
-      channel: ch.channel,
-    });
+    const isDup =
+      input.force === true
+        ? false
+        : await alreadyEnqueuedRecently({
+            customerId: order.customer_id,
+            kind,
+            orderId: order.id,
+            channel: ch.channel,
+          });
     if (isDup) {
       result.outcomes.push({
         channel: ch.channel,

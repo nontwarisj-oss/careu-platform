@@ -91,8 +91,13 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/admin/dispatch` UI (customer_notifications monitor)** | ✅ all | ✅ all | ❌ | ❌ | ❌ |
 | **Manual dispatch tick (`/api/admin/dispatch/run`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Dispatch summary (`/api/admin/dispatch/summary`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Resend notification (`/api/admin/notifications/resend`)** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **Cancel notification (`/api/admin/notifications/cancel`)** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **Manual lifecycle send (`/api/admin/notifications/send`)** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **Twilio delivery webhook (`/api/webhooks/twilio-status`)** | ⚠ no role — Twilio signature verification via `TWILIO_AUTH_TOKEN` | same | same | same | same |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
 | **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **Cron HEIC transcode (`/api/cron/heic-transcode`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Lifecycle event trigger (`/api/internal/lifecycle-event`)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ✅ 🏢 |
 | **`/admin/customers/[id]` UI (unified customer view)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ❌ |
 | **Admin customer read (`/api/admin/customers/[id]`)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ❌ |

@@ -22,8 +22,11 @@ type Counts = {
   queued: number;
   sending: number;
   sent: number;
+  delivered: number;
   failed: number;
+  dead_letter: number;
   skipped: number;
+  cancelled: number;
 };
 
 type FailureRow = {
@@ -88,6 +91,8 @@ type Observability = {
     string,
     { sent: number; failed: number; skipped: number; total: number; successRate: number | null }
   >;
+  resends?: { total: number; byAction: Record<string, number> };
+  rateLimitTriggers?: { total: number; byBucket: Record<string, number> };
 };
 
 type Summary = {
@@ -122,8 +127,11 @@ const STATUS_TONE: Record<string, string> = {
   queued: "border-yellow-200 bg-yellow-50 text-yellow-800",
   sending: "border-blue-200 bg-blue-50 text-blue-800",
   sent: "border-green-200 bg-green-50 text-green-800",
+  delivered: "border-emerald-300 bg-emerald-50 text-emerald-900",
   failed: "border-red-200 bg-red-50 text-red-800",
+  dead_letter: "border-red-300 bg-red-100 text-red-900",
   skipped: "border-gray-200 bg-gray-50 text-gray-700",
+  cancelled: "border-gray-300 bg-gray-100 text-gray-700",
 };
 
 export default function AdminDispatchPage() {
@@ -266,16 +274,27 @@ function DispatchInner() {
 
         {summary && (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
               <KpiCard label="Queued" value={summary.counts.queued} tone="yellow" />
               <KpiCard label="Sending" value={summary.counts.sending} tone="blue" />
               <KpiCard label="Sent" value={summary.counts.sent} tone="green" />
+              <KpiCard
+                label="Delivered"
+                value={summary.counts.delivered}
+                tone="green"
+              />
               <KpiCard
                 label="Failed"
                 value={summary.counts.failed}
                 tone={summary.counts.failed > 0 ? "red" : "gray"}
               />
+              <KpiCard
+                label="Dead-letter"
+                value={summary.counts.dead_letter}
+                tone={summary.counts.dead_letter > 0 ? "red" : "gray"}
+              />
               <KpiCard label="Skipped" value={summary.counts.skipped} tone="gray" />
+              <KpiCard label="Cancelled" value={summary.counts.cancelled} tone="gray" />
             </div>
 
             {summary.observability && (
@@ -350,6 +369,7 @@ function DispatchInner() {
                         <Th>Created</Th>
                         <Th>Branch</Th>
                         <Th>Error</Th>
+                        <Th>Action</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -373,6 +393,12 @@ function DispatchInner() {
                           </Td>
                           <Td className="text-xs text-red-700 max-w-md truncate">
                             {row.error_reason ?? "—"}
+                          </Td>
+                          <Td>
+                            <ResendButton
+                              notificationId={row.id}
+                              onDone={() => void load()}
+                            />
                           </Td>
                         </tr>
                       ))}
@@ -406,6 +432,7 @@ function DispatchInner() {
                         <Th>Send after</Th>
                         <Th>Attempts</Th>
                         <Th>Branch</Th>
+                        <Th>Action</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -432,6 +459,12 @@ function DispatchInner() {
                           </Td>
                           <Td className="text-xs text-gray-700">
                             {row.branch_id ?? "—"}
+                          </Td>
+                          <Td>
+                            <CancelButton
+                              notificationId={row.id}
+                              onDone={() => void load()}
+                            />
                           </Td>
                         </tr>
                       ))}
@@ -552,6 +585,53 @@ function ObservabilityPanel({ data }: { data: Observability }) {
         </div>
       </div>
 
+      {(data.resends || data.rateLimitTriggers) && (
+        <div className="mt-4 grid sm:grid-cols-2 gap-3">
+          {data.resends && (
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+                Resends (24h)
+              </p>
+              <p className="mt-0.5 text-xl font-extrabold text-gray-900">
+                {data.resends.total}
+              </p>
+              <div className="text-[10px] text-gray-600">
+                {Object.entries(data.resends.byAction)
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(" · ") || "—"}
+              </div>
+            </div>
+          )}
+          {data.rateLimitTriggers && (
+            <div
+              className={`rounded-xl border px-3 py-2 ${
+                data.rateLimitTriggers.total > 0
+                  ? "border-amber-200 bg-amber-50"
+                  : "border-gray-100 bg-gray-50"
+              }`}
+            >
+              <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+                Rate-limit triggers (24h)
+              </p>
+              <p
+                className={`mt-0.5 text-xl font-extrabold ${
+                  data.rateLimitTriggers.total > 0
+                    ? "text-amber-800"
+                    : "text-gray-900"
+                }`}
+              >
+                {data.rateLimitTriggers.total}
+              </p>
+              <div className="text-[10px] text-gray-700">
+                {Object.entries(data.rateLimitTriggers.byBucket)
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(" · ") || "—"}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {Object.keys(data.byChannel).length > 0 && (
         <div className="mt-4">
           <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
@@ -650,5 +730,95 @@ function Pill({ text, tone }: { text: string; tone: string }) {
     >
       {text}
     </span>
+  );
+}
+
+function ResendButton({
+  notificationId,
+  onDone,
+}: {
+  notificationId: string;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const handle = async () => {
+    if (busy) return;
+    const reason =
+      window.prompt("เหตุผลในการส่งซ้ำ (optional)") ?? null;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/notifications/resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notificationId, reason }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        window.alert(`ส่งซ้ำไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`);
+      } else {
+        onDone();
+      }
+    } catch (err) {
+      window.alert(
+        `ส่งซ้ำไม่สำเร็จ: ${err instanceof Error ? err.message : "Network error"}`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handle}
+      disabled={busy}
+      className="rounded-md border border-green-200 bg-green-50 hover:bg-green-100 text-green-800 px-2 py-1 text-[10px] font-semibold disabled:opacity-50"
+    >
+      {busy ? "กำลังส่ง..." : "ส่งซ้ำ"}
+    </button>
+  );
+}
+
+function CancelButton({
+  notificationId,
+  onDone,
+}: {
+  notificationId: string;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const handle = async () => {
+    if (busy) return;
+    if (!window.confirm("ยกเลิกข้อความนี้ก่อนส่ง?")) return;
+    const reason = window.prompt("เหตุผล (optional)") ?? null;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/notifications/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notificationId, reason }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        window.alert(`ยกเลิกไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`);
+      } else {
+        onDone();
+      }
+    } catch (err) {
+      window.alert(
+        `ยกเลิกไม่สำเร็จ: ${err instanceof Error ? err.message : "Network error"}`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handle}
+      disabled={busy}
+      className="rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-red-800 px-2 py-1 text-[10px] font-semibold disabled:opacity-50"
+    >
+      {busy ? "..." : "ยกเลิก"}
+    </button>
   );
 }
