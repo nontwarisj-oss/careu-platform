@@ -1778,6 +1778,111 @@ Funnel write sites today: `quote_started` (public quote), `order_created` (attri
 
 ---
 
+## 12v. Broadcast engine maturity (post-`20260545`)
+
+> Status: **production-hardened broadcast engine**. Worker concurrency control + cron failure-streak surfacing + draft-level pause/resume + cross-draft overlap rejection + broadcast delivery callbacks + smoke-test page.
+
+This phase tightens the broadcast pipeline rather than adding new features. Seven additions:
+
+### 12v.1 New tables (migration `20260545`)
+
+- `worker_locks` — distributed advisory lock. Cron acquires a row by `(lock_name, nonce, expires_at)`; concurrent ticks of the same cron short-circuit on the second one. Auto-expires so a crashed tick can never wedge a worker.
+- `cron_failure_streaks` — per-cron counter. Reset on every successful tick; incremented on every failure. Read by the workers dashboard for "×3 consecutive failures" badges.
+- `broadcast_drafts.status` extended to allow `'paused'`.
+- `broadcast_audit_log.action` extended to allow `pause / resume / send_queued / send_started / send_completed / send_cancelled / send_paused / send_resumed`.
+- `broadcast_send_targets` partial index on `(customer_id, created_at desc) where status in ('pending','dispatched')` — supports the new pre-flight overlap check.
+
+### 12v.2 Worker concurrency control
+
+`lib/workerLocks.ts::withWorkerLock(name, handler, opts)` — best-effort distributed lock around any cron handler.
+
+`lib/cronHeartbeat.ts::withCronHeartbeat` gains an optional `lockName` parameter. When set, the wrapper:
+- Acquires the row in `worker_locks` before running the handler.
+- On contention: writes a "skipped" heartbeat (success=true, details.skipped=true) and returns `{ skipped: true, reason }` — does not count as a failure.
+- On normal completion: releases the row by `(name, nonce)`.
+
+Wired into `dispatch-worker`, `broadcast-send`, `retry-worker`, `retention-triggers` (TTLs match each cron's expected interval × ~2).
+
+### 12v.3 Cron failure-streak surfacing
+
+`lib/cronHeartbeat.ts` updates `cron_failure_streaks` after every tick:
+- Success → upsert `current_streak=0`, `last_success_at=now()`.
+- Failure → increment + write `last_failure_at` + `last_failure_message`.
+
+`lib/workerHealth.ts::computeWorkerHealth` reads streaks in one bulk query, exposes `consecutiveFailures` on each `CronStatus`. `/admin/system/workers` renders a `×N` badge when streak > 0; warning at ≥1, critical at ≥3.
+
+### 12v.4 Broadcast delivery callback
+
+`lib/broadcastDeliveryCallback.ts::maybeRecordBroadcastDelivery({notificationId, stage})`:
+- Looks up `broadcast_send_targets` by `notification_id` (set at fan-out time).
+- When a match is found: increments the matching `broadcast_metrics_daily` column for today + bumps the broadcast funnel via `incrementFunnel(stage="delivered" | "opened" | "clicked")`.
+- Best-effort; failures don't propagate to the webhook caller.
+
+Wired into:
+- `POST /api/webhooks/email-status` — Resend `delivered/bounced/failed/opened/clicked` events.
+- `POST /api/webhooks/twilio-status` — Twilio `delivered/failed` events.
+
+This closes the Phase 19 follow-up: the Phase 20 funnel writer's `delivered/opened/clicked` stages were defined but never auto-written. They are now.
+
+### 12v.5 Per-draft pause / resume
+
+`POST /api/admin/crm/broadcasts/[id]/pause` — sets draft status='paused' AND pauses every active send_job (queued + processing) for the draft. Idempotent.
+
+`POST /api/admin/crm/broadcasts/[id]/resume` — flips draft back to 'draft' AND resumes paused send_jobs to 'queued'. The next cron tick picks them up.
+
+The broadcast send worker re-checks draft status at the top of every per-job tick (`processJobTick`) — guards against a race where the API pauses the draft *between* the tick fetching jobs and processing them.
+
+`POST /api/admin/crm/broadcasts/[id]/send` returns 409 when draft status='paused'.
+
+### 12v.6 Cross-draft overlap pre-flight
+
+`lib/broadcastPolicyService.ts::checkActiveJobOverlap({customerIds, excludeJobId, thresholdRatio})`:
+- Reads `broadcast_send_targets` joined to `broadcast_send_jobs.status`.
+- Counts customers already targeted by another live job (status in queued/processing/paused) within the dedup window.
+- Refuses the send when overlap ratio ≥ threshold (default 50%).
+
+`lib/broadcastSegmentCustomers.ts` extracted from the send worker so the send-create endpoint can reuse the same customer-id resolution as the eventual fan-out — guarantees the overlap warning matches the actual targeting.
+
+### 12v.7 Branch quiet-hours UI polish
+
+`/admin/settings/triggers` adds a dedicated `<QuietHoursPanel>` block:
+- Readable preview ("09:00 → 19:00" or "24/7 (not enforced)").
+- Hour dropdowns (HH:00 select) instead of raw `<input type=number>`.
+- Live "now at Bangkok HH:00 · in/outside window" indicator.
+- Tonal pill: green when current time is inside window, amber when outside, gray when not enforced.
+- Inline revert buttons per knob.
+
+### 12v.8 Production smoke-test page
+
+`GET /api/admin/system/smoke-test` — owner / HQ only. Runs ~20 checks across 5 categories:
+- **Config:** required envs (Supabase, SESSION_SECRET, CRON_SECRET, TRACKING_LINK_SECRET) + provider envs (Resend, Twilio, LINE).
+- **DB:** branches table reachable; Phase 20/21 tables present.
+- **Workers:** any active failure streaks; stale `worker_locks`.
+- **Broadcast:** stuck jobs (>6h in 'processing'); recent send activity (last 7d).
+- **Security:** global emergency-stop state.
+
+`/admin/system/smoke-test` renders the result grouped by category with green/yellow/red status pills. Designed for "operator just deployed a new branch — verify everything green before going live".
+
+### 12v.9 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `worker_locks` RLS | owner/HQ read only | enforced |
+| `cron_failure_streaks` RLS | owner/HQ read only | enforced |
+| `POST /api/admin/crm/broadcasts/[id]/pause` | role + `requireBranchAccess` | enforced |
+| `POST /api/admin/crm/broadcasts/[id]/resume` | role + `requireBranchAccess` | enforced |
+| `checkActiveJobOverlap` | server-only | per-customer-id scope |
+| `GET /api/admin/system/smoke-test` | owner / HQ | no branch scope (system-wide) |
+
+### 12v.10 Known limitations (carried forward)
+
+- Daily / weekly caps at broadcast-send-create still not enforced (helpers exist in `lib/engagementGuardrails.ts`; not wired).
+- Emergency stop remains global-only for dispatch.
+- `birthday_trigger_enabled` per-branch still consulted at policy layer only, not at the retention sweep's candidate fetch.
+- Smoke-test does not synthesize a test broadcast or send a probe message — it's pure inspection.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

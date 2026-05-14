@@ -93,29 +93,35 @@ async function handle(req: Request) {
   }
 
   const limit = parseLimit(req);
-  const result = await withCronHeartbeat("retry-worker", async () => {
-    const r = await runRetryTick({ limit, actorId: "cron" });
-    // runRetryTick result shape varies; use whatever counters it returns
-    // by reflecting onto the top-level numeric fields.
-    const summary = r as unknown as {
-      processed?: number;
-      succeeded?: number;
-      failed?: number;
-      dead?: number;
-    };
-    return {
-      result: r,
-      payload: {
-        rowsProcessed: summary.processed ?? 0,
-        details: {
-          succeeded: summary.succeeded ?? 0,
-          failed: summary.failed ?? 0,
-          dead: summary.dead ?? 0,
+  const result = await withCronHeartbeat(
+    "retry-worker",
+    async () => {
+      const r = await runRetryTick({ limit, actorId: "cron" });
+      // runRetryTick result shape varies; use whatever counters it returns
+      // by reflecting onto the top-level numeric fields.
+      const summary = r as unknown as {
+        processed?: number;
+        succeeded?: number;
+        failed?: number;
+        dead?: number;
+      };
+      return {
+        result: r,
+        payload: {
+          rowsProcessed: summary.processed ?? 0,
+          details: {
+            succeeded: summary.succeeded ?? 0,
+            failed: summary.failed ?? 0,
+            dead: summary.dead ?? 0,
+          },
         },
-      },
-    };
-  });
-
+      };
+    },
+    { lockName: "cron:retry-worker", lockTtlMs: 9 * 60 * 1000 }
+  );
+  if ("skipped" in result && result.skipped === true) {
+    return NextResponse.json({ ok: true, actorId: "cron", skipped: true, reason: result.reason });
+  }
   return NextResponse.json({
     ok: true,
     actorId: "cron",

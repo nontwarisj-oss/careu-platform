@@ -128,6 +128,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`engagement_guardrails` write** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`campaign_funnel_metrics` table read** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
 | **`POST /api/internal/attribute-order`** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 |
+| **`POST /api/admin/crm/broadcasts/[id]/pause`** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **`POST /api/admin/crm/broadcasts/[id]/resume`** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **`worker_locks` table read** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`cron_failure_streaks` table read** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/system/smoke-test` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`GET /api/admin/system/smoke-test`** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
 | **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
 | **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
@@ -316,7 +322,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-14 | Added `admin` page key. `/admin` + `/admin/staff` UI surfaces owner / hq_admin staff management (role, branch, active, wage, skills). Sidebar grouped Operations / Finance / Management. | — |
 | 2026-05-14 | Added `recovery` page key. `/admin/recovery` UI gives owner / hq_admin (all branches) + branch_manager (own branch) sync_failures + LINE log visibility, with retry / resend / resolve / receipt-rebuild actions. Migration `20260528` adds branch-scoped read on `sync_failures` and extends `kind` CHECK with `'line_send'` + `'receipt_rebuild'`. | — |
 | 2026-05-14 | Phase 20 — operator controls. Added `/admin/settings/triggers` (branch_manager own-branch write), `/admin/system/guardrails` (owner/HQ + emergency stop), `engagement_guardrails` + `campaign_funnel_metrics` tables, and `/api/internal/attribute-order` for server-side campaign attribution. Migration `20260544`. | — |
+| 2026-05-14 | Phase 21 — broadcast engine maturity. Added `worker_locks` (concurrency control), `cron_failure_streaks` (×N badges in workers UI), broadcast-draft pause/resume (`/api/admin/crm/broadcasts/[id]/pause` + `/resume`), cross-draft overlap pre-flight at send-create, broadcast delivery callback wired into Resend + Twilio webhooks, `/admin/system/smoke-test` page. Migration `20260545`. | — |
 
 ---
 
-**Last updated:** 2026-05-14 (Phase 20 — operator-configurable engagement controls)
+**Last updated:** 2026-05-14 (Phase 21 — broadcast engine maturity cleanup)

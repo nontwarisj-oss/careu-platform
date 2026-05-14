@@ -27,6 +27,7 @@
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -348,6 +349,20 @@ export async function POST(req: Request) {
         },
       });
     } catch {}
+  }
+
+  // Phase 21: bump broadcast_metrics_daily + campaign_funnel_metrics
+  // when the notification is part of a broadcast. Best-effort.
+  if (mapped === "delivered") {
+    await maybeRecordBroadcastDelivery({
+      notificationId: row.id,
+      stage: "delivered",
+    });
+  } else if (mapped === "failed") {
+    await maybeRecordBroadcastDelivery({
+      notificationId: row.id,
+      stage: "failed",
+    });
   }
 
   return NextResponse.json({

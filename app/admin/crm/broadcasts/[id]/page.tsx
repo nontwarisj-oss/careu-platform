@@ -424,9 +424,68 @@ function Inner() {
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">การจัดการ</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Archive แล้วยังกู้คืนได้โดยเปลี่ยน status เป็น &quot;draft&quot;
+            Pause หยุดส่ง draft + ทุก send_job ที่กำลังทำงาน · Archive
+            เก็บถาวร (กู้คืนได้ภายหลัง)
           </p>
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!archived && draft.status !== "paused" && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!window.confirm(
+                    "Pause draft นี้? Send jobs ที่กำลังทำงานจะถูกหยุด — Resume เพื่อใช้งานต่อ."
+                  ))
+                    return;
+                  const r = await fetch(
+                    `/api/admin/crm/broadcasts/${draft.id}/pause`,
+                    { method: "POST" }
+                  );
+                  const j = (await r.json()) as {
+                    ok?: boolean;
+                    reason?: string;
+                    pausedJobCount?: number;
+                  };
+                  if (!j.ok) {
+                    window.alert(j.reason ?? `pause ล้มเหลว HTTP ${r.status}`);
+                    return;
+                  }
+                  setDraft({ ...draft, status: "paused" });
+                  setMessage(
+                    `Paused — หยุด send_jobs ${j.pausedJobCount ?? 0} งาน`
+                  );
+                }}
+                className="rounded-xl border border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-800 px-3 py-2 text-sm font-semibold"
+              >
+                Pause draft
+              </button>
+            )}
+            {draft.status === "paused" && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const r = await fetch(
+                    `/api/admin/crm/broadcasts/${draft.id}/resume`,
+                    { method: "POST" }
+                  );
+                  const j = (await r.json()) as {
+                    ok?: boolean;
+                    reason?: string;
+                    resumedJobCount?: number;
+                  };
+                  if (!j.ok) {
+                    window.alert(j.reason ?? `resume ล้มเหลว HTTP ${r.status}`);
+                    return;
+                  }
+                  setDraft({ ...draft, status: "draft" });
+                  setMessage(
+                    `Resumed — กลับมาเริ่มส่ง ${j.resumedJobCount ?? 0} งาน`
+                  );
+                }}
+                className="rounded-xl border border-green-200 bg-green-50 hover:bg-green-100 text-green-800 px-3 py-2 text-sm font-semibold"
+              >
+                Resume draft
+              </button>
+            )}
             {!archived ? (
               <button
                 type="button"
@@ -779,6 +838,7 @@ function SendSection({
 
   const disabled =
     draftStatus === "archived" ||
+    draftStatus === "paused" ||
     busy !== null;
 
   return (
@@ -788,6 +848,11 @@ function SendSection({
         {draftStatus === "archived" && (
           <span className="text-[10px] text-gray-500">
             draft archive แล้ว — restore ก่อนส่ง
+          </span>
+        )}
+        {draftStatus === "paused" && (
+          <span className="text-[10px] text-orange-700">
+            draft ถูก pause — resume ก่อนส่ง
           </span>
         )}
       </div>

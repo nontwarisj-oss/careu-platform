@@ -27,6 +27,7 @@ import {
   maybeApplyDeliveryStatus,
   type CommEventType,
 } from "@/lib/communicationEvents";
+import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -178,6 +179,20 @@ export async function POST(req: Request) {
         event.data?.bounce?.type ? `: ${event.data.bounce.type}` : ""
       }`,
     });
+  }
+
+  // Phase 21: also bump broadcast_metrics_daily + campaign_funnel_metrics
+  // when the notification belongs to a broadcast send_job. Best-effort.
+  if (notificationId) {
+    if (internal === "delivered") {
+      await maybeRecordBroadcastDelivery({ notificationId, stage: "delivered" });
+    } else if (internal === "bounced" || internal === "failed") {
+      await maybeRecordBroadcastDelivery({ notificationId, stage: "failed" });
+    } else if (internal === "opened") {
+      await maybeRecordBroadcastDelivery({ notificationId, stage: "opened" });
+    } else if (internal === "clicked") {
+      await maybeRecordBroadcastDelivery({ notificationId, stage: "clicked" });
+    }
   }
 
   return NextResponse.json({ ok: true, handled: true, mapped: internal });

@@ -239,8 +239,42 @@ function Inner() {
             {loading ? (
               <p className="text-sm text-gray-500">โหลด...</p>
             ) : (
-              <div className="divide-y divide-gray-100">
-                {EDITABLE.map((spec) => {
+              <>
+                <QuietHoursPanel
+                  startHour={
+                    typeof draftValueFor("quiet_hours_start_h") === "number"
+                      ? (draftValueFor("quiet_hours_start_h") as number)
+                      : 9
+                  }
+                  endHour={
+                    typeof draftValueFor("quiet_hours_end_h") === "number"
+                      ? (draftValueFor("quiet_hours_end_h") as number)
+                      : 19
+                  }
+                  enforced={draftValueFor("quiet_hours_enforced") === true}
+                  startSource={effective.quiet_hours_start_h?.source ?? "default"}
+                  endSource={effective.quiet_hours_end_h?.source ?? "default"}
+                  enforcedSource={
+                    effective.quiet_hours_enforced?.source ?? "default"
+                  }
+                  onChangeStart={(h) =>
+                    setDraft({ ...draft, quiet_hours_start_h: h })
+                  }
+                  onChangeEnd={(h) =>
+                    setDraft({ ...draft, quiet_hours_end_h: h })
+                  }
+                  onToggleEnforced={(v) =>
+                    setDraft({ ...draft, quiet_hours_enforced: v })
+                  }
+                  onRevert={handleRevert}
+                />
+                <div className="divide-y divide-gray-100">
+                {EDITABLE.filter(
+                  (s) =>
+                    s.key !== "quiet_hours_start_h" &&
+                    s.key !== "quiet_hours_end_h" &&
+                    s.key !== "quiet_hours_enforced"
+                ).map((spec) => {
                   const eff = effective[spec.key];
                   const value = draftValueFor(spec.key);
                   const isOverride = eff?.source === "branch";
@@ -308,7 +342,8 @@ function Inner() {
                     </div>
                   );
                 })}
-              </div>
+                </div>
+              </>
             )}
 
             <button
@@ -326,6 +361,188 @@ function Inner() {
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 21 polish: dedicated quiet-hours block that:
+ *  • shows the window as readable "HH:00 → HH:00 (Bangkok)"
+ *  • uses HH-select inputs instead of raw number inputs
+ *  • exposes the enforce toggle inline
+ *  • highlights when current time falls inside the active window.
+ */
+function QuietHoursPanel({
+  startHour,
+  endHour,
+  enforced,
+  startSource,
+  endSource,
+  enforcedSource,
+  onChangeStart,
+  onChangeEnd,
+  onToggleEnforced,
+  onRevert,
+}: {
+  startHour: number;
+  endHour: number;
+  enforced: boolean;
+  startSource: "branch" | "default";
+  endSource: "branch" | "default";
+  enforcedSource: "branch" | "default";
+  onChangeStart: (h: number) => void;
+  onChangeEnd: (h: number) => void;
+  onToggleEnforced: (v: boolean) => void;
+  onRevert: (key: string) => void;
+}) {
+  const formatHour = (h: number) =>
+    `${String(h).padStart(2, "0")}:00`;
+  const bangkokHour = useMemo(() => {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Bangkok",
+        hour: "numeric",
+        hour12: false,
+      }).formatToParts(new Date());
+      return Number(parts.find((p) => p.type === "hour")?.value ?? "0") % 24;
+    } catch {
+      return new Date().getHours();
+    }
+  }, []);
+  const inWindow =
+    enforced &&
+    (startHour <= endHour
+      ? bangkokHour >= startHour && bangkokHour < endHour
+      : bangkokHour >= startHour || bangkokHour < endHour);
+
+  const anyOverride =
+    startSource === "branch" ||
+    endSource === "branch" ||
+    enforcedSource === "branch";
+
+  return (
+    <div className="py-3 border-b border-gray-100">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-gray-900">
+            Quiet hours (Bangkok time)
+          </div>
+          <div className="mt-0.5 text-[10px] text-gray-500">
+            ส่งได้เฉพาะระหว่างชั่วโมงด้านล่าง · ปิด toggle เพื่อให้สาขานี้ส่ง 24/7
+          </div>
+          <div
+            className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+              !enforced
+                ? "border-gray-200 bg-gray-50 text-gray-600"
+                : inWindow
+                  ? "border-green-300 bg-green-50 text-green-900"
+                  : "border-amber-300 bg-amber-50 text-amber-900"
+            }`}
+          >
+            <span className="font-semibold">
+              {enforced
+                ? `${formatHour(startHour)} → ${formatHour(endHour)}`
+                : "24 / 7 (ไม่บังคับ)"}
+            </span>
+            {enforced && (
+              <span className="text-[10px]">
+                · ตอนนี้ที่กรุงเทพฯ {formatHour(bangkokHour)} · {inWindow ? "ในหน้าต่าง" : "นอกหน้าต่าง"}
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enforced}
+          onClick={() => onToggleEnforced(!enforced)}
+          className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors ${
+            enforced ? "bg-green-600" : "bg-gray-300"
+          }`}
+          title="enforce quiet hours"
+        >
+          <span
+            className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+              enforced ? "translate-x-5" : "translate-x-0.5"
+            } self-center`}
+          />
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-[11px] font-semibold text-gray-700">
+            เริ่ม{" "}
+            <span className="text-[10px] font-normal text-gray-500">
+              ({startSource === "branch" ? "branch override" : "HQ default"})
+            </span>
+          </span>
+          <select
+            value={startHour}
+            onChange={(e) => onChangeStart(Number(e.target.value))}
+            disabled={!enforced}
+            className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1 text-sm disabled:bg-gray-100"
+          >
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {formatHour(h)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-[11px] font-semibold text-gray-700">
+            สิ้นสุด (exclusive){" "}
+            <span className="text-[10px] font-normal text-gray-500">
+              ({endSource === "branch" ? "branch override" : "HQ default"})
+            </span>
+          </span>
+          <select
+            value={endHour}
+            onChange={(e) => onChangeEnd(Number(e.target.value))}
+            disabled={!enforced}
+            className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1 text-sm disabled:bg-gray-100"
+          >
+            {Array.from({ length: 25 }, (_, h) => (
+              <option key={h} value={h}>
+                {formatHour(h)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {anyOverride && (
+        <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+          {startSource === "branch" && (
+            <button
+              type="button"
+              onClick={() => onRevert("quiet_hours_start_h")}
+              className="text-red-700 hover:text-red-900 underline"
+            >
+              revert start
+            </button>
+          )}
+          {endSource === "branch" && (
+            <button
+              type="button"
+              onClick={() => onRevert("quiet_hours_end_h")}
+              className="text-red-700 hover:text-red-900 underline"
+            >
+              revert end
+            </button>
+          )}
+          {enforcedSource === "branch" && (
+            <button
+              type="button"
+              onClick={() => onRevert("quiet_hours_enforced")}
+              className="text-red-700 hover:text-red-900 underline"
+            >
+              revert enforce toggle
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

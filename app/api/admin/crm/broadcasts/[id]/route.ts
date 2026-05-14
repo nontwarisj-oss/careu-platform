@@ -19,11 +19,11 @@ type PatchInput = {
   templateSms?: string | null;
   templateLine?: string | null;
   channels?: string[];
-  status?: "draft" | "preview" | "archived";
+  status?: "draft" | "preview" | "paused" | "archived";
 };
 
 const CHANNELS = ["sms", "line", "email"];
-const STATUSES = new Set(["draft", "preview", "archived"]);
+const STATUSES = new Set(["draft", "preview", "paused", "archived"]);
 
 async function operatorScope(): Promise<
   | { ok: true; role: string; branchCode: string | null; actorId: string }

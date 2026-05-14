@@ -47,6 +47,7 @@ import {
   estimateAudience,
   type SegmentDefinition,
 } from "@/lib/crmSegmentationService";
+import { fetchCustomerIdsForSegment } from "@/lib/broadcastSegmentCustomers";
 import { evaluatePolicy } from "@/lib/communicationPolicyService";
 import {
   checkQuietHours,
@@ -204,6 +205,23 @@ async function processJobTick(
   if (await isEmergencyStopped()) {
     attempt.blockedReason = "global_emergency_stop=true";
     await recordAttempt("global_emergency_stop=true");
+    return attempt;
+  }
+
+  // 0b. Phase 21: per-DRAFT pause. The pause API also flips the
+  //     job's status to 'paused', but we re-check on every tick so
+  //     a race-condition between the pause API and the cron tick
+  //     can't slip a partial fan-out through.
+  const draftStatusRes = await admin
+    .from("broadcast_drafts")
+    .select("status")
+    .eq("id", job.draft_id)
+    .maybeSingle();
+  const draftStatus =
+    (draftStatusRes.data as { status: string } | null)?.status ?? null;
+  if (draftStatus === "paused") {
+    attempt.blockedReason = "draft_paused=true";
+    await recordAttempt("draft_paused=true");
     return attempt;
   }
 
@@ -436,13 +454,13 @@ async function fanOutTargets(
   }
 
   // We need the customer ID list. estimateAudience returns counts +
-  // sample, not the full list. For now we re-fetch via the same
-  // service. (Future: a streaming variant of estimateAudience.)
-  const customerIds = await fetchCustomerIdsForSegment(
-    admin,
-    job.segment_snapshot,
-    job.branch_id
-  );
+  // sample, not the full list. The shared helper in
+  // lib/broadcastSegmentCustomers.ts is the single source of truth —
+  // also used by the send-create endpoint's pre-flight overlap check.
+  const customerIds = await fetchCustomerIdsForSegment({
+    segment: job.segment_snapshot,
+    branchId: job.branch_id,
+  });
   if (customerIds.length === 0) {
     return { ok: true, expectedTotal: 0 };
   }
@@ -484,53 +502,6 @@ async function fanOutTargets(
     }
   }
   return { ok: true, expectedTotal: rows.length };
-}
-
-async function fetchCustomerIdsForSegment(
-  admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
-  segment: SegmentDefinition,
-  jobBranchId: string | null
-): Promise<string[]> {
-  // Lightweight, IDs-only fetch. Mirrors the filter logic in
-  // crmSegmentationService — kept local rather than imported to keep
-  // segmentation service's API focused on counts. Bumping the cap
-  // here is safe; the audience-cap flag is the real ceiling.
-  let q = admin.from("customers").select("id").limit(5000);
-
-  if (jobBranchId) {
-    q = q.eq("branch_id", jobBranchId);
-  } else if (segment.branchSlugs && segment.branchSlugs.length > 0) {
-    q = q.in("branch_id", segment.branchSlugs);
-  }
-  if (segment.tiers && segment.tiers.length > 0)
-    q = q.in("customer_tier", segment.tiers);
-  if (segment.lifecycleStages && segment.lifecycleStages.length > 0)
-    q = q.in("lifecycle_stage", segment.lifecycleStages);
-  if (segment.customerTypes && segment.customerTypes.length > 0)
-    q = q.in("customer_type", segment.customerTypes);
-  if (typeof segment.retentionScoreGte === "number")
-    q = q.gte("retention_score", segment.retentionScoreGte);
-  if (typeof segment.totalSpendGte === "number")
-    q = q.gte("lifetime_spend", segment.totalSpendGte);
-  if (typeof segment.totalOrdersGte === "number")
-    q = q.gte("total_orders", segment.totalOrdersGte);
-  if (typeof segment.inactiveDaysGte === "number" && segment.inactiveDaysGte > 0) {
-    const cutoff = new Date(
-      Date.now() - segment.inactiveDaysGte * 24 * 60 * 60 * 1000
-    ).toISOString();
-    q = q.lte("last_visit_at", cutoff);
-  }
-  if (typeof segment.activeWithinDays === "number" && segment.activeWithinDays > 0) {
-    const cutoff = new Date(
-      Date.now() - segment.activeWithinDays * 24 * 60 * 60 * 1000
-    ).toISOString();
-    q = q.gte("last_visit_at", cutoff);
-  }
-  if (segment.requirePhone) q = q.not("normalized_phone", "is", null);
-
-  const res = await q;
-  if (res.error || !res.data) return [];
-  return ((res.data as Array<{ id: string }>) ?? []).map((r) => r.id);
 }
 
 // ---------- Per-target writers ------------------------------------------

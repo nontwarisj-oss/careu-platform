@@ -40,21 +40,28 @@ async function handle(req: Request) {
     1,
     Math.min(Number(url.searchParams.get("limit") ?? 5), 25)
   );
-  const result = await withCronHeartbeat("broadcast-send", async () => {
-    const r = await runBroadcastSendTick({ jobLimit: limit, actorId: null });
-    const dispatched = r.jobs.reduce((acc, j) => acc + j.dispatched, 0);
-    return {
-      result: r,
-      payload: {
-        rowsProcessed: dispatched,
-        details: {
-          jobs: r.jobs.length,
-          skipped: r.jobs.reduce((acc, j) => acc + j.skipped, 0),
-          failed: r.jobs.reduce((acc, j) => acc + j.failed, 0),
+  const result = await withCronHeartbeat(
+    "broadcast-send",
+    async () => {
+      const r = await runBroadcastSendTick({ jobLimit: limit, actorId: null });
+      const dispatched = r.jobs.reduce((acc, j) => acc + j.dispatched, 0);
+      return {
+        result: r,
+        payload: {
+          rowsProcessed: dispatched,
+          details: {
+            jobs: r.jobs.length,
+            skipped: r.jobs.reduce((acc, j) => acc + j.skipped, 0),
+            failed: r.jobs.reduce((acc, j) => acc + j.failed, 0),
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    { lockName: "cron:broadcast-send", lockTtlMs: 4 * 60 * 1000 }
+  );
+  if ("skipped" in result && result.skipped === true) {
+    return NextResponse.json({ ok: true, skipped: true, reason: result.reason });
+  }
   return NextResponse.json({ ok: true, ...result });
 }
 

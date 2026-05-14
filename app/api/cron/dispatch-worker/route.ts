@@ -46,21 +46,28 @@ async function handle(req: Request) {
     Number.isFinite(raw) && raw > 0
       ? Math.min(Math.floor(raw), MAX_LIMIT)
       : DEFAULT_LIMIT;
-  const result = await withCronHeartbeat("dispatch-worker", async () => {
-    const r = await runDispatchTick({ limit, actorId: "cron" });
-    return {
-      result: r,
-      payload: {
-        rowsProcessed: r.processed,
-        details: {
-          succeeded: r.succeeded,
-          failed: r.failed,
-          dead: r.dead,
-          skipped: r.skipped,
+  const result = await withCronHeartbeat(
+    "dispatch-worker",
+    async () => {
+      const r = await runDispatchTick({ limit, actorId: "cron" });
+      return {
+        result: r,
+        payload: {
+          rowsProcessed: r.processed,
+          details: {
+            succeeded: r.succeeded,
+            failed: r.failed,
+            dead: r.dead,
+            skipped: r.skipped,
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    { lockName: "cron:dispatch-worker", lockTtlMs: 4 * 60 * 1000 }
+  );
+  if ("skipped" in result && result.skipped === true) {
+    return NextResponse.json({ ok: true, actorId: "cron", skipped: true, reason: result.reason });
+  }
   return NextResponse.json({ ok: true, actorId: "cron", ...result });
 }
 

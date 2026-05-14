@@ -23,12 +23,14 @@ import {
   type SegmentDefinition,
 } from "@/lib/crmSegmentationService";
 import {
+  checkActiveJobOverlap,
   checkAudienceCap,
   checkCrossBranch,
   checkSchedule,
   isChannelEnabled,
 } from "@/lib/broadcastPolicyService";
 import { getBoolFlag, FLAG_KEYS } from "@/lib/featureFlags";
+import { fetchCustomerIdsForSegment } from "@/lib/broadcastSegmentCustomers";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -113,6 +115,13 @@ export async function POST(
       { status: 409 }
     );
   }
+  if (draft.status === "paused") {
+    // Phase 21: per-draft pause blocks send.
+    return NextResponse.json(
+      { ok: false, reason: "draft ถูก pause แล้ว — resume ก่อนส่ง" },
+      { status: 409 }
+    );
+  }
   if (draft.branch_id) {
     const guard = await requireBranchAccess(draft.branch_id);
     if (guard instanceof NextResponse) return guard;
@@ -185,6 +194,32 @@ export async function POST(
   if (!capCheck.ok) {
     return NextResponse.json(
       { ok: false, reason: capCheck.reason },
+      { status: 409 }
+    );
+  }
+
+  // 4b. Phase 21: cross-draft overlap pre-flight. Refuses sends that
+  //     would re-target customers currently sitting in another active
+  //     send_job. The worker also dedups at fan-out time; this gate
+  //     gives the operator an early, descriptive error before they
+  //     spend audit + DB churn on a no-op job.
+  const customerIds = await fetchCustomerIdsForSegment({
+    segment: draft.segment,
+    branchId: draft.branch_id,
+  });
+  const overlap = await checkActiveJobOverlap({
+    customerIds,
+    excludeJobId: null,
+    thresholdRatio: 0.5,
+  });
+  if (!overlap.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: overlap.reason,
+        overlapCount: overlap.overlapCount,
+        overlapRatio: overlap.overlapRatio,
+      },
       { status: 409 }
     );
   }

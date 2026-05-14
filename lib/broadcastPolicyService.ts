@@ -241,6 +241,91 @@ export async function isChannelEnabled(channel: string): Promise<boolean> {
   return false;
 }
 
+// ---------- Pre-flight active-job overlap (Phase 21) --------------------
+
+/**
+ * Phase 21: at SEND-CREATE time, refuse if more than a threshold of
+ * the proposed audience is already targeted by another live send_job
+ * (queued / processing / paused). Stops "operator clicks Send twice
+ * before the first fan-out finishes" or "two campaigns running over
+ * the same VIP cohort at once".
+ *
+ * Implementation: read distinct customer_ids from
+ * broadcast_send_targets for live jobs other than the current one
+ * (id is null at send-create because the row doesn't exist yet).
+ * The default threshold is 50% — if more than half the audience is
+ * already touched, refuse.
+ */
+export async function checkActiveJobOverlap(opts: {
+  customerIds: string[];
+  excludeJobId?: string | null;
+  /** 0..1; default 0.5 = refuse when >= 50% overlap. */
+  thresholdRatio?: number;
+}): Promise<
+  | { ok: true; overlapCount: number; overlapRatio: number }
+  | { ok: false; reason: string; overlapCount: number; overlapRatio: number }
+> {
+  const admin = getSupabaseAdmin();
+  if (!admin || opts.customerIds.length === 0) {
+    return { ok: true, overlapCount: 0, overlapRatio: 0 };
+  }
+  const threshold = Math.max(0, Math.min(1, opts.thresholdRatio ?? 0.5));
+
+  // Match the worker's dedup window — same horizon for consistency.
+  const windowHours = await getNumberFlag(FLAG_KEYS.BROADCAST_DEDUP_WINDOW_HOURS);
+  const since = new Date(
+    Date.now() - Math.max(1, windowHours) * 60 * 60 * 1000
+  ).toISOString();
+
+  // Pull customer_ids in chunks (Supabase URL/query-param size limits).
+  const CHUNK = 200;
+  const overlapSet = new Set<string>();
+  for (let i = 0; i < opts.customerIds.length; i += CHUNK) {
+    const slice = opts.customerIds.slice(i, i + CHUNK);
+    let q = admin
+      .from("broadcast_send_targets")
+      .select("customer_id, send_job_id, broadcast_send_jobs!inner(status)")
+      .in("customer_id", slice)
+      .in("status", ["pending", "dispatched"])
+      .gte("created_at", since);
+    if (opts.excludeJobId) {
+      q = q.neq("send_job_id", opts.excludeJobId);
+    }
+    const res = await q;
+    if (res.error) continue;
+    const rows = (res.data ?? []) as unknown as Array<{
+      customer_id: string;
+      broadcast_send_jobs:
+        | { status: string }
+        | Array<{ status: string }>
+        | null;
+    }>;
+    for (const r of rows) {
+      // Supabase types the embedded relation as either object or array
+      // depending on whether the FK is one-or-many; we accept both.
+      const jobs = r.broadcast_send_jobs;
+      const status = Array.isArray(jobs) ? jobs[0]?.status : jobs?.status;
+      // Live jobs only — completed / failed / cancelled don't matter.
+      if (status && ["queued", "processing", "paused"].includes(status)) {
+        overlapSet.add(r.customer_id);
+      }
+    }
+  }
+  const overlapCount = overlapSet.size;
+  const overlapRatio = opts.customerIds.length
+    ? overlapCount / opts.customerIds.length
+    : 0;
+  if (overlapRatio >= threshold) {
+    return {
+      ok: false,
+      reason: `cross-draft overlap: ${overlapCount}/${opts.customerIds.length} (${Math.round(overlapRatio * 100)}%) ลูกค้าอยู่ใน send_job ที่ยัง active — pause/cancel งานเดิมก่อน`,
+      overlapCount,
+      overlapRatio,
+    };
+  }
+  return { ok: true, overlapCount, overlapRatio };
+}
+
 // ---------- Cap check ----------------------------------------------------
 
 /**

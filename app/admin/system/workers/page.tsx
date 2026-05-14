@@ -26,6 +26,10 @@ type CronStatus = {
   successRate24h: number | null;
   totalRuns24h: number;
   failedRuns24h: number;
+  consecutiveFailures: number;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
   status: "healthy" | "warning" | "critical" | "unknown";
 };
 
@@ -299,6 +303,7 @@ function Inner() {
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Last run</th>
                   <th className="px-3 py-2">Silent</th>
+                  <th className="px-3 py-2">Streak</th>
                   <th className="px-3 py-2">Success (24h)</th>
                   <th className="px-3 py-2">Runs</th>
                   <th className="px-3 py-2">Last error</th>
@@ -329,6 +334,22 @@ function Inner() {
                       {c.silentForMinutes != null
                         ? `${c.silentForMinutes}m / ${c.expectedIntervalMinutes}m`
                         : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {c.consecutiveFailures > 0 ? (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                            c.consecutiveFailures >= 3
+                              ? "border-red-300 bg-red-50 text-red-800"
+                              : "border-amber-300 bg-amber-50 text-amber-800"
+                          }`}
+                          title={c.lastFailureMessage ?? undefined}
+                        >
+                          ×{c.consecutiveFailures}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-gray-400">—</span>
+                      )}
                     </td>
                     <td
                       className={`px-3 py-2 text-xs ${

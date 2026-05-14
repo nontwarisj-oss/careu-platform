@@ -18,7 +18,7 @@ type Draft = {
   template_sms: string | null;
   template_line: string | null;
   channels: string[];
-  status: "draft" | "preview" | "archived";
+  status: "draft" | "preview" | "paused" | "archived";
   branch_id: string | null;
   created_at: string;
   updated_at: string;
@@ -27,12 +27,14 @@ type Draft = {
 const STATUS_LABEL: Record<string, string> = {
   draft: "ฉบับร่าง",
   preview: "ดูตัวอย่างแล้ว",
+  paused: "พักไว้",
   archived: "เก็บถาวร",
 };
 
 const STATUS_TONE: Record<string, string> = {
   draft: "border-yellow-200 bg-yellow-50 text-yellow-800",
   preview: "border-blue-200 bg-blue-50 text-blue-900",
+  paused: "border-orange-200 bg-orange-50 text-orange-900",
   archived: "border-gray-200 bg-gray-50 text-gray-600",
 };
 

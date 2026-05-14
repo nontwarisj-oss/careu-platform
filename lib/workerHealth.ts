@@ -62,6 +62,13 @@ export type CronStatus = {
   successRate24h: number | null;
   totalRuns24h: number;
   failedRuns24h: number;
+  /** Phase 21: consecutive failures since the last successful tick.
+   *  Populated by lib/cronHeartbeat.ts on every invocation. Zero on
+   *  the most recent success. */
+  consecutiveFailures: number;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureMessage: string | null;
   status: "healthy" | "warning" | "critical" | "unknown";
 };
 
@@ -121,6 +128,34 @@ export async function computeWorkerHealth(): Promise<WorkerHealthSnapshot> {
 
   // ----- Cron status (per cron_name) -----
   const cronNames = Object.keys(CRON_EXPECTED_INTERVAL_MIN) as CronName[];
+  // Bulk-load all failure streak rows in one query rather than N round-trips.
+  const streakRes = await admin
+    .from("cron_failure_streaks")
+    .select("cron_name, current_streak, last_success_at, last_failure_at, last_failure_message")
+    .in("cron_name", cronNames as string[]);
+  const streakByName = new Map<
+    string,
+    {
+      current_streak: number;
+      last_success_at: string | null;
+      last_failure_at: string | null;
+      last_failure_message: string | null;
+    }
+  >();
+  for (const row of (streakRes.data ?? []) as Array<{
+    cron_name: string;
+    current_streak: number;
+    last_success_at: string | null;
+    last_failure_at: string | null;
+    last_failure_message: string | null;
+  }>) {
+    streakByName.set(row.cron_name, {
+      current_streak: row.current_streak,
+      last_success_at: row.last_success_at,
+      last_failure_at: row.last_failure_at,
+      last_failure_message: row.last_failure_message,
+    });
+  }
   const crons: CronStatus[] = [];
   for (const name of cronNames) {
     const expected = CRON_EXPECTED_INTERVAL_MIN[name];
@@ -167,14 +202,23 @@ export async function computeWorkerHealth(): Promise<WorkerHealthSnapshot> {
     const successRate =
       total > 0 ? Math.round(((total - failed) / total) * 1000) / 10 : null;
 
+    const streak = streakByName.get(name) ?? null;
+    const consecutiveFailures = streak?.current_streak ?? 0;
+
     let status: CronStatus["status"] = "unknown";
     if (!last) status = "unknown";
     else if (silentForMinutes != null && silentForMinutes > silenceThreshold) {
+      status = "critical";
+    } else if (consecutiveFailures >= 3) {
+      // 3+ consecutive failures = critical regardless of silence.
+      // Phase 21: this is the dedicated streak alert.
       status = "critical";
     } else if (
       silentForMinutes != null &&
       silentForMinutes > expected * 1.5
     ) {
+      status = "warning";
+    } else if (consecutiveFailures >= 1) {
       status = "warning";
     } else if (successRate != null && successRate < 80) {
       status = "warning";
@@ -193,6 +237,10 @@ export async function computeWorkerHealth(): Promise<WorkerHealthSnapshot> {
       successRate24h: successRate,
       totalRuns24h: total,
       failedRuns24h: failed,
+      consecutiveFailures,
+      lastSuccessAt: streak?.last_success_at ?? null,
+      lastFailureAt: streak?.last_failure_at ?? null,
+      lastFailureMessage: streak?.last_failure_message ?? null,
       status,
     });
   }

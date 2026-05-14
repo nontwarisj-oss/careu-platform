@@ -40,34 +40,41 @@ async function handle(req: Request) {
     Math.min(Number(url.searchParams.get("perKindLimit") ?? 100), 500)
   );
 
-  const result = await withCronHeartbeat("retention-triggers", async () => {
-    const r = await runRetentionTriggerTick({ perKindLimit });
-    const totals = Object.values(r.perKind).reduce(
-      (acc, k) => {
-        acc.candidates += k.candidates;
-        acc.fired += k.fired;
-        acc.deduped += k.deduped;
-        acc.skipped += k.skipped;
-        acc.failed += k.failed;
-        return acc;
-      },
-      { candidates: 0, fired: 0, deduped: 0, skipped: 0, failed: 0 }
-    );
-    return {
-      result: r,
-      payload: {
-        rowsProcessed: totals.fired,
-        details: {
-          candidates: totals.candidates,
-          fired: totals.fired,
-          deduped: totals.deduped,
-          skipped: totals.skipped,
-          failed: totals.failed,
-          blockedReason: r.blockedReason,
+  const result = await withCronHeartbeat(
+    "retention-triggers",
+    async () => {
+      const r = await runRetentionTriggerTick({ perKindLimit });
+      const totals = Object.values(r.perKind).reduce(
+        (acc, k) => {
+          acc.candidates += k.candidates;
+          acc.fired += k.fired;
+          acc.deduped += k.deduped;
+          acc.skipped += k.skipped;
+          acc.failed += k.failed;
+          return acc;
         },
-      },
-    };
-  });
+        { candidates: 0, fired: 0, deduped: 0, skipped: 0, failed: 0 }
+      );
+      return {
+        result: r,
+        payload: {
+          rowsProcessed: totals.fired,
+          details: {
+            candidates: totals.candidates,
+            fired: totals.fired,
+            deduped: totals.deduped,
+            skipped: totals.skipped,
+            failed: totals.failed,
+            blockedReason: r.blockedReason,
+          },
+        },
+      };
+    },
+    { lockName: "cron:retention-triggers", lockTtlMs: 9 * 60 * 1000 }
+  );
+  if ("skipped" in result && result.skipped === true) {
+    return NextResponse.json({ ok: true, skipped: true, reason: result.reason });
+  }
   return NextResponse.json({ ok: true, ...result });
 }
 

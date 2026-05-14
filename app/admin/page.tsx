@@ -207,6 +207,18 @@ const CARDS: AdminCard[] = [
       "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z",
     enabled: true,
   },
+  {
+    href: "/admin/system/smoke-test",
+    titleTh: "Production smoke test",
+    titleEn: "Production smoke test",
+    descTh:
+      "ตรวจ env / DB / workers / providers / emergency stop — รันก่อนเปิดสาขาใหม่",
+    descEn:
+      "Env vars + DB tables + worker streaks + provider configs in one click — Owner / HQ.",
+    iconPath:
+      "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {
