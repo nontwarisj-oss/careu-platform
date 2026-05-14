@@ -124,11 +124,55 @@ The UI passes the snapshot values from `EstimatedPayroll.dailyWageSnapshot` / `t
 
 ---
 
+## 7b. Bonus engine (post-`20260532`)
+
+The bonus column on `/admin/payroll` is now **pre-filled** with a suggestion from [`lib/bonusEngine.ts`](../lib/bonusEngine.ts). The owner can accept, raise, lower, or zero the suggestion before saving — the formula is advisory, not enforcing.
+
+### 7b.1 The formula
+
+```
+overage = max(0, performanceRatio − threshold)
+raw     = overage × baseWage × rate
+amount  = min(raw, baseWage × capBaseMultiplier), rounded to whole baht
+```
+
+Default rule (`v1-perf-overage-20pct`):
+
+| Constant | Default |
+|---|---|
+| `threshold` | 1.00 — must hit target before any bonus |
+| `rate` | 0.20 — 20 % of the over-target portion |
+| `capBaseMultiplier` | 1.00 — bonus capped at 100 % of base wage |
+
+Tweaking the formula is a one-file edit. To preserve audit integrity, **bump `version`** when changing constants — every saved row carries `bonus_rule_version`, so historical payouts can be traced back to the rule that produced their suggestion.
+
+### 7b.2 Audit trail
+
+Migration `20260532` adds two columns to `technician_payroll_items`:
+
+| Column | Purpose |
+|---|---|
+| `bonus_suggested` | Engine output at save time. Owner sees override status in the UI via `isOverride(suggestion, bonus)`. |
+| `bonus_rule_version` | Identifier of the formula that produced `bonus_suggested`. Lets a future "audit deviations" report compare the saved `bonus_amount` to the engine's recommendation across periods. |
+
+`upsertPayrollItem` recomputes the suggestion server-side at save (using `baseWage` + `performanceRatio` from the request), so a caller that lies about its inputs can't fake the audit.
+
+### 7b.3 UI
+
+The payroll page now shows for each technician:
+
+- Pre-filled bonus input set to the engine's suggestion.
+- "Suggested: ฿X" hint underneath.
+- "override" pill when the saved value diverges by ≥ ฿1.
+- "ใช้ค่าแนะนำ / use" button that snaps the input back to the suggestion.
+- A banner above the period status row showing the active rule version + description.
+
+---
+
 ## 8. Future enhancements (not this phase)
 
 | Step | Why |
 |---|---|
-| Automatic bonus engine | Owner-decided today. A formula like `bonus = max(0, perf_ratio − 1) × base × bonus_rate` would speed up large payrolls. |
 | Accounting export (CSV / Sheet) | Today there's no export. Plug into `branch_monthly_profit` for the bottom line. |
 | Manager-facing read-only view | branch_manager has SELECT via RLS but no UI — small page that re-uses the same components. |
 | Multi-month preview | Compare current month to last 3 months in one view. |
@@ -137,4 +181,4 @@ The UI passes the snapshot values from `EstimatedPayroll.dailyWageSnapshot` / `t
 
 ---
 
-**Last updated:** 2026-05-14 (payroll UI + writes shipped)
+**Last updated:** 2026-05-14 (bonus engine + audit columns shipped)

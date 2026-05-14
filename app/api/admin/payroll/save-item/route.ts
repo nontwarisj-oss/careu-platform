@@ -20,6 +20,10 @@ type Body = {
   targetValue?: number;
   performanceRatio?: number;
   bonusAmount?: number;
+  /** Optional — auto-suggested bonus from lib/bonusEngine.ts. The service
+   *  layer recomputes if absent so this is just an audit-trail hint. */
+  bonusSuggested?: number | null;
+  bonusRuleVersion?: string | null;
   deductionAmount?: number;
   notes?: string | null;
 };
@@ -61,6 +65,9 @@ export async function POST(req: Request) {
     targetValue: Number(body.targetValue ?? 0),
     performanceRatio: Number(body.performanceRatio ?? 0),
     bonusAmount: Number(body.bonusAmount ?? 0),
+    bonusSuggested:
+      body.bonusSuggested === undefined ? null : Number(body.bonusSuggested ?? 0),
+    bonusRuleVersion: body.bonusRuleVersion ?? null,
     deductionAmount: Number(body.deductionAmount ?? 0),
     notes: body.notes ?? null,
     actorId: profile.id,

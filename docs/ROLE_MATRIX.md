@@ -83,6 +83,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Refresh dashboard snapshot (`/api/admin/dashboard/refresh-snapshot`)** | ✅ | ✅ (also callable from cron via Bearer `CRON_SECRET`) | ❌ | ❌ | ❌ |
 | **`dashboard_daily_snapshot` read** | ⚠ service-role only (revoked from authenticated) | same | same | same | same |
 | **`reconcile_runs` read** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Dashboard summary (`/api/admin/dashboard/summary`)** | ✅ any/all | ✅ any/all | ✅ 🏢 (branchCode forced) | ✅ 🏢 | ✅ 🏢 |
+| **Bonus engine in payroll UI** | ✅ (uses suggestion, free to override) | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/onboarding` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Create branch (`/api/admin/onboarding/create-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Activate / deactivate branch (`/api/admin/onboarding/activate-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -243,4 +248,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (payroll UI + customer-tier writer + materialised dashboard foundation)
+**Last updated:** 2026-05-14 (dashboard snapshot swap + bonus engine + franchise onboarding)

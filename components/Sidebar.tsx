@@ -170,6 +170,14 @@ const Sidebar: React.FC = () => {
       labelEn: "Payroll",
       iconPath: ICON_PATHS.expenses,
     },
+    {
+      href: "/admin/onboarding",
+      page: "admin",
+      group: "admin",
+      labelTh: "เปิดสาขาใหม่",
+      labelEn: "Onboarding",
+      iconPath: ICON_PATHS.intake,
+    },
   ];
 
   const navItems = allNavItems.filter((item) => canAccessPage(role, item.page));

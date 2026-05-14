@@ -38,6 +38,14 @@ export default function Dashboard() {
   const [activeDashboard, setActiveDashboard] = useState<DashboardKey>(
     getDefaultDashboard(role)
   );
+  // Snapshot-backed summary metadata. Optional — when present we surface
+  // a "data as of" indicator. Falls back to a live read on the server
+  // when the matview is empty (fresh deploy / first refresh pending).
+  const [snapshotMeta, setSnapshotMeta] = useState<{
+    usingSnapshot: boolean;
+    snapshotRefreshedAt: string | null;
+    latestOrderAt?: string | null;
+  } | null>(null);
 
   const allBranches = seesAllBranches(role);
 
@@ -51,12 +59,20 @@ export default function Dashboard() {
     let cancelled = false;
     setIsLoading(true);
     void (async () => {
-      const next = await fetchDashboardSnapshot({
-        branchCode: branch.id,
-        allBranches,
-      });
+      // Live operational data (per-row arrays the role widgets consume)
+      // + snapshot-backed summary metadata (freshness indicator). The
+      // summary read is a separate server route because the matview is
+      // service-role-only — see app/api/admin/dashboard/summary.
+      const [next, summaryRes] = await Promise.all([
+        fetchDashboardSnapshot({
+          branchCode: branch.id,
+          allBranches,
+        }),
+        fetchSnapshotSummary(branch.id, allBranches),
+      ]);
       if (!cancelled) {
         setSnapshot(next);
+        setSnapshotMeta(summaryRes);
         setIsLoading(false);
       }
     })();
@@ -110,6 +126,31 @@ export default function Dashboard() {
             <p className="text-[10px] text-gray-500 truncate max-w-[220px]">
               {allBranches ? branch.shortLabel : branch.address}
             </p>
+            {snapshotMeta && (
+              <p
+                className="text-[10px] mt-0.5 truncate max-w-[220px]"
+                title={
+                  snapshotMeta.usingSnapshot
+                    ? language === "th"
+                      ? `อ่านจาก dashboard_daily_snapshot · refresh ล่าสุด ${snapshotMeta.snapshotRefreshedAt}`
+                      : `Source: dashboard_daily_snapshot · refreshed ${snapshotMeta.snapshotRefreshedAt}`
+                    : language === "th"
+                    ? "snapshot ยังว่าง — fallback อ่านสด"
+                    : "snapshot empty — live fallback"
+                }
+              >
+                {snapshotMeta.usingSnapshot ? (
+                  <span className="text-green-700">
+                    {language === "th" ? "📊 snapshot" : "📊 snapshot"} ·{" "}
+                    {snapshotMeta.snapshotRefreshedAt ?? "—"}
+                  </span>
+                ) : (
+                  <span className="text-yellow-700">
+                    {language === "th" ? "⚡ live (fallback)" : "⚡ live (fallback)"}
+                  </span>
+                )}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -204,5 +245,44 @@ function DashboardView({
       );
     default:
       return <FrontDeskDashboard orders={orders} customerCount={customerCount} />;
+  }
+}
+
+/**
+ * Call the snapshot-summary route. Returns null on failure so the page
+ * shows live values without an indicator. This is purely informational
+ * — the actual operational widgets keep reading from the live snapshot
+ * fetcher and don't depend on the matview at all.
+ */
+async function fetchSnapshotSummary(
+  branchCode: string,
+  allBranches: boolean
+): Promise<{
+  usingSnapshot: boolean;
+  snapshotRefreshedAt: string | null;
+  latestOrderAt?: string | null;
+} | null> {
+  try {
+    const params = new URLSearchParams();
+    if (!allBranches && branchCode) params.set("branchCode", branchCode);
+    if (allBranches) params.set("branchCode", "all");
+    const res = await fetch(`/api/admin/dashboard/summary?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      ok?: boolean;
+      usingSnapshot?: boolean;
+      snapshotRefreshedAt?: string | null;
+      latestOrderAt?: string | null;
+    };
+    if (!json.ok) return null;
+    return {
+      usingSnapshot: !!json.usingSnapshot,
+      snapshotRefreshedAt: json.snapshotRefreshedAt ?? null,
+      latestOrderAt: json.latestOrderAt ?? null,
+    };
+  } catch {
+    return null;
   }
 }

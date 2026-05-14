@@ -192,6 +192,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260529_cron_and_line_follow.sql` | `worker_runs` heartbeat table (one row per retry-tick — cron or manual); `line_follow_events` audit table (every LINE webhook event, signature_verified flag, consented_at for verified follows); admin-read RLS on both |
 | `20260530_customer_linker_and_reconcile.sql` | `customer_line_links.ignored_at` + `ignored_by` for admin triage; `sync_failures.kind` CHECK extended with `reconcile_missing_sheet` + `reconcile_duplicate_sheet` + `reconcile_orphan_link`; new `reconcile_runs` heartbeat table |
 | `20260531_management_intelligence.sql` | `public.customers.lifetime_spend` + `last_visit_at` + `primary_branch_id` insight columns; materialised view `public.dashboard_daily_snapshot` (branch_code × work_date with revenue / counts / fees); `refresh_dashboard_daily_snapshot()` SECURITY DEFINER wrapper (concurrent-safe with non-concurrent fallback for first refresh) |
+| `20260532_bonus_engine_columns.sql` | `technician_payroll_items.bonus_suggested` + `bonus_rule_version` audit columns. Bonus engine writes both at save time so historical override deviations are queryable. |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -851,6 +852,82 @@ GET  /api/admin/dashboard/refresh-snapshot   (Bearer CRON_SECRET — cron)
 
 ---
 
+## 12i. Scale-out foundation (post-`20260532`)
+
+> Status: **foundation live**. Three thin layers complete the scale-out story: the dashboard now opportunistically reads from the materialised snapshot, the payroll UI pre-fills a suggested bonus, and HQ can spin up a new branch end-to-end through `/admin/onboarding`. See [DASHBOARD.md](./DASHBOARD.md), [FRANCHISE_ONBOARDING.md](./FRANCHISE_ONBOARDING.md), [PAYROLL.md §7b](./PAYROLL.md).
+
+### 12i.1 Dashboard snapshot swap
+
+The dashboard now reads from **two parallel paths**:
+
+```
+app/page.tsx
+  ├─ fetchDashboardSnapshot()             ← live (per-row arrays for queues)
+  └─ fetchSnapshotSummary()
+        ↓
+        GET /api/admin/dashboard/summary
+        ↓
+        fetchBranchSalesSummary()         ← matview if non-empty
+        ↓
+        liveFallback() over last 30 days  ← else
+        ↓
+        returns { totals, usingSnapshot, snapshotRefreshedAt }
+```
+
+The freshness indicator in the page header shows `📊 snapshot · 2026-05-14` when the matview backed the read, or `⚡ live (fallback)` when it didn't. Operational widgets (queues, urgent list, overdue) still consume per-row data from the live fetch — by design, see [DASHBOARD.md §2.1](./DASHBOARD.md).
+
+### 12i.2 Bonus engine
+
+```
+lib/bonusEngine.ts
+  ├ BONUS_RULES                  (versioned config in code)
+  ├ calculateSuggestedBonus(...)  (pure)
+  └ isOverride(suggestion, saved) (UI helper)
+
+formula (v1-perf-overage-20pct):
+  overage = max(0, performanceRatio − 1.0)
+  amount  = min(overage × baseWage × 0.20, baseWage × 1.0)
+
+persistence:
+  technician_payroll_items.bonus_suggested      ← engine output at save time
+  technician_payroll_items.bonus_rule_version   ← rule identifier
+  technician_payroll_items.bonus_amount         ← what the owner kept
+```
+
+The owner can freely override — the engine is advisory. `upsertPayrollItem` recomputes the suggestion server-side so a malicious caller can't fake the audit trail.
+
+### 12i.3 Branch onboarding wizard
+
+```
+POST /api/admin/onboarding/create-branch
+  • Validates code (slug regex) + short_code (upper alpha-numeric)
+  • Rejects duplicate code with HTTP 409 (friendly message)
+  • Inserts branches row with is_active=false
+  • Optional: inserts empty branch_line_configs row
+
+POST /api/admin/onboarding/activate-branch
+  • Flips branches.is_active. Idempotent on no-op.
+```
+
+UI surfaces a three-section single-page wizard at `/admin/onboarding`:
+
+1. Branch basics (code, short_code, name, type, brand).
+2. Reserve config slots (LINE config placeholder).
+3. Manual checklist for the steps the wizard can't do automatically (brandConfig.ts mirror, staff pin, LINE token UPDATE, pricing review).
+
+Existing branches are listed in a table with per-row activate / deactivate buttons. Inactive is the safety default — the operator must explicitly confirm before customers can place orders against a new branch.
+
+### 12i.4 Branch isolation summary
+
+| Surface | Owner / HQ | Branch_manager | Front_staff / Technician |
+|---|---|---|---|
+| Dashboard summary | ✅ any branch | ✅ 🏢 (branchCode forced) | ✅ 🏢 | 
+| Bonus engine | ✅ (free override) | ❌ (no payroll UI) | ❌ |
+| `/admin/onboarding` | ✅ | ❌ (admin page key) | ❌ |
+| Create / activate branch | ✅ | ❌ | ❌ |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -931,7 +1008,8 @@ app/
 ├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
 ├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild + reconcile tab + bulk actions
 ├── admin/customer-line/page.tsx        ← Customer ↔ LINE linker (unmatched + linked tabs)
-├── admin/payroll/page.tsx              ← Technician payroll (preview / save / finalize / mark paid)
+├── admin/payroll/page.tsx              ← Technician payroll (preview / bonus engine / finalize / mark paid)
+├── admin/onboarding/page.tsx           ← Branch onboarding wizard + activate / deactivate
 ├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
 ├── api/admin/recovery/bulk-resolve/route.ts  ← Bulk resolve (≤100 ids)
 ├── api/admin/recovery/run-worker/route.ts    ← Manual retry-worker trigger
@@ -944,6 +1022,9 @@ app/
 ├── api/admin/payroll/open-period/route.ts    ← Idempotent payroll period open
 ├── api/admin/payroll/save-item/route.ts      ← Upsert technician payroll item
 ├── api/admin/payroll/transition/route.ts     ← open → finalized → paid
+├── api/admin/dashboard/summary/route.ts      ← Snapshot-backed dashboard KPIs + live fallback
+├── api/admin/onboarding/create-branch/route.ts ← Create a new branch (inactive default)
+├── api/admin/onboarding/activate-branch/route.ts ← Flip branches.is_active
 ├── api/cron/retry-worker/route.ts            ← Scheduled retry-worker (CRON_SECRET)
 ├── api/line/webhook/route.ts                 ← LINE follow / unfollow webhook
 ├── customers/page.tsx
@@ -1011,7 +1092,8 @@ lib/
 ├── customerLinker.ts ← fetchUnmatched / Linked + link / unlink / ignore wrappers
 ├── reconcile.ts      ← runReconcileTick + 3 checks (orders↔sheet, duplicate, orphan)
 ├── customerTierService.ts ← calculateCustomerTier + refreshCustomerTier + refreshBranchCustomerTiers
-└── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
+├── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
+└── bonusEngine.ts        ← calculateSuggestedBonus + BONUS_RULES + isOverride
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -1037,4 +1119,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (payroll UI + customer-tier writer + materialised dashboard foundation — `/admin/payroll`, `lib/customerTierService.ts`, `lib/aggregationService.ts`, `20260531` migration, new `PAYROLL.md` + `CUSTOMER_TIER.md`)
+**Last updated:** 2026-05-14 (dashboard snapshot swap + bonus engine + franchise onboarding — `lib/bonusEngine.ts`, `/admin/onboarding`, snapshot freshness indicator, new `DASHBOARD.md` + `FRANCHISE_ONBOARDING.md`)

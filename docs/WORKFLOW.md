@@ -682,6 +682,52 @@ Why a matview: the existing dashboard reads orders directly. As branches + month
 - `POST /api/admin/dashboard/refresh-snapshot` (owner / hq_admin) — manual.
 - `GET /api/admin/dashboard/refresh-snapshot` (Bearer `CRON_SECRET`) — cron path. Vercel Cron / Supabase Cron can call this every 15 minutes.
 
+### 9c.5f Scale-out foundation (post-`20260532`)
+
+> Status: **foundation live**. See [DASHBOARD.md](./DASHBOARD.md), [PAYROLL.md §7b](./PAYROLL.md), and [FRANCHISE_ONBOARDING.md](./FRANCHISE_ONBOARDING.md).
+
+#### 9c.5f.1 Dashboard snapshot swap
+
+`app/page.tsx` now fires two fetches in parallel:
+- `fetchDashboardSnapshot` — live operational arrays (per-row orders + expenses for queues / lists / KPIs).
+- `fetchSnapshotSummary` — calls `GET /api/admin/dashboard/summary` to read the materialised view. Returns `{ usingSnapshot, snapshotRefreshedAt, totals }` with a server-side fallback to a 30-day live aggregation when the matview is empty.
+
+Header shows a freshness indicator: `📊 snapshot · YYYY-MM-DD` or `⚡ live (fallback)`. Operational widgets are unchanged — they still consume the per-row arrays.
+
+Why not a full swap: per-row widgets need per-order detail (job id, due date, urgent flag) that the day-granular matview doesn't expose. A future phase ports `assembleKpis` to consume the snapshot for aggregate metrics; the freshness indicator is the seam.
+
+#### 9c.5f.2 Bonus engine on `/admin/payroll`
+
+The bonus input now pre-fills with the engine's suggestion (`lib/bonusEngine.ts`, rule `v1-perf-overage-20pct`):
+
+```
+overage = max(0, performanceRatio − 1.0)
+suggested = min(overage × baseWage × 0.20, baseWage × 1.0)
+```
+
+UI shows:
+- Suggested amount under the input.
+- "override" pill when the saved value diverges from the suggestion by ≥ ฿1.
+- "ใช้ค่าแนะนำ / use" button to snap back to the suggestion.
+- A banner above the period status row showing the active rule + version.
+
+Audit: `technician_payroll_items.bonus_suggested` + `bonus_rule_version` captured at save time. The route recomputes server-side from `baseWage` + `performanceRatio` so the audit trail can't be faked.
+
+#### 9c.5f.3 Branch onboarding wizard
+
+`/admin/onboarding` (owner / hq_admin) replaces the manual SQL path for adding a new branch:
+
+1. Single-page form with three sections — branch basics, optional LINE config placeholder, manual checklist.
+2. Server validates code uniqueness + slug regex + short-code regex before insert. Duplicate code → 409 with friendly Thai error.
+3. New branches start `is_active = false` — safety default.
+4. Existing branches table on the same page with per-row activate / deactivate buttons.
+
+API:
+- `POST /api/admin/onboarding/create-branch` — body validates, inserts the row, optionally inserts a stub `branch_line_configs` row.
+- `POST /api/admin/onboarding/activate-branch` — flips `branches.is_active`. Idempotent on no-op.
+
+Operator still has manual follow-ups (brandConfig mirror, staff pinning, LINE token UPDATE, pricing review). The UI surfaces these as a bulleted checklist after each successful create.
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.

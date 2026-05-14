@@ -367,6 +367,13 @@ export type UpsertItemInput = {
   targetValue: number;
   performanceRatio: number;
   bonusAmount: number;
+  /** Optional — what the bonus engine recommended at save time. The route
+   *  defaults to the engine's output when omitted, so callers that don't
+   *  pass it still get an honest audit trail. */
+  bonusSuggested?: number | null;
+  /** Optional — rule version that produced bonusSuggested. Defaults to the
+   *  current engine version. */
+  bonusRuleVersion?: string | null;
   deductionAmount: number;
   notes?: string | null;
   actorId?: string | null;
@@ -409,6 +416,23 @@ export async function upsertPayrollItem(
     Number(input.bonusAmount) -
     Number(input.deductionAmount);
 
+  // Always recompute the engine's suggestion server-side so a caller
+  // can't lie about what was recommended. If the caller passed
+  // bonusSuggested / bonusRuleVersion explicitly we trust those
+  // (used when the UI computed the same thing) — but the default is
+  // the freshly-derived suggestion.
+  const bonusModule = await import("@/lib/bonusEngine");
+  const computed = bonusModule.calculateSuggestedBonus({
+    performanceRatio: input.performanceRatio,
+    baseWage: input.baseWage,
+  });
+  const bonusSuggested =
+    input.bonusSuggested !== undefined && input.bonusSuggested !== null
+      ? Number(input.bonusSuggested)
+      : computed.amount;
+  const bonusRuleVersion =
+    input.bonusRuleVersion ?? computed.ruleVersion;
+
   const payload = {
     payroll_period_id: input.payrollPeriodId,
     technician_profile_id: input.technicianProfileId,
@@ -420,6 +444,8 @@ export async function upsertPayrollItem(
     target_value: input.targetValue,
     performance_ratio: input.performanceRatio,
     bonus_amount: input.bonusAmount,
+    bonus_suggested: bonusSuggested,
+    bonus_rule_version: bonusRuleVersion,
     deduction_amount: input.deductionAmount,
     final_pay: finalPay,
     notes: input.notes ?? null,

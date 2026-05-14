@@ -21,10 +21,19 @@ import {
   effectiveDailyTarget,
   type TechnicianProfile,
 } from "@/lib/technicianService";
+import {
+  BONUS_RULES,
+  calculateSuggestedBonus,
+  isOverride,
+  type BonusSuggestion,
+} from "@/lib/bonusEngine";
 
 type DraftItem = {
   technicianProfileId: string;
   estimate: EstimatedPayroll;
+  /** Engine's recommendation — used to pre-fill bonus when no saved row
+   *  exists and to flag "override" when the operator deviates. */
+  suggestion: BonusSuggestion;
   bonus: string;
   deduction: string;
   notes: string;
@@ -108,10 +117,18 @@ function PayrollInner() {
     await Promise.all(
       techList.map(async (tech) => {
         const estimate = await calculateEstimatedPayroll(tech, yearCE, month);
+        const suggestion = calculateSuggestedBonus({
+          performanceRatio: estimate.performanceRatio,
+          baseWage: estimate.baseWage,
+        });
         draftMap[tech.id] = {
           technicianProfileId: tech.id,
           estimate,
-          bonus: "0",
+          suggestion,
+          // Pre-fill with the engine suggestion so the happy path is one
+          // click. If the period already has a saved row we overwrite
+          // this in step 4.
+          bonus: String(suggestion.amount),
           deduction: "0",
           notes: "",
           saved: false,
@@ -201,6 +218,8 @@ function PayrollInner() {
           targetValue: draft.estimate.targetValue,
           performanceRatio: draft.estimate.performanceRatio,
           bonusAmount: Number(draft.bonus) || 0,
+          bonusSuggested: draft.suggestion.amount,
+          bonusRuleVersion: draft.suggestion.ruleVersion,
           deductionAmount: Number(draft.deduction) || 0,
           notes: draft.notes || null,
         }),
@@ -368,6 +387,16 @@ function PayrollInner() {
         >
           {language === "th" ? "โหลดใหม่" : "Reload"}
         </button>
+      </div>
+
+      {/* Bonus engine rule banner — informational only. */}
+      <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-2 text-xs text-blue-900">
+        <strong className="font-semibold">
+          {language === "th" ? "นโยบาย bonus: " : "Bonus rule: "}
+        </strong>
+        <span className="font-mono text-[10px] mr-1">{BONUS_RULES.version}</span>
+        ·{" "}
+        {language === "th" ? BONUS_RULES.description.th : BONUS_RULES.description.en}
       </div>
 
       {/* Period status row */}
@@ -565,6 +594,32 @@ function PayrollInner() {
                           disabled={disabled}
                           className="w-24 rounded-lg border border-gray-200 px-2 py-1 outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-50"
                         />
+                        <div className="mt-1 text-[10px] text-gray-500 flex items-center gap-1">
+                          <span>
+                            {language === "th" ? "แนะนำ" : "Suggested"}: {draft.suggestion.amount}
+                          </span>
+                          {isOverride(draft.suggestion, Number(draft.bonus) || 0) && (
+                            <span className="rounded-full border border-yellow-300 bg-yellow-50 px-1.5 py-0.5 text-[9px] font-semibold text-yellow-800">
+                              {language === "th" ? "ปรับเอง" : "override"}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDrafts((prev) => ({
+                                ...prev,
+                                [tech.id]: {
+                                  ...prev[tech.id],
+                                  bonus: String(prev[tech.id].suggestion.amount),
+                                },
+                              }))
+                            }
+                            disabled={disabled}
+                            className="text-[10px] text-green-700 hover:text-green-900 disabled:opacity-50"
+                          >
+                            {language === "th" ? "ใช้ค่าแนะนำ" : "use"}
+                          </button>
+                        </div>
                       </td>
                       <td className="p-3">
                         <input
