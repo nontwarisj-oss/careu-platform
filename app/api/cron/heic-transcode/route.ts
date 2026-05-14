@@ -7,32 +7,32 @@
 //   2. Download the HEIC bytes from the storage path.
 //   3. Transcode → JPEG with EXIF orientation applied + metadata
 //      stripped. Re-upload to a sibling path (suffix .jpg).
-//   4. Update output_path + status='done', processed_at=now.
-//   5. On failure: increment attempts, back off, dead-letter after 3.
+//   4. Generate a thumbnail (suffix .thumb.jpg).
+//   5. Update output_path + status='done', processed_at=now.
+//   6. On failure: increment attempts, back off, dead-letter after 3.
 //
-// THIS PHASE: the orchestration is wired (queue read + status
-// transitions + dead-letter). The actual TRANSCODER call is a
-// placeholder because no HEIC library is in deps yet. Operator wires
-// `sharp` (which supports HEIC via libheif) or a Supabase Edge
-// Function with libvips by replacing `transcodeHeicToJpeg`. The
-// signature is stable.
+// Phase 15: the transcoder uses sharp (libheif build on Linux/macOS).
+// Windows dev machines without libheif see a clean "HEIF decode
+// unavailable" reason and the row stays pending until the next run on
+// a real environment.
 //
 // Auth: Bearer ${CRON_SECRET}. Same pattern as other cron routes.
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { transcodeHeicToJpeg } from "@/lib/heicTranscoder";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const SWEEP_LIMIT = 20;
 const MAX_ATTEMPTS = 3;
-/** When the real transcoder isn't wired (process.env.HEIC_TRANSCODER
- *  is "stub" / unset), every row stays in 'pending' and the cron is a
- *  no-op. Set HEIC_TRANSCODER=disabled to mark all pending rows as
- *  dead_letter at the next tick — useful when shutting down the
- *  feature on a deploy. */
-const TRANSCODER_MODE = (process.env.HEIC_TRANSCODER ?? "stub").toLowerCase();
+/** Default 'enabled' now that sharp ships with the deploy. Operator
+ *  can override:
+ *   • 'stub'     — leave pending rows untouched (manual debug mode).
+ *   • 'disabled' — dead-letter pending rows (feature shut-off).
+ *  Any other value (including unset) → real transcoder runs. */
+const TRANSCODER_MODE = (process.env.HEIC_TRANSCODER ?? "enabled").toLowerCase();
 
 type QueueRow = {
   id: string;
@@ -124,15 +124,14 @@ async function handle(req: Request) {
       continue;
     }
     if (TRANSCODER_MODE === "stub") {
-      // No transcoder wired yet — leave row as 'processing' but reset
-      // back to 'pending' so the next operator with a real transcoder
-      // can pick it up. The HEIC bytes themselves remain in storage
-      // (iOS Safari can still render them).
+      // Operator hasn't enabled the real transcoder yet — leave the
+      // row pending. iOS Safari can still render the HEIC; Android
+      // users see the broken image until the operator flips the env.
       await admin
         .from("media_transcode_queue")
         .update({
           status: "pending",
-          error_reason: "no transcoder wired (HEIC_TRANSCODER=stub)",
+          error_reason: "transcoder disabled (HEIC_TRANSCODER=stub)",
         })
         .eq("id", row.id);
       outcomes.push({
@@ -143,9 +142,10 @@ async function handle(req: Request) {
       continue;
     }
 
-    // Real transcoder path — placeholder. When sharp / libvips is in
-    // deps, replace this block with the actual decode + re-encode +
-    // re-upload to a sibling path.
+    // Real transcoder path. sharp+libheif lives in lib/heicTranscoder.
+    // Retryable failures (libheif missing, network) keep the row
+    // pending; non-retryable (corrupt source) dead-letters after
+    // MAX_ATTEMPTS.
     const transcoded = await transcodeHeicToJpeg({
       sourcePath: row.source_path,
     });
@@ -160,22 +160,23 @@ async function handle(req: Request) {
         })
         .eq("id", row.id);
       outcomes.push({ id: row.id, status: "done", reason: null });
-    } else {
-      const reachedDead = nextAttempts >= MAX_ATTEMPTS;
-      await admin
-        .from("media_transcode_queue")
-        .update({
-          status: reachedDead ? "dead_letter" : "pending",
-          error_reason: transcoded.reason,
-          processed_at: reachedDead ? new Date().toISOString() : null,
-        })
-        .eq("id", row.id);
-      outcomes.push({
-        id: row.id,
-        status: reachedDead ? "dead_letter" : "retry",
-        reason: transcoded.reason,
-      });
+      continue;
     }
+    const reachedDead =
+      !transcoded.retryable || nextAttempts >= MAX_ATTEMPTS;
+    await admin
+      .from("media_transcode_queue")
+      .update({
+        status: reachedDead ? "dead_letter" : "pending",
+        error_reason: transcoded.reason,
+        processed_at: reachedDead ? new Date().toISOString() : null,
+      })
+      .eq("id", row.id);
+    outcomes.push({
+      id: row.id,
+      status: reachedDead ? "dead_letter" : "retry",
+      reason: transcoded.reason,
+    });
   }
 
   return NextResponse.json({
@@ -194,21 +195,3 @@ export async function POST(req: Request) {
   return handle(req);
 }
 
-// ---------- Placeholder transcoder --------------------------------------
-//
-// Replace with sharp+libheif or a Supabase Edge Function call. The
-// signature is stable — anything that returns a sibling JPEG path is
-// fine.
-
-async function transcodeHeicToJpeg(_args: {
-  sourcePath: string;
-}): Promise<
-  | { ok: true; outputPath: string }
-  | { ok: false; reason: string }
-> {
-  return {
-    ok: false,
-    reason:
-      "transcoder not wired — set HEIC_TRANSCODER=stub to defer, or wire a real decoder",
-  };
-}

@@ -163,6 +163,32 @@ async function dispatchLine(row: NotificationRow): Promise<DispatchOutcome> {
     };
   }
   const pushed = await pushTextMessage(channel, lineUserId, body);
+
+  // Append to line_delivery_log regardless of outcome — this is the
+  // LINE-side companion to notification_dispatch_log. We log only the
+  // event we observed (pushed / push_failed); future LINE webhook
+  // extensions can add 'delivered' / 'read' if LINE exposes them.
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    try {
+      await admin.from("line_delivery_log").insert({
+        notification_id: row.id,
+        customer_id: row.customer_id,
+        branch_id: row.branch_id,
+        line_user_id: lineUserId,
+        event_type: pushed.ok ? "pushed" : "push_failed",
+        request_id: pushed.ok ? (pushed.requestId ?? null) : null,
+        http_status: pushed.ok ? 200 : pushed.status,
+        reason: pushed.ok ? null : (pushed.reason ?? "LINE push failed"),
+        details: { kind: row.kind },
+      });
+    } catch {
+      // Don't fail the dispatch because the delivery-log insert
+      // failed — the notification_dispatch_log row already captures
+      // the outcome.
+    }
+  }
+
   if (pushed.ok) {
     return {
       ok: true,

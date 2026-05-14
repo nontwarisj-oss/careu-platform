@@ -78,7 +78,7 @@ export async function GET(
     (o) => o.id
   );
 
-  const [prefs, orders, activity, notifications, dispatchLog, lineLink, uploadCount] =
+  const [prefs, orders, activity, notifications, dispatchLog, lineLink, uploadCount, lineDelivery] =
     await Promise.all([
       admin
         .from("customer_notification_preferences")
@@ -132,6 +132,14 @@ export async function GET(
             .from("order_attachments")
             .select("id", { count: "exact", head: true })
             .in("order_id", orderIds),
+      admin
+        .from("line_delivery_log")
+        .select(
+          "id, event_type, request_id, http_status, reason, created_at, details"
+        )
+        .eq("customer_id", id)
+        .order("created_at", { ascending: false })
+        .limit(15),
     ]);
 
   return NextResponse.json({
@@ -144,5 +152,6 @@ export async function GET(
     dispatchLog: dispatchLog.data ?? [],
     lineLink: lineLink.data ?? null,
     uploadCount: uploadCount.count ?? 0,
+    lineDelivery: lineDelivery.data ?? [],
   });
 }

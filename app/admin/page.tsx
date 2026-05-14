@@ -100,6 +100,30 @@ const CARDS: AdminCard[] = [
       "M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
     enabled: true,
   },
+  {
+    href: "/admin/crm/audiences",
+    titleTh: "CRM Audiences",
+    titleEn: "CRM audiences",
+    descTh:
+      "สร้าง segment + ประมาณการ audience — ยังไม่ส่งจริง — Owner / HQ / Branch Manager",
+    descEn:
+      "Build segments + estimate audience size — broadcast send is not enabled.",
+    iconPath:
+      "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3z",
+    enabled: true,
+  },
+  {
+    href: "/admin/crm/broadcasts",
+    titleTh: "CRM Broadcasts (draft)",
+    titleEn: "CRM broadcasts",
+    descTh:
+      "draft broadcast — ทดลองข้อความ + audience ก่อนส่งจริง — ยังไม่มี mass-send — Owner / HQ / Branch Manager",
+    descEn:
+      "Broadcast drafts — try messages + audiences before sending. Mass-send not yet enabled.",
+    iconPath:
+      "M21 11.5a.5.5 0 0 0-.5-.5h-2.93l1.04-1.04a.502.502 0 0 0 0-.71l-.71-.71a.502.502 0 0 0-.71 0L15 10.79V3.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v9l-3.5-3.5a.5.5 0 0 0-.71 0l-.71.71a.5.5 0 0 0 0 .71L12.79 14H3.5a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 .5.5h13l4.5-4.5z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

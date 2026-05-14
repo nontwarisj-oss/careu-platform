@@ -216,6 +216,35 @@ export async function processLineWebhookBody(
         .from("customer_line_links")
         .update({ unsubscribed_at: receivedAt })
         .eq("line_user_id", lineUserId);
+      // Also log to line_delivery_log so the operator can see the
+      // unfollow in the per-customer delivery history. Look up the
+      // customer_id (if any) so the row is searchable.
+      try {
+        const linkRow = await admin
+          .from("customer_line_links")
+          .select("customer_id")
+          .eq("line_user_id", lineUserId)
+          .maybeSingle();
+        const customerId =
+          (linkRow.data as { customer_id: string | null } | null)?.customer_id ?? null;
+        await admin.from("line_delivery_log").insert({
+          notification_id: null,
+          customer_id: customerId,
+          branch_id: null,
+          line_user_id: lineUserId,
+          event_type: "unfollowed",
+          reason: "LINE webhook: user unfollowed channel",
+          details: { receivedAt },
+        });
+      } catch (err) {
+        // Don't fail the webhook because the delivery log insert
+        // failed — the customer_line_links update already captured
+        // the unsubscribe signal.
+        console.warn(
+          "[line-webhook] delivery log unfollow insert failed",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
       items.push({
         eventType,
         lineUserId,

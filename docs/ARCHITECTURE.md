@@ -1384,6 +1384,72 @@ KPI bar extended to 8 cards: queued / sending / sent / delivered / failed / dead
 
 ---
 
+## 12p. Broadcast foundation + segmentation (post-`20260539`)
+
+> Status: **draft-only**. CRM operators can build segments, estimate audiences, draft templates, and preview cost. Mass-send remains intentionally out of scope.
+
+See [CRM_BROADCAST.md](./CRM_BROADCAST.md) for the operator runbook.
+
+### 12p.1 Schema (migration 20260539)
+
+| Table | Purpose |
+|---|---|
+| `broadcast_drafts` | name + notes + channels + segment JSONB + per-channel templates. `status ∈ {draft, preview, archived}`. NEVER 'sent' this phase. |
+| `broadcast_audience_snapshots` | computed counts cached per draft, history preserved. |
+| `broadcast_audit_log` | append-only audit. Captures every state change. |
+| `line_delivery_log` | LINE-side analogue of `notification_dispatch_log` — push acks + unfollow events. |
+
+### 12p.2 New libraries
+
+- `lib/crmSegmentationService.ts` — AND-combined filters → customer set + facet counts + sample. Caps customer fetch at 5000 to bound API cost.
+- `lib/communicationPolicyService.ts` — `evaluatePolicy(ctx)` is the new authoritative gate (channel toggle → kind toggle → recipient presence → rate limit). Existing inline checks in the notifier + worker stay for now; new code (broadcast send, future) MUST call the policy service.
+- `lib/heicTranscoder.ts` — sharp+libheif transcoder; produces JPEG + 320 px thumbnail siblings.
+
+### 12p.3 APIs
+
+```
+GET    /api/admin/crm/broadcasts                — list drafts
+POST   /api/admin/crm/broadcasts                — create draft
+GET    /api/admin/crm/broadcasts/[id]           — fetch + latest snapshot
+PATCH  /api/admin/crm/broadcasts/[id]           — update editable fields
+DELETE /api/admin/crm/broadcasts/[id]           — archive (soft)
+POST   /api/admin/crm/audiences/estimate        — compute counts; persists when draftId given
+```
+
+All require operator role + branch access. Owner / hq_admin have full scope; branch_manager is restricted to drafts whose branch_id is null or matches their branch. Front_staff / technician are denied.
+
+### 12p.4 UI surfaces
+
+- `/admin/crm/audiences` — standalone segment builder. Iterate filters, click "ประมาณการ", see counts + distribution + sample customers. No save.
+- `/admin/crm/broadcasts` — draft list.
+- `/admin/crm/broadcasts/[id]` — draft editor. "ส่ง broadcast" button explicitly disabled this phase.
+
+### 12p.5 Promotional opt-in
+
+Broadcast sends are treated as **promotional** for opt-in purposes. The audience estimator only counts customers whose `customer_notification_preferences.promotional === true`. Default is OFF — Thai opt-in norms.
+
+### 12p.6 Real HEIC transcoder
+
+`sharp` ships in deps. The cron `/api/cron/heic-transcode` now defaults to running the real transcoder (`HEIC_TRANSCODER=enabled` by default). Output paths: `<source>.jpg` + `<source>.thumb.jpg`. EXIF orientation auto-applied; metadata stripped.
+
+### 12p.7 LINE delivery log
+
+Two writers:
+- Dispatch worker `dispatchLine` — `pushed` / `push_failed` per attempt.
+- LINE webhook `processLineWebhookBody` — `unfollowed` when the user leaves the channel.
+
+`/admin/customers/[id]` renders the most recent 15 rows so operators can answer "did LINE pushes ever reach this customer?".
+
+### 12p.8 Branch isolation reuse
+
+| Surface | Auth | Scope |
+|---|---|---|
+| All `/api/admin/crm/*` | operator role | `requireBranchAccess` per draft + scoped customer pool in segmentation |
+| `crmSegmentationService.estimateAudience` | server-only | requires `scopedBranchCodes` from caller |
+| `broadcast_drafts` RLS | per-policy | branch_manager limited to own branch via SQL policy |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

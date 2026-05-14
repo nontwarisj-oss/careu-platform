@@ -99,6 +99,16 @@ type LineLink = {
   created_at: string;
 };
 
+type LineDeliveryRow = {
+  id: string;
+  event_type: string;
+  request_id: string | null;
+  http_status: number | null;
+  reason: string | null;
+  created_at: string;
+  details: Record<string, unknown>;
+};
+
 type PageData = {
   customer: Customer;
   prefs: Prefs | null;
@@ -108,6 +118,7 @@ type PageData = {
   dispatchLog: DispatchRow[];
   lineLink: LineLink | null;
   uploadCount: number;
+  lineDelivery?: LineDeliveryRow[];
 };
 
 const STATUS_PILL: Record<string, string> = {
@@ -494,6 +505,62 @@ function Inner() {
             </div>
           )}
         </section>
+
+        {data.lineDelivery && data.lineDelivery.length > 0 && (
+          <section className="rounded-2xl border border-gray-200 bg-white">
+            <div className="p-4 border-b border-gray-100">
+              <h2 className="text-base font-bold text-gray-900">
+                LINE delivery log (15)
+              </h2>
+              <p className="text-[11px] text-gray-500">
+                เหตุการณ์ฝั่ง LINE — push ack, unfollow, block
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wider text-gray-600">
+                  <tr>
+                    <Th>Event</Th>
+                    <Th>Status</Th>
+                    <Th>Request</Th>
+                    <Th>Reason</Th>
+                    <Th>เวลา</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {data.lineDelivery.map((row) => (
+                    <tr key={row.id} className="hover:bg-gray-50">
+                      <Td className="text-xs">
+                        <Pill
+                          text={row.event_type}
+                          tone={
+                            row.event_type === "pushed"
+                              ? "border-green-200 bg-green-50 text-green-800"
+                              : row.event_type === "push_failed"
+                                ? "border-red-200 bg-red-50 text-red-800"
+                                : "border-gray-200 bg-gray-50 text-gray-700"
+                          }
+                        />
+                      </Td>
+                      <Td className="text-xs">
+                        {row.http_status ?? "—"}
+                      </Td>
+                      <Td className="text-xs font-mono">
+                        {row.request_id ? row.request_id.slice(0, 8) : "—"}
+                      </Td>
+                      <Td className="text-xs text-red-700 max-w-xs truncate">
+                        {row.reason ?? "—"}
+                      </Td>
+                      <Td className="text-xs text-gray-500">
+                        {fmt(row.created_at)}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">
