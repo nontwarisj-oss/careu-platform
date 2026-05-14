@@ -162,6 +162,14 @@ const Sidebar: React.FC = () => {
       labelEn: "Recovery",
       iconPath: ICON_PATHS.recovery,
     },
+    {
+      href: "/admin/payroll",
+      page: "admin",
+      group: "admin",
+      labelTh: "เงินเดือนช่าง",
+      labelEn: "Payroll",
+      iconPath: ICON_PATHS.expenses,
+    },
   ];
 
   const navItems = allNavItems.filter((item) => canAccessPage(role, item.page));

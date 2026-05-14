@@ -74,6 +74,15 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Run reconcile (`/api/admin/reconcile/run`)** | ✅ any/all branches | ✅ any/all branches | ✅ 🏢 (branchCode forced to own) | ❌ | ❌ |
 | **`reconcile_runs` read** | ✅ | ✅ | ❌ (admin-only RLS) | ❌ | ❌ |
 | **`customer_line_links` write (link / unlink / ignore)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/payroll` UI** | ✅ | ✅ | ❌ (RLS read only on `payroll_periods` — UI not built) | ❌ | ❌ |
+| **Payroll write (`/api/admin/payroll/*`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`payroll_periods` read** | ✅ | ✅ | ✅ 🏢 (RLS) | ❌ | ❌ |
+| **`technician_payroll_items` read** | ✅ | ✅ | ✅ 🏢 (RLS via period join) | ❌ | ❌ |
+| **Refresh customer tier (`/api/admin/customer-tier/refresh`)** | ✅ any/all branches | ✅ any/all | ✅ 🏢 (branchCode forced to own) | ❌ | ❌ |
+| **Customer tier badge on `/customers`** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 (read-only) | 👁 🏢 |
+| **Refresh dashboard snapshot (`/api/admin/dashboard/refresh-snapshot`)** | ✅ | ✅ (also callable from cron via Bearer `CRON_SECRET`) | ❌ | ❌ | ❌ |
+| **`dashboard_daily_snapshot` read** | ⚠ service-role only (revoked from authenticated) | same | same | same | same |
+| **`reconcile_runs` read** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -234,4 +243,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (customer linker + reconcile foundation)
+**Last updated:** 2026-05-14 (payroll UI + customer-tier writer + materialised dashboard foundation)

@@ -15,6 +15,9 @@ import {
   type ParsedCustomerRow,
 } from "@/lib/customerImport";
 import { aggregateOrdersToCustomers } from "@/lib/customerStats";
+import { useRole } from "@/lib/roleContext";
+import { canManageStaff } from "@/lib/permissions";
+import type { CustomerTier } from "@/lib/customerTierService";
 
 type CustomerRow = {
   id: string;
@@ -25,6 +28,11 @@ type CustomerRow = {
   address: string | null;
   notes: string | null;
   created_at: string;
+  /** Tier insight columns (post-`20260531`). Nullable for un-refreshed rows. */
+  customer_tier: CustomerTier | null;
+  lifetime_spend: number | string | null;
+  last_visit_at: string | null;
+  primary_branch_id: string | null;
 };
 
 type BranchRow = {
@@ -45,12 +53,31 @@ type EnrichedCustomer = Customer & {
   isRepeat: boolean;
   segment: CustomerSegment;
   latestService: string | null;
+  /** Tier from public.customers.customer_tier (post-`20260531`). May be null
+   *  if no refresh has run yet. */
+  tier: CustomerTier | null;
+  lifetimeSpend: number;
+  lastVisitAt: string | null;
 };
 
 function classifySegment(orderCount: number): CustomerSegment {
   if (orderCount >= 5) return "vip";
   if (orderCount >= 2) return "repeat";
   return "new";
+}
+
+function tierBadgeClasses(tier: CustomerTier): string {
+  switch (tier) {
+    case "PREMIUM":
+      return "border-purple-300 bg-purple-50 text-purple-800";
+    case "VIP":
+      return "border-yellow-300 bg-yellow-50 text-yellow-900";
+    case "INACTIVE":
+      return "border-gray-200 bg-gray-50 text-gray-500";
+    case "REGULAR":
+    default:
+      return "border-blue-200 bg-blue-50 text-blue-800";
+  }
 }
 
 const mapCustomerRow = (customer: CustomerRow): Customer => ({
@@ -65,6 +92,8 @@ const mapCustomerRow = (customer: CustomerRow): Customer => ({
 
 export default function CustomersPage() {
   const { language } = useLanguage();
+  const { role } = useRole();
+  const canRefreshTiers = canManageStaff(role);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -87,6 +116,22 @@ export default function CustomersPage() {
   const [statsByCustomer, setStatsByCustomer] = useState<
     Record<string, CustomerStats>
   >({});
+  // Tier insight columns indexed by customer id; populated by fetchCustomers
+  // from the public.customers row directly so we don't need to re-aggregate
+  // client-side. Refresh tier rebuilds these values server-side.
+  const [tierByCustomer, setTierByCustomer] = useState<
+    Record<
+      string,
+      {
+        tier: CustomerTier | null;
+        lifetimeSpend: number;
+        lastVisitAt: string | null;
+        primaryBranchId: string | null;
+      }
+    >
+  >({});
+  const [isRefreshingTiers, setIsRefreshingTiers] = useState(false);
+  const [tierMessage, setTierMessage] = useState<string | null>(null);
   const [statsMeta, setStatsMeta] = useState<{
     unmatchedOrders: number;
     totalOrders: number;
@@ -99,7 +144,9 @@ export default function CustomersPage() {
 
     const { data, error } = await supabase
       .from("customers")
-      .select("id, branch_id, name, phone, email, address, notes, created_at")
+      .select(
+        "id, branch_id, name, phone, email, address, notes, created_at, customer_tier, lifetime_spend, last_visit_at, primary_branch_id"
+      )
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -109,7 +156,26 @@ export default function CustomersPage() {
       return;
     }
 
-    setCustomers(((data ?? []) as CustomerRow[]).map(mapCustomerRow));
+    const rows = (data ?? []) as CustomerRow[];
+    setCustomers(rows.map(mapCustomerRow));
+    const tierMap: Record<
+      string,
+      {
+        tier: CustomerTier | null;
+        lifetimeSpend: number;
+        lastVisitAt: string | null;
+        primaryBranchId: string | null;
+      }
+    > = {};
+    for (const r of rows) {
+      tierMap[r.id] = {
+        tier: (r.customer_tier ?? null) as CustomerTier | null,
+        lifetimeSpend: Number(r.lifetime_spend ?? 0),
+        lastVisitAt: r.last_visit_at,
+        primaryBranchId: r.primary_branch_id,
+      };
+    }
+    setTierByCustomer(tierMap);
     setIsLoading(false);
   }, []);
 
@@ -233,18 +299,22 @@ export default function CustomersPage() {
   const enrichedCustomers = useMemo<EnrichedCustomer[]>(() => {
     return customers.map((c) => {
       const stats = statsByCustomer[c.id];
+      const tierInfo = tierByCustomer[c.id];
       const orderCount = stats?.orderCount ?? 0;
       return {
         ...c,
-        totalSpent: stats?.totalSpent ?? 0,
+        totalSpent: stats?.totalSpent ?? tierInfo?.lifetimeSpend ?? 0,
         lastOrderDate: stats?.latestDate ? new Date(stats.latestDate) : undefined,
         orderCount,
         isRepeat: orderCount >= 2,
         segment: classifySegment(orderCount),
         latestService: stats?.latestService ?? null,
+        tier: tierInfo?.tier ?? null,
+        lifetimeSpend: tierInfo?.lifetimeSpend ?? 0,
+        lastVisitAt: tierInfo?.lastVisitAt ?? null,
       };
     });
-  }, [customers, statsByCustomer]);
+  }, [customers, statsByCustomer, tierByCustomer]);
 
   const filteredCustomers = useMemo<EnrichedCustomer[]>(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -331,6 +401,43 @@ export default function CustomersPage() {
     setIsSyncing(false);
   };
 
+  const handleRefreshTiers = async () => {
+    if (!canRefreshTiers) return;
+    setIsRefreshingTiers(true);
+    setTierMessage(null);
+    try {
+      const res = await fetch("/api/admin/customer-tier/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 500 }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        customersScanned?: number;
+        updated?: number;
+        failed?: number;
+      };
+      if (!res.ok || !json.ok) {
+        setTierMessage(
+          language === "th"
+            ? `Refresh tier ไม่สำเร็จ: ${json.reason ?? `HTTP ${res.status}`}`
+            : `Tier refresh failed: ${json.reason ?? `HTTP ${res.status}`}`
+        );
+      } else {
+        setTierMessage(
+          language === "th"
+            ? `Refresh tier เสร็จ — สแกน ${json.customersScanned ?? 0} ราย • อัปเดต ${json.updated ?? 0} • ผิดพลาด ${json.failed ?? 0}`
+            : `Tier refresh done — scanned ${json.customersScanned ?? 0} • updated ${json.updated ?? 0} • failed ${json.failed ?? 0}`
+        );
+        await fetchCustomers();
+      }
+    } catch (err) {
+      setTierMessage(err instanceof Error ? err.message : "Network error");
+    }
+    setIsRefreshingTiers(false);
+  };
+
   const handleImportConfirm = async () => {
     if (importPreview.length === 0) return;
     setIsSubmitting(true);
@@ -370,7 +477,24 @@ export default function CustomersPage() {
     {
       key: "name",
       label: t("customers.name", language),
-      width: "180px",
+      width: "200px",
+      render: (name: string, row: EnrichedCustomer) => (
+        <div className="flex flex-col gap-0.5">
+          <span className="font-medium text-gray-900">{name}</span>
+          {row.tier && (
+            <span
+              className={`inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierBadgeClasses(row.tier)}`}
+              title={
+                language === "th"
+                  ? `Tier: ${row.tier} · lifetime ${formatCurrency(row.lifetimeSpend)}`
+                  : `Tier: ${row.tier} · lifetime ${formatCurrency(row.lifetimeSpend)}`
+              }
+            >
+              {row.tier}
+            </span>
+          )}
+        </div>
+      ),
     },
     {
       key: "phone",
@@ -489,6 +613,26 @@ export default function CustomersPage() {
               ? "ซิงค์จาก Google Sheet"
               : "Sync from Google Sheet"}
           </button>
+          {canRefreshTiers && (
+            <button
+              onClick={() => void handleRefreshTiers()}
+              disabled={isRefreshingTiers}
+              className="border border-green-600 text-green-700 hover:bg-green-50 px-5 py-2 rounded-lg transition font-medium disabled:opacity-50"
+              title={
+                language === "th"
+                  ? "อัปเดตเทียร์ลูกค้า + lifetime spend + last visit"
+                  : "Recompute customer tier + lifetime spend + last visit"
+              }
+            >
+              {isRefreshingTiers
+                ? language === "th"
+                  ? "กำลังคำนวณ tier..."
+                  : "Refreshing tiers..."
+                : language === "th"
+                ? "Refresh tiers"
+                : "Refresh tiers"}
+            </button>
+          )}
           <button
             onClick={() => {
               setImportPreview([]);
@@ -561,6 +705,19 @@ export default function CustomersPage() {
             type="button"
             onClick={() => setSyncMessage(null)}
             className="text-green-700 hover:text-green-900 -mt-0.5"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {tierMessage && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 flex items-start justify-between gap-3">
+          <span className="whitespace-pre-line leading-relaxed">{tierMessage}</span>
+          <button
+            type="button"
+            onClick={() => setTierMessage(null)}
+            className="text-blue-700 hover:text-blue-900 -mt-0.5"
             aria-label="dismiss"
           >
             ✕

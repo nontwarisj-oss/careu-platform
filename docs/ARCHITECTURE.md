@@ -191,6 +191,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260528_recovery_foundation.sql` | `sync_failures.kind` CHECK extended with `'line_send'` + `'receipt_rebuild'`; `sync_failures_branch_read` RLS policy so branch_manager sees own-branch failures in `/admin/recovery` |
 | `20260529_cron_and_line_follow.sql` | `worker_runs` heartbeat table (one row per retry-tick — cron or manual); `line_follow_events` audit table (every LINE webhook event, signature_verified flag, consented_at for verified follows); admin-read RLS on both |
 | `20260530_customer_linker_and_reconcile.sql` | `customer_line_links.ignored_at` + `ignored_by` for admin triage; `sync_failures.kind` CHECK extended with `reconcile_missing_sheet` + `reconcile_duplicate_sheet` + `reconcile_orphan_link`; new `reconcile_runs` heartbeat table |
+| `20260531_management_intelligence.sql` | `public.customers.lifetime_spend` + `last_visit_at` + `primary_branch_id` insight columns; materialised view `public.dashboard_daily_snapshot` (branch_code × work_date with revenue / counts / fees); `refresh_dashboard_daily_snapshot()` SECURITY DEFINER wrapper (concurrent-safe with non-concurrent fallback for first refresh) |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -752,6 +753,104 @@ LINE Developer Console → channel settings:
 
 ---
 
+## 12h. Management intelligence foundation (post-`20260531`)
+
+> Status: **foundation live**. Payroll write surface + customer-tier writer + materialised dashboard snapshot. UI lives in `/admin/payroll` and `/customers`; reads are routed through `lib/aggregationService.ts`.
+
+### 12h.1 Payroll write layer
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  /admin/payroll  (owner / hq_admin only)                 │
+│    • Picks (branch, year, month).                        │
+│    • Loads payroll_periods row + active technicians.     │
+│    • For each tech: calculateEstimatedPayroll(...) reads │
+│      technician_daily_kpi to derive baseWage / target /  │
+│      production / performance ratio.                     │
+│    • Admin tweaks bonus / deduction → "Save".            │
+│    • Finalize → mark paid (state machine).               │
+└──────────────┬───────────────────────────────────────────┘
+               ▼
+┌──────────────────────────────────────────────────────────┐
+│  POST /api/admin/payroll/{open-period,save-item,         │
+│                            transition}                   │
+│    • requireRole(owner / hq_admin) on every route.       │
+│    • upsertPayrollItem refuses writes when period.status │
+│      = 'paid' (immutability rule).                       │
+│    • Server recomputes final_pay = base + bonus − ded.   │
+└──────────────────────────────────────────────────────────┘
+```
+
+State machine (full table in [PAYROLL.md §4](./PAYROLL.md)):
+
+```
+open → (finalize) → finalized → (mark paid) → paid (immutable)
+```
+
+### 12h.2 Customer tier writer
+
+```
+public.customers
+  ├ customer_tier      (PREMIUM / VIP / REGULAR / INACTIVE)
+  ├ lifetime_spend
+  ├ last_visit_at
+  ├ primary_branch_id  (branch slug with most orders)
+  └ total_orders / latest_service
+
+lib/customerTierService.ts
+  ├ calculateCustomerTier(stats)         — pure
+  ├ computeCustomerStats(customerId)     — admin client read
+  ├ refreshCustomerTier(customerId)      — write back to customers
+  └ refreshBranchCustomerTiers(branch)   — batch (limit 2000)
+```
+
+Thresholds in `TIER_THRESHOLDS` — change-in-one-place tuning. Full rules in [CUSTOMER_TIER.md §1](./CUSTOMER_TIER.md).
+
+Refresh today: admin button on `/customers` calls `POST /api/admin/customer-tier/refresh`. Future cron is documented in §6 of CUSTOMER_TIER.md.
+
+### 12h.3 Materialised dashboard snapshot
+
+```
+public.dashboard_daily_snapshot  (matview, branch_code × work_date)
+  total_orders / completed_orders / ready_orders / urgent_orders /
+  revenue / paid_revenue / urgent_fee_total /
+  material_cost_total / labor_cost_total
+
+public.refresh_dashboard_daily_snapshot()   (SECURITY DEFINER)
+  • refresh materialized view concurrently <view>
+  • on first refresh (WITH NO DATA), falls back to non-concurrent path
+
+lib/aggregationService.ts
+  ├ fetchBranchSalesSummary       ← reads from the matview
+  ├ fetchPayrollTotals            ← reads technician_payroll_items
+  ├ fetchTopServices              ← reads orders directly (matview
+  │                                  doesn't materialise per-service yet)
+  ├ fetchOverdueTrends            ← reads orders directly
+  ├ fetchCustomerGrowth           ← reads customers.created_at
+  └ refreshDashboardSnapshot      ← calls the SQL function
+
+POST /api/admin/dashboard/refresh-snapshot   (owner / hq_admin)
+GET  /api/admin/dashboard/refresh-snapshot   (Bearer CRON_SECRET — cron)
+```
+
+**Why service-role only on reads.** RLS doesn't apply to matviews; we revoke direct read from `anon` + `authenticated` so a misconfigured client can't expose every branch's daily numbers. Every read goes through the admin client in a server context that applies branch isolation manually before returning data to a non-admin role.
+
+**Why the existing dashboard isn't swapped yet.** Foundation phase. The page (`app/page.tsx`) still reads orders + expenses directly via `lib/dashboardData.ts`. Swapping to the snapshot is a next-phase task because (a) we want the snapshot to accumulate data first and (b) the swap needs a careful side-by-side QA pass. The aggregation service is the seam — when the swap happens, only `lib/dashboardData.ts` changes.
+
+### 12h.4 Branch isolation across this phase
+
+| Surface | Owner / HQ | Branch_manager | Front_staff / Technician |
+|---|---|---|---|
+| `/admin/payroll` UI | ✅ | ❌ (admin page key) | ❌ |
+| `payroll_periods` read | ✅ | ✅ 🏢 (RLS) | ❌ |
+| Payroll writes | ✅ | ❌ | ❌ |
+| `/customers` tier badge | ✅ | ✅ 🏢 | ✅ 🏢 (read) |
+| Refresh tier route | ✅ all | ✅ 🏢 (branchCode forced) | ❌ |
+| `dashboard_daily_snapshot` | ⚠ service-role only | ⚠ service-role only | ⚠ service-role only |
+| Refresh snapshot route | ✅ | ❌ | ❌ (cron has its own auth) |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -832,6 +931,7 @@ app/
 ├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
 ├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild + reconcile tab + bulk actions
 ├── admin/customer-line/page.tsx        ← Customer ↔ LINE linker (unmatched + linked tabs)
+├── admin/payroll/page.tsx              ← Technician payroll (preview / save / finalize / mark paid)
 ├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
 ├── api/admin/recovery/bulk-resolve/route.ts  ← Bulk resolve (≤100 ids)
 ├── api/admin/recovery/run-worker/route.ts    ← Manual retry-worker trigger
@@ -839,6 +939,11 @@ app/
 ├── api/admin/customer-line/link/route.ts     ← Pair LINE follower with customer
 ├── api/admin/customer-line/unlink/route.ts   ← Break a LINE-customer pairing
 ├── api/admin/customer-line/ignore/route.ts   ← Hide a probe / non-customer follower
+├── api/admin/customer-tier/refresh/route.ts  ← Recompute customer tier insight columns
+├── api/admin/dashboard/refresh-snapshot/route.ts ← Refresh materialised dashboard view
+├── api/admin/payroll/open-period/route.ts    ← Idempotent payroll period open
+├── api/admin/payroll/save-item/route.ts      ← Upsert technician payroll item
+├── api/admin/payroll/transition/route.ts     ← open → finalized → paid
 ├── api/cron/retry-worker/route.ts            ← Scheduled retry-worker (CRON_SECRET)
 ├── api/line/webhook/route.ts                 ← LINE follow / unfollow webhook
 ├── customers/page.tsx
@@ -904,7 +1009,9 @@ lib/
 ├── lineWebhook.ts    ← verifyLineSignature + processLineWebhookBody
 ├── customerMatching.ts ← findCustomerByPhone / Name / Recently + suggestion combiner
 ├── customerLinker.ts ← fetchUnmatched / Linked + link / unlink / ignore wrappers
-└── reconcile.ts      ← runReconcileTick + 3 checks (orders↔sheet, duplicate, orphan)
+├── reconcile.ts      ← runReconcileTick + 3 checks (orders↔sheet, duplicate, orphan)
+├── customerTierService.ts ← calculateCustomerTier + refreshCustomerTier + refreshBranchCustomerTiers
+└── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -930,4 +1037,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (customer linker + reconcile foundation — `/admin/customer-line`, `lib/reconcile.ts`, `20260530` migration, new `CUSTOMER_IDENTITY.md`)
+**Last updated:** 2026-05-14 (payroll UI + customer-tier writer + materialised dashboard foundation — `/admin/payroll`, `lib/customerTierService.ts`, `lib/aggregationService.ts`, `20260531` migration, new `PAYROLL.md` + `CUSTOMER_TIER.md`)

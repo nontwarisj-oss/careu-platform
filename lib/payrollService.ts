@@ -255,6 +255,270 @@ function emptyBranchLaborCost(
   };
 }
 
+// ---------- Period + item writes ------------------------------------------
+//
+// Owner / hq_admin only — every API route that calls these writers must
+// gate on the role. RLS on payroll_periods and technician_payroll_items
+// already restricts branch_manager / front_staff / technician to read-only
+// or no access, so a missed UI guard still won't corrupt the data.
+
+export type PayrollPeriodRow = {
+  id: string;
+  branch_id: string;
+  year: number;
+  month: number;
+  start_date: string;
+  end_date: string;
+  status: "open" | "finalized" | "paid" | "cancelled";
+  finalized_at: string | null;
+  paid_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PayrollItemRow = {
+  id: string;
+  payroll_period_id: string;
+  technician_profile_id: string | null;
+  daily_wage_snapshot: number | null;
+  target_multiplier_snapshot: number | null;
+  base_wage: number;
+  days_worked: number;
+  production_value: number;
+  target_value: number;
+  performance_ratio: number;
+  bonus_amount: number;
+  deduction_amount: number;
+  final_pay: number;
+  notes: string | null;
+};
+
+export type FindOrCreatePeriodInput = {
+  /** branches.id (uuid). */
+  branchId: string;
+  year: number;
+  month: number;
+  actorId?: string | null;
+};
+
+/**
+ * Idempotent — returns the existing period when one matches
+ * (branch_id, year, month). Used by the admin UI's "Open period"
+ * button so re-pressing it is safe.
+ */
+export async function findOrCreatePeriod(
+  input: FindOrCreatePeriodInput
+): Promise<{ ok: true; period: PayrollPeriodRow } | { ok: false; reason: string }> {
+  if (input.month < 1 || input.month > 12) {
+    return { ok: false, reason: "Month must be 1–12" };
+  }
+  const admin = (await import("@/lib/supabaseAdmin")).getSupabaseAdmin();
+  if (!admin) {
+    return { ok: false, reason: "SUPABASE_SERVICE_ROLE_KEY ยังไม่ได้ตั้งค่า" };
+  }
+
+  const existing = await admin
+    .from("payroll_periods")
+    .select("*")
+    .eq("branch_id", input.branchId)
+    .eq("year", input.year)
+    .eq("month", input.month)
+    .maybeSingle();
+  if (!existing.error && existing.data) {
+    return { ok: true, period: existing.data as PayrollPeriodRow };
+  }
+
+  // Compute start/end date for the calendar month.
+  const startDate = `${input.year}-${String(input.month).padStart(2, "0")}-01`;
+  const endDateRaw = new Date(Date.UTC(input.year, input.month, 0)); // last day
+  const endDate = `${endDateRaw.getUTCFullYear()}-${String(
+    endDateRaw.getUTCMonth() + 1
+  ).padStart(2, "0")}-${String(endDateRaw.getUTCDate()).padStart(2, "0")}`;
+
+  const insertRes = await admin
+    .from("payroll_periods")
+    .insert({
+      branch_id: input.branchId,
+      year: input.year,
+      month: input.month,
+      start_date: startDate,
+      end_date: endDate,
+      status: "open",
+      created_by: input.actorId ?? null,
+      updated_by: input.actorId ?? null,
+    })
+    .select("*")
+    .single();
+  if (insertRes.error || !insertRes.data) {
+    return { ok: false, reason: insertRes.error?.message ?? "Insert failed" };
+  }
+  return { ok: true, period: insertRes.data as PayrollPeriodRow };
+}
+
+export type UpsertItemInput = {
+  payrollPeriodId: string;
+  technicianProfileId: string;
+  baseWage: number;
+  dailyWageSnapshot: number | null;
+  targetMultiplierSnapshot: number | null;
+  daysWorked: number;
+  productionValue: number;
+  targetValue: number;
+  performanceRatio: number;
+  bonusAmount: number;
+  deductionAmount: number;
+  notes?: string | null;
+  actorId?: string | null;
+};
+
+/**
+ * Upsert one technician_payroll_items row keyed by
+ * (payroll_period_id, technician_profile_id). `final_pay` is recomputed
+ * server-side: base + bonus − deduction. Owner-decided bonus / deduction
+ * stay as-passed; the UI can pre-fill them with estimates.
+ *
+ * Refuses to write when the period status is `paid` (immutability rule).
+ * `finalized` periods accept edits — owners often adjust bonuses after
+ * finalization but before paying out.
+ */
+export async function upsertPayrollItem(
+  input: UpsertItemInput
+): Promise<{ ok: true; item: PayrollItemRow } | { ok: false; reason: string }> {
+  const admin = (await import("@/lib/supabaseAdmin")).getSupabaseAdmin();
+  if (!admin) {
+    return { ok: false, reason: "SUPABASE_SERVICE_ROLE_KEY ยังไม่ได้ตั้งค่า" };
+  }
+  const periodRes = await admin
+    .from("payroll_periods")
+    .select("status")
+    .eq("id", input.payrollPeriodId)
+    .maybeSingle();
+  if (periodRes.error || !periodRes.data) {
+    return { ok: false, reason: "ไม่พบ payroll period" };
+  }
+  if ((periodRes.data as { status: string }).status === "paid") {
+    return {
+      ok: false,
+      reason: "Period นี้จ่ายเงินแล้ว — แก้ไขรายการช่างต่อไปไม่ได้",
+    };
+  }
+
+  const finalPay =
+    Number(input.baseWage) +
+    Number(input.bonusAmount) -
+    Number(input.deductionAmount);
+
+  const payload = {
+    payroll_period_id: input.payrollPeriodId,
+    technician_profile_id: input.technicianProfileId,
+    daily_wage_snapshot: input.dailyWageSnapshot,
+    target_multiplier_snapshot: input.targetMultiplierSnapshot,
+    base_wage: input.baseWage,
+    days_worked: input.daysWorked,
+    production_value: input.productionValue,
+    target_value: input.targetValue,
+    performance_ratio: input.performanceRatio,
+    bonus_amount: input.bonusAmount,
+    deduction_amount: input.deductionAmount,
+    final_pay: finalPay,
+    notes: input.notes ?? null,
+    updated_by: input.actorId ?? null,
+  };
+
+  const res = await admin
+    .from("technician_payroll_items")
+    .upsert(payload, {
+      onConflict: "payroll_period_id,technician_profile_id",
+    })
+    .select("*")
+    .single();
+  if (res.error || !res.data) {
+    return { ok: false, reason: res.error?.message ?? "Upsert failed" };
+  }
+  return { ok: true, item: res.data as PayrollItemRow };
+}
+
+export type PeriodTransitionResult =
+  | { ok: true; period: PayrollPeriodRow }
+  | { ok: false; reason: string };
+
+async function transitionPeriod(
+  periodId: string,
+  to: PayrollPeriodRow["status"],
+  actorId: string | null
+): Promise<PeriodTransitionResult> {
+  const admin = (await import("@/lib/supabaseAdmin")).getSupabaseAdmin();
+  if (!admin) {
+    return { ok: false, reason: "SUPABASE_SERVICE_ROLE_KEY ยังไม่ได้ตั้งค่า" };
+  }
+  const periodRes = await admin
+    .from("payroll_periods")
+    .select("status")
+    .eq("id", periodId)
+    .maybeSingle();
+  if (periodRes.error || !periodRes.data) {
+    return { ok: false, reason: "ไม่พบ payroll period" };
+  }
+  const cur = (periodRes.data as { status: string }).status;
+  if (cur === to) {
+    // Idempotent — return the period in its current shape.
+    const fresh = await admin
+      .from("payroll_periods")
+      .select("*")
+      .eq("id", periodId)
+      .single();
+    if (fresh.error || !fresh.data) {
+      return { ok: false, reason: fresh.error?.message ?? "Read failed" };
+    }
+    return { ok: true, period: fresh.data as PayrollPeriodRow };
+  }
+  if (to === "finalized" && cur !== "open") {
+    return { ok: false, reason: `ไม่สามารถ finalize period ที่สถานะ "${cur}"` };
+  }
+  if (to === "paid" && cur !== "finalized") {
+    return { ok: false, reason: `ต้อง finalize ก่อนถึงจะกด "จ่ายแล้ว" ได้ (สถานะปัจจุบัน: ${cur})` };
+  }
+
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    status: to,
+    updated_by: actorId,
+  };
+  if (to === "finalized") {
+    patch.finalized_at = now;
+    patch.finalized_by = actorId;
+  }
+  if (to === "paid") {
+    patch.paid_at = now;
+    patch.paid_by = actorId;
+  }
+  const res = await admin
+    .from("payroll_periods")
+    .update(patch)
+    .eq("id", periodId)
+    .select("*")
+    .single();
+  if (res.error || !res.data) {
+    return { ok: false, reason: res.error?.message ?? "Update failed" };
+  }
+  return { ok: true, period: res.data as PayrollPeriodRow };
+}
+
+export function finalizePeriod(
+  periodId: string,
+  actorId: string | null
+): Promise<PeriodTransitionResult> {
+  return transitionPeriod(periodId, "finalized", actorId);
+}
+
+export function markPeriodPaid(
+  periodId: string,
+  actorId: string | null
+): Promise<PeriodTransitionResult> {
+  return transitionPeriod(periodId, "paid", actorId);
+}
+
 // ---------- Branch profit fetch -------------------------------------------
 
 export type BranchMonthlyProfit = {

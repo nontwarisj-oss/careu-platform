@@ -631,6 +631,57 @@ Matching helpers in [`lib/customerMatching.ts`](../lib/customerMatching.ts) (`fi
 
 Phone is the canonical join key (normalized via `lib/phone.ts`). One LINE user → at most one active customer link (unique DB index). The webhook captures every follow with `customer_id=NULL` and `consented_at` set; an admin pairs the LINE user with a real customer in the linker UI. Until linkage, no message is ever sent to that LINE user — the orchestrator looks up by `customer_id` and finds nothing. After 7 days a still-unlinked row becomes a `reconcile_orphan_link` mismatch so it stays on the admin's radar.
 
+### 9c.5e Payroll UI + customer tier + materialised dashboard (post-`20260531`)
+
+> Status: **foundation live**. See [PAYROLL.md](./PAYROLL.md) and [CUSTOMER_TIER.md](./CUSTOMER_TIER.md) for full specs.
+
+#### 9c.5e.1 Payroll workflow
+
+`/admin/payroll` (owner / hq_admin only). Flow per month:
+
+1. Pick branch + BE year + month. Page loads the matching `payroll_periods` row (or shows "Open period" if none).
+2. For each active technician in the branch, the page calls `calculateEstimatedPayroll(tech, year, month)` which reads `technician_daily_kpi` and returns `{ daysWorked, baseWage, productionValue, targetValue, performanceRatio, aboveTarget }`.
+3. Admin adjusts `bonusAmount` + `deductionAmount` per row → clicks **Save** → `POST /api/admin/payroll/save-item` upserts the `technician_payroll_items` row. Server recomputes `final_pay = base + bonus − deduction`.
+4. **Finalize** transitions `payroll_periods.status` from `open → finalized`. Bonus / deduction stay editable post-finalize.
+5. **Mark paid** transitions `finalized → paid`. After this, `upsertPayrollItem` refuses further writes; the period is immutable.
+
+Period transition state machine + transition routes documented in [PAYROLL.md §4](./PAYROLL.md). Branch_manager has RLS read access on `payroll_periods` + `technician_payroll_items` but no UI this phase.
+
+#### 9c.5e.2 Customer-tier refresh
+
+`/customers` now displays a tier badge (PREMIUM / VIP / REGULAR / INACTIVE) next to each customer name when the `customer_tier` column is populated. The badge is purely informational this phase — no pricing or notification logic gates on it yet.
+
+Refresh model:
+- **Manual sweep:** owner / hq_admin / branch_manager clicks "Refresh tiers" on `/customers`. The route batches up to 500 customers per call. Branch_manager calls are forced to their `branchCode`.
+- **Per-customer:** `POST /api/admin/customer-tier/refresh` with `{ customerId }` for one-off refreshes (future "view customer" admin action).
+- **Future cron / DB trigger:** the library function `refreshBranchCustomerTiers` is ready for a scheduled job. Deliberately not built this phase to avoid coupling the order-write path to a customer aggregate recompute.
+
+Tier rules (full table in [CUSTOMER_TIER.md §1](./CUSTOMER_TIER.md)):
+- INACTIVE wins over every other tier (no orders OR last visit > 365 days).
+- PREMIUM = lifetime spend ≥ ฿20,000 AND last visit within 90 days.
+- VIP = lifetime spend ≥ ฿5,000 OR order count ≥ 5.
+- REGULAR otherwise.
+
+#### 9c.5e.3 Materialised dashboard snapshot
+
+Migration `20260531` adds `public.dashboard_daily_snapshot` — a materialised view keyed by (branch_code, work_date) with daily totals: revenue, order counts (total / completed / ready / urgent), paid revenue, urgent-fee total, material + labor cost totals. Refreshed by `public.refresh_dashboard_daily_snapshot()` (SECURITY DEFINER).
+
+Why a matview: the existing dashboard reads orders directly. As branches + months accumulate, that O(orders) read gets expensive. The matview turns it into O(branches × days), which stays constant.
+
+**Reads** go through `lib/aggregationService.ts`:
+- `fetchBranchSalesSummary({ branchCode?, fromDate?, toDate? })` → daily rows.
+- `fetchPayrollTotals({ branchId, year, month })` → sums of `technician_payroll_items`.
+- `fetchTopServices({ branchCode?, fromDate?, toDate?, limit? })` → top-N completed services.
+- `fetchOverdueTrends({ branchCode? })` → bucketed overdue count.
+- `fetchCustomerGrowth({ branchCode?, fromDate?, toDate? })` → daily new-customer count.
+- `refreshDashboardSnapshot()` → calls the SQL function and returns row count after.
+
+**Reads go through the service-role admin client.** RLS doesn't apply to materialised views; we revoke direct read from `anon` + `authenticated` and force callers through a server route that re-applies branch isolation manually. The existing `/page.tsx` dashboard is NOT yet swapped to the snapshot — foundation only, see CUSTOMER_TIER.md §4 for the rationale.
+
+**Refresh routes:**
+- `POST /api/admin/dashboard/refresh-snapshot` (owner / hq_admin) — manual.
+- `GET /api/admin/dashboard/refresh-snapshot` (Bearer `CRON_SECRET`) — cron path. Vercel Cron / Supabase Cron can call this every 15 minutes.
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.
