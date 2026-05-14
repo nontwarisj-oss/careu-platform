@@ -416,20 +416,10 @@ function Inner() {
           <TemplatePreview body={draft.template_line} channel="LINE" />
         </section>
 
-        <section className="rounded-2xl border border-gray-200 bg-white p-5">
-          <h2 className="text-base font-bold text-gray-900">การส่ง</h2>
-          <p className="mt-2 text-xs text-gray-500">
-            ฟังก์ชัน &quot;ส่งจริง&quot; ยังไม่เปิดในเฟสนี้ — สร้าง draft เพื่อเตรียมไว้
-          </p>
-          <button
-            type="button"
-            disabled
-            className="mt-3 rounded-xl bg-gray-200 text-gray-500 px-4 py-2 text-sm font-semibold cursor-not-allowed"
-            title="ยังไม่เปิดใช้งานในเฟสนี้"
-          >
-            ส่ง broadcast (ปิดไว้)
-          </button>
-        </section>
+        <SendSection
+          draftId={draft.id}
+          draftStatus={draft.status}
+        />
 
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">การจัดการ</h2>
@@ -645,6 +635,271 @@ function DistBlock({
           ))}
       </div>
     </div>
+  );
+}
+
+type SendJob = {
+  id: string;
+  status: string;
+  mode: string;
+  scheduled_for: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  paused_at: string | null;
+  cancelled_at: string | null;
+  expected_total: number | null;
+  channels: string[];
+  created_at: string;
+  failure_reason: string | null;
+};
+
+const JOB_STATUS_TONE: Record<string, string> = {
+  queued: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  processing: "border-blue-200 bg-blue-50 text-blue-900",
+  paused: "border-amber-200 bg-amber-50 text-amber-900",
+  completed: "border-green-200 bg-green-50 text-green-800",
+  cancelled: "border-gray-300 bg-gray-100 text-gray-700",
+  failed: "border-red-200 bg-red-50 text-red-800",
+};
+
+const JOB_STATUS_LABEL: Record<string, string> = {
+  queued: "รอเริ่ม",
+  processing: "กำลังส่ง",
+  paused: "หยุดชั่วคราว",
+  completed: "เสร็จสิ้น",
+  cancelled: "ยกเลิก",
+  failed: "ล้มเหลว",
+};
+
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("th-TH", {
+      dateStyle: "short",
+      timeStyle: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function SendSection({
+  draftId,
+  draftStatus,
+}: {
+  draftId: string;
+  draftStatus: string;
+}) {
+  const [jobs, setJobs] = useState<SendJob[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [scheduledFor, setScheduledFor] = useState<string>("");
+  const [busy, setBusy] = useState<"live" | "dry_run" | "scheduled" | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/admin/crm/broadcasts/${draftId}/jobs`, {
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        jobs?: SendJob[];
+        reason?: string;
+      };
+      if (!res.ok || !json.ok) {
+        setError(json.reason ?? `โหลดล้มเหลว (HTTP ${res.status})`);
+        return;
+      }
+      setJobs(json.jobs ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setLoading(false);
+    }
+  }, [draftId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleSend = async (
+    mode: "live" | "dry_run",
+    when: "now" | "scheduled"
+  ) => {
+    setError(null);
+    setMessage(null);
+    const stamp =
+      when === "scheduled" && scheduledFor
+        ? new Date(scheduledFor).toISOString()
+        : null;
+    if (when === "scheduled" && !stamp) {
+      setError("กรุณาเลือกวันเวลาที่จะส่ง");
+      return;
+    }
+    if (
+      mode === "live" &&
+      !window.confirm(
+        when === "scheduled"
+          ? `ตั้งเวลาส่งจริงให้ลูกค้า ตามเวลาที่เลือก — ยืนยัน?`
+          : "ส่งจริงให้ลูกค้าตอนนี้ — ยืนยัน?"
+      )
+    ) {
+      return;
+    }
+    setBusy(when === "scheduled" ? "scheduled" : mode);
+    try {
+      const res = await fetch(`/api/admin/crm/broadcasts/${draftId}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, scheduledFor: stamp }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        sendJobId?: string;
+        expectedTargets?: number;
+      };
+      if (!res.ok || !json.ok) {
+        setError(json.reason ?? `ส่งล้มเหลว (HTTP ${res.status})`);
+      } else {
+        setMessage(
+          mode === "dry_run"
+            ? `dry-run job #${json.sendJobId?.slice(0, 8)} สร้างแล้ว (${json.expectedTargets ?? 0} เป้าหมาย)`
+            : `job #${json.sendJobId?.slice(0, 8)} สร้างแล้ว (${json.expectedTargets ?? 0} เป้าหมาย)`
+        );
+        await load();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disabled =
+    draftStatus === "archived" ||
+    busy !== null;
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-bold text-gray-900">การส่ง</h2>
+        {draftStatus === "archived" && (
+          <span className="text-[10px] text-gray-500">
+            draft archive แล้ว — restore ก่อนส่ง
+          </span>
+        )}
+      </div>
+
+      {message && (
+        <div className="mt-2 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-3 grid sm:grid-cols-3 gap-3">
+        <button
+          type="button"
+          onClick={() => void handleSend("dry_run", "now")}
+          disabled={disabled}
+          className="rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-800 disabled:opacity-50"
+        >
+          {busy === "dry_run" ? "..." : "Dry-run (ไม่ส่งจริง)"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleSend("live", "now")}
+          disabled={disabled}
+          className="rounded-xl bg-green-700 hover:bg-green-800 text-white px-3 py-2 text-sm font-semibold disabled:opacity-50"
+        >
+          {busy === "live" ? "..." : "ส่งตอนนี้ (live)"}
+        </button>
+        <div className="flex items-center gap-2">
+          <input
+            type="datetime-local"
+            value={scheduledFor}
+            onChange={(e) => setScheduledFor(e.target.value)}
+            disabled={disabled}
+            className="flex-1 rounded-xl border border-gray-200 px-2 py-2 text-xs disabled:bg-gray-50"
+          />
+          <button
+            type="button"
+            onClick={() => void handleSend("live", "scheduled")}
+            disabled={disabled || !scheduledFor}
+            className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50 whitespace-nowrap"
+          >
+            {busy === "scheduled" ? "..." : "ตั้งเวลา"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-[10px] text-gray-500">
+        ส่งจริงจะเกิดในช่วง 09:00–19:00 (เวลาไทย) เท่านั้น —
+        งาน dry-run และตั้งเวลาก็เคารพหน้าต่างเดียวกัน
+      </p>
+
+      <div className="mt-5 border-t border-gray-100 pt-4">
+        <h3 className="text-sm font-semibold text-gray-800">งานส่งที่ผ่านมา</h3>
+        {loading ? (
+          <p className="mt-2 text-xs text-gray-500">โหลด...</p>
+        ) : jobs.length === 0 ? (
+          <p className="mt-2 text-xs text-gray-500">
+            ยังไม่มีงานส่ง — กดปุ่มข้างบนเพื่อเริ่มต้น
+          </p>
+        ) : (
+          <ul className="mt-2 divide-y divide-gray-100">
+            {jobs.map((j) => (
+              <li key={j.id} className="py-2 flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/admin/crm/broadcasts/${draftId}/jobs/${j.id}`}
+                      className="font-mono text-xs text-green-700 hover:underline"
+                    >
+                      #{j.id.slice(0, 8)}
+                    </Link>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                        JOB_STATUS_TONE[j.status] ?? JOB_STATUS_TONE.queued
+                      }`}
+                    >
+                      {JOB_STATUS_LABEL[j.status] ?? j.status}
+                    </span>
+                    {j.mode === "dry_run" && (
+                      <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] text-gray-600">
+                        dry-run
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-gray-500">
+                    {j.expected_total != null ? `${j.expected_total} เป้าหมาย` : "ยังไม่ fan-out"} ·{" "}
+                    {j.scheduled_for
+                      ? `เริ่ม ${fmtDateTime(j.scheduled_for)}`
+                      : `สร้าง ${fmtDateTime(j.created_at)}`}
+                    {j.failure_reason && (
+                      <span className="text-red-600 ml-2">
+                        — {j.failure_reason}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <Link
+                  href={`/admin/crm/broadcasts/${draftId}/jobs/${j.id}`}
+                  className="text-[11px] text-green-700 hover:text-green-900 font-semibold whitespace-nowrap"
+                >
+                  ดูสถานะ →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

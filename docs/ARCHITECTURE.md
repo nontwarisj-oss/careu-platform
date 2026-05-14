@@ -1450,6 +1450,76 @@ Two writers:
 
 ---
 
+## 12q. Broadcast send pipeline (post-`20260540`)
+
+> Status: **send-capable**. Operators can run real broadcasts with pause/resume/cancel + scheduling + cross-draft dedup + quiet hours. Single-branch default; cross-branch sends require an explicit feature-flag flip.
+
+See [CRM_BROADCAST.md §10](./CRM_BROADCAST.md) for the operator runbook.
+
+### 12q.1 New schema
+
+| Table | Purpose |
+|---|---|
+| `broadcast_send_jobs` | per-send-action row. Frozen segment + templates. `status ∈ {queued, processing, paused, completed, cancelled, failed}`. `mode ∈ {live, dry_run}`. |
+| `broadcast_send_targets` | per (job, customer, channel). UNIQUE on the triple — fan-out is restart-safe. |
+| `broadcast_send_attempts` | append-only log of cron ticks per job. |
+| `broadcast_metrics_daily` | aggregated per (job, channel, date). |
+| `feature_flags` | server-side toggles (sms / line / scheduled / cross-branch / caps / hours / dedup). |
+
+### 12q.2 Flow
+
+```
+operator → POST /send (live | dry_run | scheduled)
+        → INSERT broadcast_send_jobs status=queued
+
+cron /api/cron/broadcast-send
+  └─ runBroadcastSendTick (jobLimit=5, chunk=50)
+       ├─ checkSchedule + checkQuietHours
+       ├─ first run → fan-out (UPSERT targets, restart-safe)
+       ├─ per-target: isChannelEnabled → evaluatePolicy
+       │              → isRecentlyBroadcasted → enqueueNotification
+       ├─ refresh broadcast_metrics_daily
+       └─ mark completed when no pending rows
+```
+
+The existing dispatch worker drains `customer_notifications` rows the fan-out creates — provider send + retry + dead-letter all reuse the proven path from Phase 12–14.
+
+### 12q.3 Operator controls
+
+- `POST /api/admin/crm/broadcasts/[id]/send` — create a send_job. Validates audience cap + cross-branch flag + channel flags + scheduling flag.
+- `PATCH /api/admin/crm/broadcasts/[id]/jobs/[jobId] { action: pause|resume|cancel }` — state transitions. Cancel sets all pending targets to skipped.
+- `GET /api/admin/crm/broadcasts/[id]/jobs/[jobId]` — counts + breakdown + attempts + metrics + sample.
+- `GET /api/admin/crm/broadcasts/[id]/jobs` — job list per draft.
+
+### 12q.4 Cross-draft dedup
+
+Sliding window from `broadcast_dedup_window_hours` (default 24 h). Checked at fan-out time per target. "Newest wins" via the natural temporal ordering — older jobs see newer-dispatched rows and skip.
+
+### 12q.5 Quiet hours
+
+Default 09:00–19:00 Bangkok. Bangkok hour resolved via `Intl.DateTimeFormat({ timeZone: "Asia/Bangkok" })`. Outside the window the cron tick is a no-op + writes a `broadcast_send_attempts` row with `blocked_reason`. Operator-configurable via `broadcast_quiet_hours_{start,end}_h` flags.
+
+### 12q.6 Feature flags
+
+`lib/featureFlags.ts` reads `public.feature_flags`, caches per-function-lifetime (60 s TTL), falls back to hard-coded defaults when the table is unreachable. Branch-scoped overrides supported.
+
+**Defaults (inserted by `20260540`):**
+- `enable_cross_branch_broadcasts = false` — single-branch is the production-safe default.
+- `broadcast_max_targets_per_job = 2000` — hard cap.
+- All other flags default to "feature on" + sensible window/cap values.
+
+### 12q.7 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `POST /api/admin/crm/broadcasts/[id]/send` | operator role | `requireBranchAccess(draft.branch_id)` + cross-branch flag check |
+| `GET/PATCH /api/admin/crm/broadcasts/[id]/jobs/[jobId]` | operator role | `requireBranchAccess(job.branch_id)` |
+| `GET /api/admin/crm/broadcasts/[id]/jobs` | operator role | `requireBranchAccess(draft.branch_id)` |
+| `runBroadcastSendTick` | server-only | scoped customer fetch via `job.branch_id` |
+| `/api/cron/broadcast-send` | Bearer CRON_SECRET | n/a — machine endpoint |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

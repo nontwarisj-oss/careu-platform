@@ -1,6 +1,6 @@
 # CareU OPS Platform — CRM Broadcast Foundation
 
-> **Status:** **draft-only**. Operators can build segments, estimate audience sizes, draft templates, and preview cost. Mass-send is intentionally NOT enabled — the dispatch path stays out of scope until a later phase. The infrastructure (drafts, segmentation, policy service) is ready for it.
+> **Status:** **send-capable** (Phase 16). Operators can build segments, estimate audiences, draft templates, AND **fan out real send jobs** with pause / resume / cancel + scheduling + cross-draft dedup + quiet-hours enforcement. Single-branch is the default; cross-branch sends require an explicit feature-flag flip.
 
 ---
 
@@ -164,16 +164,152 @@ A branch_manager who knows another branch's draft id cannot read it — the API 
 
 ---
 
-## 10. Known limitations
+## 10. Send pipeline (Phase 16)
 
-- **No mass-send pipeline.** By design — Phase 15 builds the foundation only. The send code will be a separate module that consumes `evaluatePolicy` + the dispatch worker.
-- **No A/B testing / variant templates** — drafts hold one template per channel.
-- **No scheduling** — drafts have no `send_at`. When sending is added it'll need scheduling + windows.
-- **No deduplication across drafts** — if two drafts target overlapping audiences, a customer would in principle receive both. Will need cross-draft dedup at the policy level when sending lands.
-- **Segmentation caps at 5000 customers** to protect the API. Wider segments need a streaming / pagination strategy.
-- **LINE "delivered" is inferred, not confirmed.** The Messaging API doesn't expose a per-message delivery callback. We capture pushes + unfollows; "delivered" status on `customer_notifications` is set by the worker on 200 ack and remains there unless an unfollow happens.
-- **HEIC transcoder requires libheif-enabled sharp.** Linux/macOS prebuilt binaries include it; Windows does not. A Windows dev machine logs a clean "HEIF decode unavailable" reason and the row stays pending until the next run on a real environment.
+The Phase 15 drafts now produce real broadcasts.
+
+### 10.1 Schema (migration `20260540`)
+
+| Table | Purpose |
+|---|---|
+| `broadcast_send_jobs` | one row per "send this draft" action. Snapshots segment + templates so a later draft edit doesn't change what was sent. status ∈ {queued, processing, paused, completed, cancelled, failed}. `mode ∈ {live, dry_run}`. |
+| `broadcast_send_targets` | one row per (job, customer, channel). Unique on the triple — re-running fan-out can't double-insert. |
+| `broadcast_send_attempts` | append-only log of each cron tick that processed a job. |
+| `broadcast_metrics_daily` | per (job, channel, date) aggregated counts. |
+| `feature_flags` | server-side toggle service. Hard-coded fallbacks match the DB defaults. |
+
+### 10.2 Pipeline flow
+
+```
+operator clicks "ส่งตอนนี้" /admin/crm/broadcasts/[id]
+            │
+            ▼
+POST /api/admin/crm/broadcasts/[id]/send
+   ├─ requireRole + requireBranchAccess
+   ├─ channel flags + cross-branch flag check
+   ├─ checkAudienceCap (broadcast_max_targets_per_job)
+   └─ INSERT broadcast_send_jobs status=queued
+                │
+                ▼
+        cron /api/cron/broadcast-send
+        (Bearer CRON_SECRET, every minute)
+                │
+                ▼
+        runBroadcastSendTick()
+        ├─ checkSchedule           (scheduled_for ≤ now?)
+        ├─ checkQuietHours         (09:00–19:00 Bangkok?)
+        ├─ first run → fan-out targets
+        │   ├─ fetch customer ids matching segment
+        │   └─ INSERT one target per (customer × channel)
+        ├─ CHUNK_SIZE=50 per tick
+        │   ├─ isChannelEnabled         (feature flag)
+        │   ├─ evaluatePolicy           (prefs + rate limit)
+        │   ├─ isRecentlyBroadcasted    (cross-draft dedup window)
+        │   └─ enqueueNotification + mark target dispatched
+        ├─ refresh broadcast_metrics_daily
+        └─ no pending rows → status=completed
+```
+
+The existing dispatch worker drains the resulting `customer_notifications` rows. The broadcast worker only owns the **fan-out**, not the actual provider send — reuse is intentional.
+
+### 10.3 Feature flags
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enable_sms` | true | SMS broadcast channel master |
+| `enable_line_broadcast` | true | LINE broadcast channel master |
+| `enable_scheduled_broadcasts` | true | allow scheduled jobs |
+| `enable_cross_branch_broadcasts` | **false** | when off, audiences must restrict to one branch |
+| `broadcast_max_targets_per_job` | 2000 | hard cap; refuses oversized fan-outs at queue time |
+| `broadcast_quiet_hours_start_h` | 9 | Bangkok hour-of-day allowed start |
+| `broadcast_quiet_hours_end_h` | 19 | Bangkok hour-of-day allowed end (exclusive) |
+| `broadcast_dedup_window_hours` | 24 | "skip if customer received another broadcast in last N hours" |
+
+Owner / hq_admin can edit values; everyone else reads. Branch-scoped overrides supported (rows with `branch_id` non-null). Cached in-process for 60 s.
+
+### 10.4 Quiet hours
+
+Worker calls `checkQuietHours()` at the top of every tick. Outside 09:00–19:00 Bangkok the tick records a `broadcast_send_attempts` row with `blocked_reason="outside Bangkok quiet hours window …"` and processes nothing. A job that should have completed last night resumes seamlessly at 09:01 — the cron just hits the gate again and continues. Bangkok timezone resolved via `Intl.DateTimeFormat({ timeZone: "Asia/Bangkok" })`; fallback adds UTC+7 if the runtime lacks tz data.
+
+### 10.5 Cross-draft dedup
+
+`isRecentlyBroadcasted(opts)` looks at `broadcast_send_targets` for rows older than `windowHours` with status='dispatched' for the same customer, excluding the current job. Hits mark the new target `skipped` with reason `cross-draft dedup: another broadcast in last Nh`. "Newest send wins" is the natural outcome — when a fresher job runs first, the older job sees a recently-dispatched row and skips. When jobs run in parallel, the broadcast_send_targets unique index plus the optimistic-concurrency update prevent any single customer from getting two broadcasts at the same instant.
+
+### 10.6 Pause / resume / cancel
+
+```
+PATCH /api/admin/crm/broadcasts/[id]/jobs/[jobId]
+      { action: "pause" | "resume" | "cancel", reason?: string }
+```
+
+State transitions enforced:
+
+| from \ to | pause | resume | cancel |
+|---|---|---|---|
+| queued | ✅ | — | ✅ |
+| processing | ✅ | — | ✅ |
+| paused | — | ✅ → processing | ✅ |
+| completed | — | — | — |
+| cancelled | — | — | — |
+| failed | — | — | — |
+
+Cancelling a job also sets every still-`pending` target to `skipped` with reason `job cancelled by operator`. Already-dispatched notifications are NOT recalled — they're sitting in `customer_notifications` and may have left the provider. The operator can use `/api/admin/notifications/cancel` for individual queue rows that haven't sent yet.
+
+### 10.7 Dry-run mode
+
+`mode: 'dry_run'` on the send call creates a full job with all the targets, runs them through the policy + dedup gates, and marks them `dispatched`/`skipped` **without enqueueing notifications**. The metrics daily table fills in normally. Use this to validate the audience before spending provider quota — "what would happen if I sent this right now?".
+
+### 10.8 Monitoring UI
+
+`/admin/crm/broadcasts/[id]/jobs/[jobId]` — per-job dashboard:
+
+- Status pill + progress bar (`dispatched + skipped + dead_letter` / `expected_total`).
+- 4 KPI cards: Dispatched / Pending / Skipped / Dead-letter.
+- Channel breakdown (per-channel dispatched / skipped / pending).
+- 20 most recent fan-out ticks with duration + blocked reasons.
+- 20 most recently processed targets (customer id + channel + skip reason).
+- Pause / Resume / Cancel / Refresh buttons gated by status.
+- Visibility-aware polling: 8 s while `processing`, 20 s while queued/paused, 60 s once terminal.
+
+`/admin/dispatch` now also shows a Broadcast health panel with "active jobs / completed 24h / cancelled 24h / failed 24h" + a list of in-flight jobs.
+
+### 10.9 Audit trail additions
+
+`broadcast_audit_log.action` enum extended:
+- `send_queued` — operator clicked send.
+- `send_started` — first fan-out tick after target creation.
+- `send_paused` / `send_resumed` / `send_cancelled` — operator actions.
+- `send_completed` — automatic when last target is processed.
+- `send_failed` — auto on fan-out fatal error (e.g. flag flipped mid-flight).
+
+Every row carries `actor_id`, `reason`, `request_ip`. The dispatch / customer activity feeds also pick up notification-level events (`notification_delivered` / `notification_failed`) per Phase 14.
+
+### 10.10 Cron schedule
+
+| Endpoint | Recommended interval |
+|---|---|
+| `/api/cron/dispatch-worker` | 1 min |
+| `/api/cron/broadcast-send` | 1 min |
+| `/api/cron/retry-worker` | 5 min |
+| `/api/cron/overdue-pickup-sweep` | daily (mid-day) |
+| `/api/cron/heic-transcode` | 10 min |
+
+The broadcast-send cron is the most frequent — a 1-minute cadence on a `CHUNK_SIZE=50` worker gives an effective send rate of ~3000 targets/hour per job, well within Twilio + LINE rate limits.
 
 ---
 
-**Last updated:** 2026-05-14 (phase 15 — broadcast foundation + segmentation + real HEIC transcoder)
+## 11. Known limitations
+
+- **No A/B testing / variant templates** — drafts hold one template per channel.
+- **No customer-priority routing** — first-come-first-served within a job's segment. A "VIP customers first" pass would require sorting by tier on the fan-out fetch.
+- **Segmentation caps at 5000 customers** — broader audiences must be narrowed.
+- **LINE "delivered" is inferred** — no per-message delivery callback exists.
+- **HEIC transcoder requires libheif-enabled sharp** — Linux/macOS prebuilt OK; Windows dev sees a known retryable error.
+- **Cancellation doesn't recall sent SMS/LINE** — by design; the provider has already accepted the message.
+- **No cross-tick dedup within one job** — the unique index on `(send_job_id, customer_id, channel)` prevents same-job duplicates, but the operator can in theory create two jobs against the same draft; cross-draft dedup catches that within the 24 h window.
+- **Quiet hours are global** — the same 09:00–19:00 Bangkok window applies to every branch. Per-branch overrides are supported by the `feature_flags.branch_id` column but not yet exposed in UI.
+- **No partial-resume semantics for `failed` jobs** — a `failed` job stays failed; operator's recovery path is to clone the draft and resend. Manual SQL update can flip status back to `processing` if needed.
+
+---
+
+**Last updated:** 2026-05-14 (phase 16 — broadcast send pipeline + scheduling + dedup + monitoring)

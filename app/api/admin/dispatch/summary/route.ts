@@ -122,6 +122,20 @@ export async function GET() {
 
   const observability = computeObservability(obsRows, resendRows, rateLimitRows);
 
+  // Broadcast health — active send jobs + recent dead-letter trends.
+  const sendJobsActive = await admin
+    .from("broadcast_send_jobs")
+    .select("id, status, channels, expected_total, started_at, scheduled_for, paused_at")
+    .in("status", ["queued", "processing", "paused"])
+    .order("scheduled_for", { ascending: true, nullsFirst: true })
+    .limit(10);
+  const sendJobsRecent = await admin
+    .from("broadcast_send_jobs")
+    .select("id, status, completed_at, cancelled_at, failure_reason")
+    .gte("created_at", since24h)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
   return NextResponse.json({
     ok: true,
     counts: {
@@ -138,6 +152,10 @@ export async function GET() {
     pendingPreview: queuedRes.data ?? [],
     smsProvider: (process.env.SMS_PROVIDER ?? "console").toLowerCase(),
     observability,
+    broadcastHealth: {
+      activeJobs: sendJobsActive.data ?? [],
+      recent24h: sendJobsRecent.data ?? [],
+    },
   });
 }
 

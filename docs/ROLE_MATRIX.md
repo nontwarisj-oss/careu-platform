@@ -99,6 +99,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/admin/crm/broadcasts` UI + drafts** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
 | **Audience estimate (`/api/admin/crm/audiences/estimate`)** | ✅ all | ✅ all | ✅ 🏢 (scoped customer pool) | ❌ | ❌ |
 | **Broadcast drafts CRUD (`/api/admin/crm/broadcasts/*`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Send broadcast (`/api/admin/crm/broadcasts/[id]/send`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Pause / resume / cancel send_job (`/api/admin/crm/broadcasts/[id]/jobs/[jobId]`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Send job monitoring (`/admin/crm/broadcasts/[id]/jobs/[jobId]`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Feature flags CRUD (`feature_flags` table)** | ✅ | ✅ | 👁 read-only | 👁 read | 👁 read |
+| **Cron broadcast-send (`/api/cron/broadcast-send`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
 | **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron HEIC transcode (`/api/cron/heic-transcode`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |

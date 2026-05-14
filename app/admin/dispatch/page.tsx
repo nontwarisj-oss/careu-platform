@@ -95,6 +95,27 @@ type Observability = {
   rateLimitTriggers?: { total: number; byBucket: Record<string, number> };
 };
 
+type ActiveJob = {
+  id: string;
+  status: string;
+  channels: string[];
+  expected_total: number | null;
+  started_at: string | null;
+  scheduled_for: string | null;
+  paused_at: string | null;
+};
+
+type BroadcastHealth = {
+  activeJobs: ActiveJob[];
+  recent24h: Array<{
+    id: string;
+    status: string;
+    completed_at: string | null;
+    cancelled_at: string | null;
+    failure_reason: string | null;
+  }>;
+};
+
 type Summary = {
   ok: boolean;
   counts: Counts;
@@ -102,6 +123,7 @@ type Summary = {
   pendingPreview: PendingRow[];
   smsProvider: string;
   observability?: Observability;
+  broadcastHealth?: BroadcastHealth;
 };
 
 function fmt(iso: string | null | undefined): string {
@@ -301,6 +323,10 @@ function DispatchInner() {
               <ObservabilityPanel data={summary.observability} />
             )}
 
+            {summary.broadcastHealth && (
+              <BroadcastHealthPanel data={summary.broadcastHealth} />
+            )}
+
             {lastTick && (
               <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4">
                 <p className="text-xs uppercase tracking-widest text-green-800 font-semibold">
@@ -477,6 +503,109 @@ function DispatchInner() {
         )}
       </div>
     </div>
+  );
+}
+
+function BroadcastHealthPanel({ data }: { data: BroadcastHealth }) {
+  const active = data.activeJobs;
+  const recent = data.recent24h;
+  const completedCount = recent.filter((r) => r.status === "completed").length;
+  const cancelledCount = recent.filter((r) => r.status === "cancelled").length;
+  const failedCount = recent.filter((r) => r.status === "failed").length;
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">
+            Broadcast health
+          </h2>
+          <p className="text-[11px] text-gray-500">
+            งานส่งจริง — สถานะปัจจุบัน + 24h
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+            กำลังทำงาน
+          </p>
+          <p
+            className={`mt-0.5 text-xl font-extrabold ${
+              active.length > 0 ? "text-blue-700" : "text-gray-700"
+            }`}
+          >
+            {active.length}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+            เสร็จ (24h)
+          </p>
+          <p className="mt-0.5 text-xl font-extrabold text-green-700">
+            {completedCount}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+            ยกเลิก (24h)
+          </p>
+          <p className="mt-0.5 text-xl font-extrabold text-gray-700">
+            {cancelledCount}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+            ล้มเหลว (24h)
+          </p>
+          <p
+            className={`mt-0.5 text-xl font-extrabold ${
+              failedCount > 0 ? "text-red-700" : "text-gray-700"
+            }`}
+          >
+            {failedCount}
+          </p>
+        </div>
+      </div>
+
+      {active.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-1">
+            งานปัจจุบัน
+          </p>
+          <ul className="divide-y divide-gray-100">
+            {active.map((j) => (
+              <li key={j.id} className="py-2 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <span className="font-mono text-xs text-gray-700">
+                    #{j.id.slice(0, 8)}
+                  </span>
+                  <span className="ml-2 text-[10px] text-gray-500">
+                    {(j.channels ?? []).join("/").toUpperCase() || "—"}
+                  </span>
+                  {j.expected_total != null && (
+                    <span className="ml-2 text-[10px] text-gray-500">
+                      {j.expected_total} เป้าหมาย
+                    </span>
+                  )}
+                </div>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    j.status === "processing"
+                      ? "border-blue-200 bg-blue-50 text-blue-900"
+                      : j.status === "paused"
+                        ? "border-amber-200 bg-amber-50 text-amber-900"
+                        : "border-yellow-200 bg-yellow-50 text-yellow-800"
+                  }`}
+                >
+                  {j.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
