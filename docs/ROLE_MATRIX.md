@@ -110,6 +110,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Per-branch flag overrides (`/api/admin/settings/communications`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Alert rules CRUD (`/api/admin/system/alert-rules`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`feature_flags` read** | ✅ | ✅ | 👁 | 👁 | 👁 |
+| **Engagement dashboard (`/admin/crm/engagement`, `/api/admin/crm/engagement`)** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Email templates UI + CRUD (`/admin/communications/templates`, `/api/admin/communications/templates/*`)** | ✅ | ✅ | 👁 read | ❌ | ❌ |
+| **Template test-send (`/api/admin/communications/templates/[id]/test-send`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Template restore (`/api/admin/communications/templates/[id]/restore`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Cron engagement-aggregate (`/api/cron/engagement-aggregate`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **Cron retention-triggers (`/api/cron/retention-triggers`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
 | **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron HEIC transcode (`/api/cron/heic-transcode`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |

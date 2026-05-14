@@ -31,24 +31,39 @@ export type SegmentDefinition = {
   branchSlugs?: string[];
   /** customer_tier values to include (bronze / silver / gold / platinum / vip). */
   tiers?: string[];
-  /** lifecycle_stage values to include. */
+  /** lifecycle_stage values to include (legacy Phase 11 column on customers). */
   lifecycleStages?: string[];
+  /** customer_lifecycle_status.status values (Phase 18 — richer model
+   *  with 'repeat' + 'loyal'). When set, narrows the audience to
+   *  customers with a row in customer_lifecycle_status. */
+  lifecycleStatuses?: string[];
   /** customer_type values (e.g. 'new', 'returning', 'walk_in'). */
   customerTypes?: string[];
   /** Lower bound on retention_score (inclusive). */
   retentionScoreGte?: number | null;
   /** Lower bound on lifetime_spend (Baht, inclusive). */
   totalSpendGte?: number | null;
+  /** Upper bound on lifetime_spend (Baht, inclusive). */
+  totalSpendLte?: number | null;
   /** Lower bound on total_orders (inclusive). */
   totalOrdersGte?: number | null;
+  /** Upper bound on total_orders (inclusive). */
+  totalOrdersLte?: number | null;
   /** "Has not visited in at least N days" — last_visit_at older than now-N. */
   inactiveDaysGte?: number | null;
   /** "Has visited in the last N days" — last_visit_at newer than now-N. */
   activeWithinDays?: number | null;
+  /** Dormant duration in days — alias for inactiveDaysGte but
+   *  semantically "is dormant" rather than "hasn't visited". */
+  dormantDaysGte?: number | null;
   /** When true, only include customers with an active LINE link. */
   requireLineLink?: boolean;
   /** When true, only include customers with a normalized_phone. */
   requirePhone?: boolean;
+  /** Branch affinity — customers whose `branch_id` matches their
+   *  highest-spend branch. Phase 18 ships this as a same-branch
+   *  filter since orders.branch_id captures per-order branch already. */
+  branchAffinityOnly?: boolean;
 };
 
 export type SegmentScope = {
@@ -175,12 +190,26 @@ async function fetchCustomersForSegment(
   if (typeof segment.totalSpendGte === "number") {
     q = q.gte("lifetime_spend", segment.totalSpendGte);
   }
+  if (typeof segment.totalSpendLte === "number") {
+    q = q.lte("lifetime_spend", segment.totalSpendLte);
+  }
   if (typeof segment.totalOrdersGte === "number") {
     q = q.gte("total_orders", segment.totalOrdersGte);
+  }
+  if (typeof segment.totalOrdersLte === "number") {
+    q = q.lte("total_orders", segment.totalOrdersLte);
   }
   if (typeof segment.inactiveDaysGte === "number" && segment.inactiveDaysGte > 0) {
     const cutoff = new Date(
       Date.now() - segment.inactiveDaysGte * 24 * 60 * 60 * 1000
+    ).toISOString();
+    q = q.lte("last_visit_at", cutoff);
+  }
+  if (typeof segment.dormantDaysGte === "number" && segment.dormantDaysGte > 0) {
+    // Alias for inactiveDaysGte. When both are set, the tighter one
+    // wins because both apply LTE on the same column.
+    const cutoff = new Date(
+      Date.now() - segment.dormantDaysGte * 24 * 60 * 60 * 1000
     ).toISOString();
     q = q.lte("last_visit_at", cutoff);
   }
@@ -208,7 +237,30 @@ async function fetchCustomersForSegment(
     );
     return [];
   }
-  return data as CustomerSlim[];
+  let rows = data as CustomerSlim[];
+
+  // Phase 18 lifecycle status filter — applied AFTER the customer
+  // fetch because customer_lifecycle_status is a separate table.
+  if (segment.lifecycleStatuses && segment.lifecycleStatuses.length > 0 && rows.length > 0) {
+    const admin = getSupabaseAdmin();
+    if (admin) {
+      const statusRes = await admin
+        .from("customer_lifecycle_status")
+        .select("customer_id, status")
+        .in(
+          "customer_id",
+          rows.map((c) => c.id)
+        )
+        .in("status", segment.lifecycleStatuses);
+      const statusMap = new Map<string, string>();
+      ((statusRes.data ?? []) as Array<{ customer_id: string; status: string }>).forEach(
+        (r) => statusMap.set(r.customer_id, r.status)
+      );
+      rows = rows.filter((c) => statusMap.has(c.id));
+    }
+  }
+
+  return rows;
 }
 
 async function fetchPreferencesFor(

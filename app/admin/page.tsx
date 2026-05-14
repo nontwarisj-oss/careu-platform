@@ -149,6 +149,29 @@ const CARDS: AdminCard[] = [
       "M19 8h-1V3H6v5H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zM8 5h8v3H8V5zm8 14H8v-4h8v4zm2-4v-2H6v2H4v-4c0-.55.45-1 1-1h14c.55 0 1 .45 1 1v4h-2z",
     enabled: true,
   },
+  {
+    href: "/admin/crm/engagement",
+    titleTh: "Engagement intelligence",
+    titleEn: "Engagement intelligence",
+    descTh:
+      "lifecycle breakdown · retention trend · churn risk · trigger summary — Owner / HQ / Branch Manager",
+    descEn:
+      "Lifecycle, retention, churn, and trigger-summary dashboard.",
+    iconPath:
+      "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+    enabled: true,
+  },
+  {
+    href: "/admin/communications/templates",
+    titleTh: "Message templates",
+    titleEn: "Message templates",
+    descTh:
+      "เทมเพลตข้อความ + version history + test send — Owner / HQ",
+    descEn: "Message templates + versioned history + test send.",
+    iconPath:
+      "M19 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h11v12zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

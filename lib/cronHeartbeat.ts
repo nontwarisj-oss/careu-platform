@@ -22,7 +22,9 @@ export type CronName =
   | "broadcast-send"
   | "overdue-pickup-sweep"
   | "heic-transcode"
-  | "reconcile";
+  | "reconcile"
+  | "engagement-aggregate"
+  | "retention-triggers";
 
 export type HeartbeatPayload = {
   rowsProcessed?: number;

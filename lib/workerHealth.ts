@@ -28,6 +28,8 @@ const CRON_EXPECTED_INTERVAL_MIN: Record<CronName, number> = {
   "overdue-pickup-sweep": 24 * 60, // daily
   "heic-transcode": 15,
   reconcile: 60,
+  "engagement-aggregate": 24 * 60, // nightly
+  "retention-triggers": 60, // hourly
 };
 
 /** "A queued row should leave the queue within N minutes." Beyond

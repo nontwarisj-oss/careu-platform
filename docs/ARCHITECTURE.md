@@ -1573,6 +1573,73 @@ See [WORKER_TELEMETRY.md](./WORKER_TELEMETRY.md) for the operator runbook.
 
 ---
 
+## 12s. Engagement intelligence + retention triggers (post-`20260542`)
+
+> Status: **live**. Nightly lifecycle classifications, hourly retention triggers, versioned email templates, branch-scoped engagement dashboard.
+
+See [ENGAGEMENT_INTELLIGENCE.md](./ENGAGEMENT_INTELLIGENCE.md).
+
+### 12s.1 New schema
+
+| Table | Purpose |
+|---|---|
+| `customer_engagement_daily` | per (customer, date) snapshot — order/spend/comms/cancellation counts. |
+| `customer_lifecycle_status` | current 7-state classification + reason + previous_status + changed_at. |
+| `retention_trigger_jobs` | audit row per trigger fire. Dedup keys + fired_reason. |
+| `email_templates` | live template content with `current_version`. |
+| `email_template_versions` | immutable history. INSERT/SELECT-only RLS. |
+
+### 12s.2 Libraries
+
+- `lib/customerLifecycle.ts` — pure classifier with explainable reason. 7 statuses: new/active/repeat/loyal/at_risk/dormant/churned.
+- `lib/engagementMetricsService.ts` — nightly aggregator. Reads customers + counts comms from `customer_notifications` and cancellations from `orders`. Idempotent UPSERTs.
+- `lib/retentionTriggerService.ts` — 6 trigger kinds with per-kind dedup window, communication policy gate, quiet-hours guard. Single-customer dispatch via the existing dispatch worker.
+- `lib/emailTemplateService.ts` — render + interpolation + version save + restore. Restore re-snapshots first so history is always monotonic.
+
+### 12s.3 Cron entry points (added to `CronName` enum)
+
+| Endpoint | Cadence |
+|---|---|
+| `/api/cron/engagement-aggregate` | daily |
+| `/api/cron/retention-triggers` | hourly |
+
+Both wrapped via `withCronHeartbeat` — appear in the Phase 17 workers dashboard automatically.
+
+### 12s.4 Engagement dashboard
+
+`/admin/crm/engagement` reads `/api/admin/crm/engagement`:
+
+- 7 KPI cards by status.
+- 30-day retention trend (total vs. repeat customers per day).
+- Churn risk count + top 15 returning customers.
+- 24h retention-trigger summary per kind (fired/skipped/failed).
+- Branch comparison stacked table (owner/HQ).
+
+Branch_manager sees their own branch only via the customer pool filter.
+
+### 12s.5 Template management
+
+`/admin/communications/templates` — list + create.
+`/admin/communications/templates/[id]` — edit + live preview + test-send + version history with one-click restore.
+
+Test-send routes through the channel adapter directly — bypasses queue + preferences (operator wants immediate feedback). Rate-limited 10/10min/IP.
+
+### 12s.6 Segmentation extensions
+
+Phase 15's `SegmentDefinition` gains 5 new filters: `lifecycleStatuses`, `totalSpendLte`, `totalOrdersLte`, `dormantDaysGte`, `branchAffinityOnly` (placeholder). The `lifecycleStatuses` filter joins to `customer_lifecycle_status` post-fetch so existing Phase 15 indices stay valid.
+
+### 12s.7 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `customer_lifecycle_status` / `_daily` RLS | role + branch_id | enforced |
+| `retention_trigger_jobs` RLS | role + branch_id | enforced |
+| `email_templates` RLS | full write owner/HQ; read scoped for branch_manager | enforced |
+| `/api/admin/crm/engagement` | role + branch_manager scoped customer pool | enforced |
+| `runRetentionTriggerTick` | server-only | currently global — per-branch overrides on the roadmap |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
