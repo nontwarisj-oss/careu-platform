@@ -194,6 +194,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260531_management_intelligence.sql` | `public.customers.lifetime_spend` + `last_visit_at` + `primary_branch_id` insight columns; materialised view `public.dashboard_daily_snapshot` (branch_code × work_date with revenue / counts / fees); `refresh_dashboard_daily_snapshot()` SECURITY DEFINER wrapper (concurrent-safe with non-concurrent fallback for first refresh) |
 | `20260532_bonus_engine_columns.sql` | `technician_payroll_items.bonus_suggested` + `bonus_rule_version` audit columns. Bonus engine writes both at save time so historical override deviations are queryable. |
 | `20260533_brandconfig_db_mirror.sql` | `public.branches` gains UI-metadata columns: `short_label`, `short_name`, `receipt_name`, `tagline`, `address`, `phone`, `logo_path`, `accent_class`. Seeded rows updated to mirror `lib/brandConfig.ts`. branchContext reads from DB with hardcoded list as fallback. |
+| `20260534_public_website_and_crm_foundation.sql` | New tables: `quote_requests` (inbox for public /quote submissions, anon INSERT allowed), `customer_tags`, `customer_notes`, `customer_activity`, `customer_channels` — CRM scaffolding for future segmentation / VIP / LINE CRM. RLS on every table; branch isolation joins via customer.branch_id where the row lacks one. |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -1012,6 +1013,74 @@ Verification confirmed every gate still holds:
 
 ---
 
+## 12k. Public website + CRM foundation (post-`20260534`)
+
+> Status: **foundation live**. See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md) and [CRM_FOUNDATION.md](./CRM_FOUNDATION.md).
+
+The platform now serves **two surfaces** from the same Next.js deployment + same database:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  OPS (existing)                                              │
+│    /, /orders, /customers, /admin/*, /reports/*, /intake,    │
+│    /invoices, /expenses, /pricing                            │
+│    Auth: LINE login + HMAC cookie + JWT bridge → RLS         │
+│    Audience: owner / hq_admin / branch_manager /             │
+│              front_staff / technician                         │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  PUBLIC WEBSITE (this phase)                                 │
+│    /website, /branches[/code], /services, /track, /quote,    │
+│    /about, /contact                                          │
+│    Auth: anonymous (rate-limited; phone+jobId for /track)    │
+│    Audience: customers + prospects                            │
+│    Database access: service-role admin client through hand-  │
+│    written server routes that emit narrow column subsets.    │
+│    Direct anon read of operational tables is denied by RLS.  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 12k.1 Route group separation
+
+`app/(public)/` is the route group that owns the public layout (no OPS sidebar, public header + footer). The OPS `Sidebar` component short-circuits when `pathname` starts with a public prefix; `lib/authContext.tsx::isPublicPath` checks the same prefix list so anonymous visitors don't get bounced to `/login`.
+
+### 12k.2 Public API security
+
+| Route | Auth | Rate-limit |
+|---|---|---|
+| `/api/public/branches-list` | none | none (read-only public list) |
+| `/api/public/track` | phone + jobId match | 10/min/IP + 5/min/(IP, jobId) |
+| `/api/public/quote` | none | 5/hour/IP |
+
+All three call `getSupabaseAdmin()` server-side and return hand-picked column subsets. RLS is bypassed for the read so the customer can lookup across branches; the route layer is the security boundary.
+
+`/api/public/quote` also inserts a `customer_activity` row with `kind: 'quote_submitted'` and `customer_id: null` so the future CRM timeline captures every inbound request from day one.
+
+### 12k.3 CRM scaffolding
+
+Five new tables (see [CRM_FOUNDATION.md](./CRM_FOUNDATION.md) for the full schema):
+
+| Table | Purpose |
+|---|---|
+| `customer_tags` | Free-form text labels per customer (unique per `(customer_id, lower(tag))`). |
+| `customer_notes` | Branch-scoped free-form notes. Front_staff can write within their branch. |
+| `customer_activity` | Append-only event log. `kind` is text (no CHECK) so future writers don't migrate. |
+| `customer_channels` | Generalised contact channels (phone / email / line / web / other). |
+| `quote_requests` | Inbox for public /quote submissions. Anon INSERT allowed via RLS. |
+
+Branch isolation: tables with their own `branch_id` (notes, activity, quote_requests) join directly; tables without (tags, channels) join through `customers.branch_id`. Owner / hq_admin always pass; front_staff + branch_manager are scoped to their own branch.
+
+### 12k.4 Theme system
+
+`lib/publicTheme.ts` produces a `PublicTheme` from either a brand key (Care U or Ezy) or a `BranchTheme` (mapped from `public.branches`). Per-branch overrides cascade per-field over the brand default so a partial DB row never renders blank. The single-branch page `/branches/[code]` uses the per-branch theme; cross-brand pages (`/website`, `/services`, etc.) use the Care U default.
+
+### 12k.5 SEO
+
+Each public page exports `metadata` (Thai-first title + description). `app/sitemap.ts` returns the static page list plus one URL per active branch (pulled from `public.branches`). `app/robots.ts` allows public prefixes and disallows `/api`, `/admin`, OPS routes.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -1111,6 +1180,20 @@ app/
 ├── api/admin/onboarding/activate-branch/route.ts ← Flip branches.is_active
 ├── api/cron/retry-worker/route.ts            ← Scheduled retry-worker (CRON_SECRET)
 ├── api/line/webhook/route.ts                 ← LINE follow / unfollow webhook
+├── api/public/track/route.ts                 ← Public job-tracking lookup (rate-limited)
+├── api/public/quote/route.ts                 ← Public quote-request submission
+├── api/public/branches-list/route.ts         ← Public active-branches dropdown
+├── (public)/layout.tsx                       ← Public-website route group layout
+├── (public)/website/page.tsx                 ← Public marketing landing
+├── (public)/branches/page.tsx                ← Active branches grid
+├── (public)/branches/[branchCode]/page.tsx   ← Single-branch detail with brand theme
+├── (public)/services/page.tsx                ← Catalog grouped by category
+├── (public)/track/page.tsx                   ← Customer job tracking form
+├── (public)/quote/page.tsx                   ← Quote-request form
+├── (public)/about/page.tsx                   ← Static brand story
+├── (public)/contact/page.tsx                 ← Contact options
+├── sitemap.ts                                ← Dynamic sitemap incl. branch URLs
+├── robots.ts                                 ← Allow public, disallow /api + /admin + OPS
 ├── customers/page.tsx
 ├── expenses/page.tsx
 ├── intake/page.tsx                     ← walk-in counterpart of /orders
@@ -1178,7 +1261,9 @@ lib/
 ├── customerTierService.ts ← calculateCustomerTier + refreshCustomerTier + refreshBranchCustomerTiers
 ├── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
 ├── bonusEngine.ts        ← calculateSuggestedBonus + BONUS_RULES + isOverride
-└── dashboardSnapshotKpi.ts ← assembleSnapshotKpis + date-bucketed helpers over matview rows
+├── dashboardSnapshotKpi.ts ← assembleSnapshotKpis + date-bucketed helpers over matview rows
+├── rateLimit.ts          ← in-memory token bucket for /api/public/* routes
+└── publicTheme.ts        ← BRAND_THEMES + themeForBranch for the customer-facing website
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -1204,4 +1289,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (verification round + snapshot widget swap + brandConfig DB mirror — `lib/dashboardSnapshotKpi.ts`, `lib/branchContext.tsx` DB-driven, `20260533` migration)
+**Last updated:** 2026-05-14 (public website + CRM foundation — `app/(public)/*`, `/api/public/*`, `20260534` migration, new `PUBLIC_WEBSITE.md` + `CRM_FOUNDATION.md`)

@@ -71,6 +71,26 @@ const Sidebar: React.FC = () => {
 
   // /login renders its own full-screen card — hide the chrome there.
   if (pathname === "/login") return null;
+  // Public website pages have their own header; the OPS sidebar must not
+  // appear there. Keep this list in sync with PUBLIC_PREFIXES in
+  // lib/authContext.tsx.
+  const PUBLIC_PREFIXES = [
+    "/website",
+    "/branches",
+    "/services",
+    "/track",
+    "/quote",
+    "/about",
+    "/contact",
+  ];
+  if (
+    pathname &&
+    PUBLIC_PREFIXES.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`)
+    )
+  ) {
+    return null;
+  }
 
   const allowedBranches =
     isAuthenticated && user && !definition.allBranches

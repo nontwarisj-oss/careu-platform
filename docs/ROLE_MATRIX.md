@@ -88,6 +88,15 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/admin/onboarding` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Create branch (`/api/admin/onboarding/create-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Activate / deactivate branch (`/api/admin/onboarding/activate-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Public website (`/website`, `/branches/*`, `/services`, `/track`, `/quote`, `/about`, `/contact`)** | ⚠ anonymous — anyone can view; no PII surfaced | same | same | same | same |
+| **Public job tracking (`/api/public/track`)** | anonymous — phone+jobId is the auth factor; rate-limited; returns branch label only | same | same | same | same |
+| **Public quote submission (`/api/public/quote`)** | anonymous — rate-limited 5/hour/IP; writes to `quote_requests` (anon INSERT policy) | same | same | same | same |
+| **`quote_requests` read** | ✅ all | ✅ all | ✅ 🏢 (own branch + null branch) | ✅ 🏢 (own branch) | ❌ |
+| **`quote_requests` triage write** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **`customer_tags` write** | ✅ | ✅ | ✅ 🏢 (customer in own branch) | ✅ 🏢 | ❌ |
+| **`customer_notes` write** | ✅ | ✅ | ✅ 🏢 (branch_id matches) | ✅ 🏢 | ❌ |
+| **`customer_activity` read** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | 👁 🏢 (read-only) |
+| **`customer_channels` write** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -248,4 +257,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (dashboard snapshot swap + bonus engine + franchise onboarding)
+**Last updated:** 2026-05-14 (public website + CRM foundation)

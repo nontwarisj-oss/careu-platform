@@ -45,6 +45,34 @@ const AuthContext = createContext<AuthState | undefined>(undefined);
 
 const PUBLIC_PATHS = new Set(["/login"]);
 
+/**
+ * Path prefixes that the public customer-facing website owns. Unlike
+ * PUBLIC_PATHS these are matched by startsWith so the dynamic sub-routes
+ * (e.g. `/branches/c24-thonburi-market`) all resolve correctly.
+ *
+ * Adding a prefix here exempts those routes from the strict-mode
+ * `/login` redirect — they render for anonymous visitors. Server-side
+ * data exposure is still gated by RLS / per-route authorization; this
+ * list only controls the client-side redirect.
+ */
+const PUBLIC_PREFIXES = [
+  "/website",
+  "/branches",
+  "/services",
+  "/track",
+  "/quote",
+  "/about",
+  "/contact",
+];
+
+function isPublicPath(path: string | null): boolean {
+  if (!path) return false;
+  if (PUBLIC_PATHS.has(path)) return true;
+  return PUBLIC_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`)
+  );
+}
+
 type MeResponse = {
   authRequired: boolean;
   sessionConfigured: boolean;
@@ -160,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (state.isLoading) return;
     if (!state.authRequired) return;
     if (state.user) return;
-    if (pathname && PUBLIC_PATHS.has(pathname)) return;
+    if (isPublicPath(pathname)) return;
     const after = pathname ?? "/";
     router.replace(`/login?after=${encodeURIComponent(after)}`);
   }, [state.authRequired, state.isLoading, state.user, pathname, router]);
