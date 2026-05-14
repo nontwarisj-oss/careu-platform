@@ -193,6 +193,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260530_customer_linker_and_reconcile.sql` | `customer_line_links.ignored_at` + `ignored_by` for admin triage; `sync_failures.kind` CHECK extended with `reconcile_missing_sheet` + `reconcile_duplicate_sheet` + `reconcile_orphan_link`; new `reconcile_runs` heartbeat table |
 | `20260531_management_intelligence.sql` | `public.customers.lifetime_spend` + `last_visit_at` + `primary_branch_id` insight columns; materialised view `public.dashboard_daily_snapshot` (branch_code × work_date with revenue / counts / fees); `refresh_dashboard_daily_snapshot()` SECURITY DEFINER wrapper (concurrent-safe with non-concurrent fallback for first refresh) |
 | `20260532_bonus_engine_columns.sql` | `technician_payroll_items.bonus_suggested` + `bonus_rule_version` audit columns. Bonus engine writes both at save time so historical override deviations are queryable. |
+| `20260533_brandconfig_db_mirror.sql` | `public.branches` gains UI-metadata columns: `short_label`, `short_name`, `receipt_name`, `tagline`, `address`, `phone`, `logo_path`, `accent_class`. Seeded rows updated to mirror `lib/brandConfig.ts`. branchContext reads from DB with hardcoded list as fallback. |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -928,6 +929,89 @@ Existing branches are listed in a table with per-row activate / deactivate butto
 
 ---
 
+## 12j. Verification + snapshot swap + DB-driven brand (post-`20260533`)
+
+> Status: **shipped**. Verification round confirmed all 13 critical workflows PASS. Dashboard role components now opt into the snapshot for date-bucketed sales metrics. branchContext reads UI metadata from `public.branches` with `lib/brandConfig.ts` as fallback.
+
+### 12j.1 Verification round outcomes
+
+A code-walk audit confirmed every workflow listed in the task PASSes:
+
+- Login + role visibility ✅
+- Intake + Job ID race-safety ✅
+- Pricing / urgent / B2S promotion ✅
+- Technician assignment + inactive-tech rejection ✅
+- Receipt + dedup contract ✅
+- LINE notification + branch ownership ✅
+- Recovery + bulk-resolve + retry worker + dead-after-max ✅
+- Payroll + bonus engine + immutable-paid ✅
+- Customer tier + INACTIVE precedence ✅
+- Onboarding + duplicate-code rejection + is_active=false ✅
+- Dashboard snapshot route + branch-forced for non-admin ✅
+- Cron retry-worker auth ✅
+- LINE webhook signature + audit-only on unverified ✅
+
+No CRITICAL or HIGH issues found. Branch isolation is enforced consistently across UI / RLS / route guard. Silent-failure paths log structured warnings.
+
+### 12j.2 Snapshot widget swap
+
+```
+app/page.tsx
+  ├ fetchDashboardSnapshot()        — live per-row arrays
+  └ fetchSnapshotSummary()
+        ↓
+        GET /api/admin/dashboard/summary
+        ↓ returns { totals, rows[], usingSnapshot, snapshotRefreshedAt }
+        ↓
+        assembleSnapshotKpis(rows)  — produces SnapshotKpiBundle
+
+DashboardView passes snapshotKpis to:
+  • ManagerDashboard       (today / this month)
+  • AccountingDashboard    (today / this month / last month)
+  • ExecutiveDashboard     (today / this month / last month / MoM)
+
+Each component:
+  if (snapshotKpis?.hasData) use bundle value
+  else                       fall back to live filter+sumRevenue
+```
+
+Operational tables / queues / per-row attributes (top services, pending lists, urgent queue, customer cohort, payment mix) **stay live** because the day-granular matview doesn't carry that detail. Documented in [DASHBOARD.md §8](./DASHBOARD.md).
+
+### 12j.3 BrandConfig DB mirror
+
+`public.branches` gains UI-metadata columns (short_label, short_name, receipt_name, tagline, address, phone, logo_path, accent_class). `lib/branchContext.tsx` fetches from DB on session start and falls back to the seeded list per field:
+
+```
+useEffect:
+  data = supabase.from("branches").select(...).eq("is_active", true)
+  if data.length > 0:
+    branches = data.map(mapDbRow)
+    source = "db"
+  else:
+    branches = STATIC_BRANCHES (lib/brandConfig.ts)
+    source = "fallback"
+
+mapDbRow per field:
+  shortLabel = row.short_label ?? seed.shortLabel ?? `${short_code} • ${name}`
+  // …same fallback chain for every UI field
+```
+
+The onboarding wizard now collects every UI field (sensible defaults when blank) and writes them at create time, so a new branch renders correctly without a code edit. brandConfig.ts stays as the safety fallback for the two seeded branches.
+
+### 12j.4 Branch isolation summary
+
+Verification confirmed every gate still holds:
+
+| Surface | Branch_manager | Front_staff / Technician |
+|---|---|---|
+| `/admin/onboarding` | ❌ admin page key | ❌ |
+| Onboarding routes | ❌ owner / hq_admin only | ❌ |
+| `/api/admin/dashboard/summary` | branchCode forced | branchCode forced |
+| `dashboard_daily_snapshot` direct read | revoked from authenticated | revoked |
+| `branches` table read (DB mirror) | scoped by RLS / public read of active rows | scoped |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -1093,7 +1177,8 @@ lib/
 ├── reconcile.ts      ← runReconcileTick + 3 checks (orders↔sheet, duplicate, orphan)
 ├── customerTierService.ts ← calculateCustomerTier + refreshCustomerTier + refreshBranchCustomerTiers
 ├── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
-└── bonusEngine.ts        ← calculateSuggestedBonus + BONUS_RULES + isOverride
+├── bonusEngine.ts        ← calculateSuggestedBonus + BONUS_RULES + isOverride
+└── dashboardSnapshotKpi.ts ← assembleSnapshotKpis + date-bucketed helpers over matview rows
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -1119,4 +1204,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (dashboard snapshot swap + bonus engine + franchise onboarding — `lib/bonusEngine.ts`, `/admin/onboarding`, snapshot freshness indicator, new `DASHBOARD.md` + `FRANCHISE_ONBOARDING.md`)
+**Last updated:** 2026-05-14 (verification round + snapshot widget swap + brandConfig DB mirror — `lib/dashboardSnapshotKpi.ts`, `lib/branchContext.tsx` DB-driven, `20260533` migration)

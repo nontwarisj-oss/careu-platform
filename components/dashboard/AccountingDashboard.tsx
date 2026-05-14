@@ -19,23 +19,33 @@ import {
   sumExpenses,
   type ExpenseRow,
 } from "@/lib/expenses";
+import type { SnapshotKpiBundle } from "@/lib/dashboardSnapshotKpi";
 
 interface AccountingDashboardProps {
   orders: AnalyticsOrder[];
   expenses: ExpenseRow[];
+  /** Snapshot-backed KPI bundle. Sales today / this month / last month
+   *  prefer the matview values when present. Branch breakdown + payment
+   *  status mix stay live because they're per-row aggregates the
+   *  day-granular matview doesn't carry. */
+  snapshotKpis?: SnapshotKpiBundle | null;
 }
 
 export function AccountingDashboard({
   orders,
   expenses,
+  snapshotKpis,
 }: AccountingDashboardProps) {
-  const todayRevenue = sumRevenue(orders.filter((o) => isToday(o.created_at)));
-  const monthRevenue = sumRevenue(
-    orders.filter((o) => isThisMonth(o.created_at))
-  );
-  const lastMonthRevenue = sumRevenue(
-    orders.filter((o) => isLastMonth(o.created_at))
-  );
+  const useSnapshot = !!snapshotKpis?.hasData;
+  const todayRevenue = useSnapshot
+    ? snapshotKpis!.salesToday
+    : sumRevenue(orders.filter((o) => isToday(o.created_at)));
+  const monthRevenue = useSnapshot
+    ? snapshotKpis!.salesThisMonth
+    : sumRevenue(orders.filter((o) => isThisMonth(o.created_at)));
+  const lastMonthRevenue = useSnapshot
+    ? snapshotKpis!.salesLastMonth
+    : sumRevenue(orders.filter((o) => isLastMonth(o.created_at)));
   const todayExpense = sumExpenses(filterTodayExpenses(expenses));
   const monthExpense = sumExpenses(filterThisMonthExpenses(expenses));
   const lastMonthExpense = sumExpenses(filterLastMonthExpenses(expenses));

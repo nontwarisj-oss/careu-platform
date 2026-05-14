@@ -26,6 +26,14 @@ type FormState = {
   type: "care_u" | "ezy_repair" | "mixed";
   brand: string;
   createLineConfig: boolean;
+  // UI mirror fields (optional — server fills sensible defaults when blank)
+  short_label: string;
+  receipt_name: string;
+  tagline: string;
+  address: string;
+  phone: string;
+  logo_path: string;
+  accent_class: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -35,6 +43,13 @@ const EMPTY_FORM: FormState = {
   type: "mixed",
   brand: "",
   createLineConfig: true,
+  short_label: "",
+  receipt_name: "",
+  tagline: "",
+  address: "",
+  phone: "",
+  logo_path: "",
+  accent_class: "",
 };
 
 export default function OnboardingPage() {
@@ -100,6 +115,14 @@ function OnboardingInner() {
           type: form.type,
           brand: form.brand.trim() || null,
           createLineConfig: form.createLineConfig,
+          // UI mirror fields — server defaults when blank.
+          short_label: form.short_label.trim() || null,
+          receipt_name: form.receipt_name.trim() || null,
+          tagline: form.tagline.trim() || null,
+          address: form.address.trim() || null,
+          phone: form.phone.trim() || null,
+          logo_path: form.logo_path.trim() || null,
+          accent_class: form.accent_class.trim() || null,
         }),
       });
       const json = (await res.json()) as {
@@ -342,15 +365,125 @@ function OnboardingInner() {
 
         <h2 className="text-lg font-bold text-gray-900 pt-2">
           {language === "th"
-            ? "ขั้นที่ 3 — สิ่งที่ต้องทำหลังกดสร้าง"
-            : "Step 3 — Manual steps after create"}
+            ? "ขั้นที่ 3 — UI metadata (ไม่บังคับ)"
+            : "Step 3 — UI metadata (optional)"}
+        </h2>
+        <p className="text-[11px] text-gray-500 -mt-2">
+          {language === "th"
+            ? "เว้นว่างได้ — ระบบจะเติมค่าเริ่มต้นที่เหมาะสม (อ้างอิงจากแบรนด์ที่เลือก)"
+            : "Optional — leave blank to use sensible defaults derived from the brand."}
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "ป้ายย่อ (เมนู / chip)" : "Short label"}
+            </label>
+            <input
+              type="text"
+              value={form.short_label}
+              onChange={(e) => setForm({ ...form, short_label: e.target.value })}
+              placeholder={
+                language === "th"
+                  ? "เช่น \"C24 Care U - 002\""
+                  : 'e.g. "C24 Care U - 002"'
+              }
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "ชื่อบนใบเสร็จ" : "Receipt name"}
+            </label>
+            <input
+              type="text"
+              value={form.receipt_name}
+              onChange={(e) =>
+                setForm({ ...form, receipt_name: e.target.value })
+              }
+              placeholder={language === "th" ? "เช่น \"C24 Care U\"" : 'e.g. "C24 Care U"'}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 mb-1">
+            {language === "th" ? "Tagline / สโลแกน" : "Tagline"}
+          </label>
+          <input
+            type="text"
+            value={form.tagline}
+            onChange={(e) => setForm({ ...form, tagline: e.target.value })}
+            placeholder={
+              language === "th"
+                ? "แคร์ยู ดูแลเสื้อผ้าคุณด้วยใจ"
+                : "Care U cares for your clothes with heart"
+            }
+            className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "ที่อยู่ / สถานที่" : "Address / location"}
+            </label>
+            <input
+              type="text"
+              value={form.address}
+              onChange={(e) => setForm({ ...form, address: e.target.value })}
+              placeholder={
+                language === "th" ? "ตลาดสดธนบุรี" : "Thonburi Market"
+              }
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "เบอร์โทร" : "Phone"}
+            </label>
+            <input
+              type="text"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              placeholder="N/A"
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "Path โลโก้" : "Logo path"}
+            </label>
+            <input
+              type="text"
+              value={form.logo_path}
+              onChange={(e) => setForm({ ...form, logo_path: e.target.value })}
+              placeholder="/logos/c24-careu.svg"
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {language === "th" ? "Tailwind accent classes" : "Tailwind accent"}
+            </label>
+            <input
+              type="text"
+              value={form.accent_class}
+              onChange={(e) =>
+                setForm({ ...form, accent_class: e.target.value })
+              }
+              placeholder="from-green-700 to-emerald-600"
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+        </div>
+
+        <h2 className="text-lg font-bold text-gray-900 pt-2">
+          {language === "th"
+            ? "ขั้นที่ 4 — สิ่งที่ต้องทำหลังกดสร้าง"
+            : "Step 4 — Manual steps after create"}
         </h2>
         <ul className="text-xs text-gray-600 list-disc list-inside space-y-1">
-          <li>
-            {language === "th"
-              ? "เพิ่มสาขาใน lib/brandConfig.ts เพื่อให้ UI label ตรง"
-              : "Add an entry to lib/brandConfig.ts so UI labels mirror the branches table."}
-          </li>
           <li>
             {language === "th"
               ? "เพิ่มพนักงานผ่าน /admin/staff และผูกกับสาขานี้"

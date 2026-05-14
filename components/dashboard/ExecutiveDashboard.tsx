@@ -26,11 +26,17 @@ import {
 import { getBranchPerformance } from "@/lib/accounting";
 import { SimpleBarChart } from "@/components/charts/SimpleBarChart";
 import { SimpleLineChart } from "@/components/charts/SimpleLineChart";
+import type { SnapshotKpiBundle } from "@/lib/dashboardSnapshotKpi";
 
 interface ExecutiveDashboardProps {
   orders: AnalyticsOrder[];
   expenses: ExpenseRow[];
   customerCount: number;
+  /** Snapshot-backed KPI bundle. Today / this month / last month / MoM
+   *  growth prefer matview values when present. Year-to-date + branch
+   *  breakdown + customer cohort stay live because the day-granular
+   *  matview doesn't carry per-customer or full-year detail. */
+  snapshotKpis?: SnapshotKpiBundle | null;
 }
 
 const TH_MONTHS = [
@@ -66,15 +72,22 @@ export function ExecutiveDashboard({
   orders,
   expenses,
   customerCount,
+  snapshotKpis,
 }: ExecutiveDashboardProps) {
-  const todayRevenue = sumRevenue(orders.filter((o) => isToday(o.created_at)));
+  const useSnapshot = !!snapshotKpis?.hasData;
+  const todayRevenue = useSnapshot
+    ? snapshotKpis!.salesToday
+    : sumRevenue(orders.filter((o) => isToday(o.created_at)));
+  // Weekly aggregate isn't in the snapshot (day-granular); keep live.
   const weekRevenue = sumRevenue(orders.filter((o) => isThisWeek(o.created_at)));
-  const monthRevenue = sumRevenue(
-    orders.filter((o) => isThisMonth(o.created_at))
-  );
-  const lastMonthRevenue = sumRevenue(
-    orders.filter((o) => isLastMonth(o.created_at))
-  );
+  const monthRevenue = useSnapshot
+    ? snapshotKpis!.salesThisMonth
+    : sumRevenue(orders.filter((o) => isThisMonth(o.created_at)));
+  const lastMonthRevenue = useSnapshot
+    ? snapshotKpis!.salesLastMonth
+    : sumRevenue(orders.filter((o) => isLastMonth(o.created_at)));
+  // YTD spans the calendar year — keep live until the snapshot window
+  // extends beyond 30 days (today the route caps lookback at 90).
   const yearRevenue = sumRevenue(orders.filter((o) => isThisYear(o.created_at)));
   const monthGrowth = growthPercent(monthRevenue, lastMonthRevenue);
 

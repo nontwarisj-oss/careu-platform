@@ -110,4 +110,44 @@ A consumer should call the helper that matches its need rather than re-implement
 
 ---
 
-**Last updated:** 2026-05-14 (snapshot summary route + freshness indicator)
+## 8. Snapshot widget swap (post-2026-05-14)
+
+The role-specific dashboards now opt into the snapshot for date-bucketed sales metrics. The wiring:
+
+1. `app/page.tsx` calls `/api/admin/dashboard/summary` in parallel with the live fetch. The route now returns `rows[]` alongside `totals` so the client has per-day data to bucket.
+2. `lib/dashboardSnapshotKpi.ts::assembleSnapshotKpis(rows)` produces a `SnapshotKpiBundle` with today / this-month / last-month sales, MoM growth, order counts. `hasData: false` when rows are empty so consumers know to fall back.
+3. The bundle is passed as an optional `snapshotKpis` prop to ManagerDashboard, AccountingDashboard, and ExecutiveDashboard.
+4. Each component checks `snapshotKpis?.hasData` and prefers the snapshot value for sales today / this month / last month. Operational counts (pending, in-progress, queues, urgent lists) stay live because they need per-row detail.
+
+### 8.1 What's swapped
+
+| Metric | Live → Snapshot? |
+|---|---|
+| `todayRevenue` | ✅ Snapshot when available |
+| `monthRevenue` | ✅ Snapshot when available |
+| `lastMonthRevenue` | ✅ Snapshot when available (Accounting + Executive) |
+| `monthGrowth / monthOverMonthPct` | ✅ Snapshot when available |
+| `yearRevenue` (YTD) | ❌ Stays live — lookback caps at 90 days |
+| `weekRevenue` | ❌ Stays live — no week granularity in matview |
+| `pending / inProgress / completed` counts | ❌ Stays live — per-row status |
+| `topServices` | ❌ Stays live — no per-service breakdown in matview |
+| `byCategory / byBranch` | ❌ Stays live — per-row attribute |
+| Customer cohort + payment mix | ❌ Stays live — per-customer / per-row attribute |
+
+### 8.2 Fallback semantics
+
+`hasData: false` triggers fallback in every wired component — the existing live calculation path runs as before. The freshness indicator in the header shows `⚡ live (fallback)` when this happens; otherwise `📊 snapshot · YYYY-MM-DD`.
+
+If `/api/admin/dashboard/summary` errors entirely, `snapshotKpis` is null and every dashboard component falls through to live as if the snapshot didn't exist. The page never blocks on the snapshot read.
+
+### 8.3 Production behaviour
+
+On a fresh deploy (matview empty):
+- First page load: summary returns `usingSnapshot: false` + a live aggregation. Dashboard renders correctly.
+- After `POST /api/admin/dashboard/refresh-snapshot` (or the cron variant): summary returns `usingSnapshot: true` + rows. Subsequent loads pull from the matview.
+
+The per-row operational arrays (`snapshot.orders` from `lib/dashboardData.ts`) keep working regardless. Worst case the snapshot is stale; the freshness indicator shows the date so the operator can decide whether to refresh.
+
+---
+
+**Last updated:** 2026-05-14 (snapshot widget swap — ManagerDashboard / AccountingDashboard / ExecutiveDashboard wired)

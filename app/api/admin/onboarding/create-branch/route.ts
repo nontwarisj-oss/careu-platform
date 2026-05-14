@@ -39,6 +39,17 @@ type Body = {
   type?: "care_u" | "ezy_repair" | "mixed";
   brand?: string | null;
   createLineConfig?: boolean;
+  /** UI-metadata mirror (post-`20260533`). All optional — branchContext
+   *  falls back to lib/brandConfig.ts seed when a column is null, so the
+   *  wizard MAY skip these and a sensible default still renders. */
+  short_label?: string | null;
+  short_name?: string | null;
+  receipt_name?: string | null;
+  tagline?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  logo_path?: string | null;
+  accent_class?: string | null;
 };
 
 const CODE_REGEX = /^[a-z0-9][a-z0-9-]{1,63}$/;
@@ -131,6 +142,30 @@ export async function POST(req: Request) {
     );
   }
 
+  // Sensible defaults for UI fields so the new branch renders correctly
+  // immediately. Operator can refine later via SQL or a future "edit
+  // branch" UI. short_label defaults to "<short_code> • <name>" which
+  // matches the branchContext fallback rendering.
+  const ui = {
+    short_label:
+      (body.short_label ?? "").trim() || `${shortCode} • ${name}`,
+    short_name: (body.short_name ?? "").trim() || name,
+    receipt_name: (body.receipt_name ?? "").trim() || name,
+    tagline: (body.tagline ?? "").trim() || null,
+    address: (body.address ?? "").trim() || null,
+    phone: (body.phone ?? "").trim() || "N/A",
+    logo_path:
+      (body.logo_path ?? "").trim() ||
+      (body.brand === "ezy"
+        ? "/logos/ezy-repair.svg"
+        : "/logos/c24-careu.svg"),
+    accent_class:
+      (body.accent_class ?? "").trim() ||
+      (body.brand === "ezy"
+        ? "from-green-800 to-lime-700"
+        : "from-green-700 to-emerald-600"),
+  };
+
   // Insert the new branch as inactive.
   const insert = await admin
     .from("branches")
@@ -141,8 +176,11 @@ export async function POST(req: Request) {
       type,
       brand: body.brand ?? null,
       is_active: false,
+      ...ui,
     })
-    .select("id, code, short_code, name, type, brand, is_active, created_at")
+    .select(
+      "id, code, short_code, name, type, brand, is_active, created_at, short_label, short_name, receipt_name, tagline, address, phone, logo_path, accent_class"
+    )
     .single();
   if (insert.error || !insert.data) {
     return NextResponse.json(

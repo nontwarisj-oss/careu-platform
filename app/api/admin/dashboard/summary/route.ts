@@ -195,6 +195,10 @@ export async function GET(req: Request) {
       branchCode,
       lookbackDays,
       totals,
+      // Client-side bucketing (today / this month / last month) needs the
+      // per-day rows. Keeping the response under ~90 rows × few-hundred-bytes
+      // each so the payload stays small.
+      rows,
       snapshotRefreshedAt: latest,
       rowCount: rows.length,
     });

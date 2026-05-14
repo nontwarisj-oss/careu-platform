@@ -54,15 +54,30 @@ Single toggle:
 
 - **Create empty `branch_line_configs` row** (default on). Reserves the row so a future LINE token update is a plain `UPDATE` rather than an `INSERT` + RLS check.
 
-### 3.3 Step 3 — Manual checklist
+### 3.3 Step 3 — UI metadata (optional, post-`20260533`)
 
-Things the wizard cannot do automatically. Surfaced in the UI as a bulleted list:
+Migration `20260533` mirrors the lib/brandConfig.ts shape into `public.branches`. The wizard now accepts the UI fields directly so no code edit is needed:
 
-1. Add a mirror entry to [`lib/brandConfig.ts`](../lib/brandConfig.ts) so the sidebar / receipts render the right label.
-2. Add staff via `/admin/staff` and pin them to the new branch.
-3. If using per-branch LINE: `UPDATE branch_line_configs SET channel_access_token = '...' WHERE branch_id = '...'`.
-4. Review `service_prices` — if global pricing covers it, no action.
-5. Return to `/admin/onboarding` and **Activate** the branch.
+| Field | DB column | Default when blank |
+|---|---|---|
+| Short label | `short_label` | `"<short_code> • <name>"` |
+| Receipt name | `receipt_name` | `name` |
+| Tagline | `tagline` | NULL |
+| Address | `address` | NULL |
+| Phone | `phone` | `"N/A"` |
+| Logo path | `logo_path` | brand-derived (`/logos/c24-careu.svg` or `/logos/ezy-repair.svg`) |
+| Accent class | `accent_class` | brand-derived (Tailwind gradient) |
+
+`lib/branchContext.tsx` reads these columns at session start; missing fields fall back to the matching seed entry in `lib/brandConfig.ts`. The hardcoded list stays as a safe fallback when the DB read fails or the migration hasn't run yet.
+
+### 3.4 Step 4 — Manual checklist (post-2026-05-14)
+
+The brandConfig.ts mirror step is **gone** — the wizard handles it. Remaining manual steps:
+
+1. Add staff via `/admin/staff` and pin them to the new branch.
+2. If using per-branch LINE OA: `UPDATE branch_line_configs SET channel_access_token = '...' WHERE branch_id = '...'`.
+3. Review `service_prices` — if global pricing covers it, no action.
+4. Return to `/admin/onboarding` and **Activate** the branch.
 
 ---
 
@@ -141,7 +156,7 @@ By design — these belong to future phases:
 
 | Step | Why |
 |---|---|
-| Auto-mirror to `lib/brandConfig.ts` | brandConfig is checked-in TypeScript; auto-mutating source files from a server route is more dangerous than asking the operator to do it once. |
+| ~~Auto-mirror to `lib/brandConfig.ts`~~ | ✅ Done via `20260533` — UI fields live in `public.branches` columns; branchContext reads from DB with the hardcoded list as a fallback. |
 | Bulk import branches from CSV | Foundation only — most chains add branches one at a time. |
 | Per-branch LINE channel registration UI | Reserved row exists; the token UPDATE is admin SQL today. |
 | Per-branch Google Sheet tab | The platform uses one global Sheet today. Per-branch tabs are a scaling decision, not an onboarding decision. |
@@ -149,4 +164,4 @@ By design — these belong to future phases:
 
 ---
 
-**Last updated:** 2026-05-14 (onboarding wizard + activate route shipped)
+**Last updated:** 2026-05-14 (brandConfig DB mirror — wizard now collects every UI field; lib/brandConfig.ts stays as fallback only)

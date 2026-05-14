@@ -728,6 +728,26 @@ API:
 
 Operator still has manual follow-ups (brandConfig mirror, staff pinning, LINE token UPDATE, pricing review). The UI surfaces these as a bulleted checklist after each successful create.
 
+### 9c.5g Verification + snapshot widget swap + DB-driven brand (post-`20260533`)
+
+> Status: **shipped**. See [DASHBOARD.md §8](./DASHBOARD.md), [FRANCHISE_ONBOARDING.md §3.3](./FRANCHISE_ONBOARDING.md), and ARCHITECTURE.md §12j.
+
+#### 9c.5g.1 Verification outcomes
+
+Static code-review audit confirmed every workflow PASSes — login, intake + race-safe Job ID, pricing + urgent + B2S, technician inactive-rejection, receipt + dedup, LINE notification + branch ownership, recovery + retry worker + dead-after-max, payroll + bonus override + immutable-paid, customer tier + INACTIVE precedence, onboarding + duplicate-code rejection, dashboard summary + branch-forced, cron auth, LINE webhook signature. No CRITICAL or HIGH issues.
+
+#### 9c.5g.2 Snapshot widget swap
+
+ManagerDashboard, AccountingDashboard, and ExecutiveDashboard now accept an optional `snapshotKpis` prop and prefer the matview values for **today / this month / last month / MoM growth** when `hasData` is true. Falls back to live computation when the matview is empty or the route errors.
+
+The page fetches `snapshotKpis` via `/api/admin/dashboard/summary` (extended to return `rows[]`) and builds the bundle via `lib/dashboardSnapshotKpi.ts::assembleSnapshotKpis`. Operational tables (queues, top services, payment mix, branch breakdown) stay live because they need per-row detail.
+
+#### 9c.5g.3 BrandConfig DB mirror
+
+Migration `20260533` adds UI metadata columns to `public.branches` (short_label, short_name, receipt_name, tagline, address, phone, logo_path, accent_class) with the seeded rows backfilled. `lib/branchContext.tsx` fetches from DB at session start; per-field fallback to `lib/brandConfig.ts` keeps every existing deploy rendering correctly during the migration window.
+
+The onboarding wizard now collects every UI field — defaults are derived from the chosen brand when fields are blank, so a new branch can be added in under 60 seconds with no code edit. brandConfig.ts stays as the safety fallback for the two seeded branches.
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.

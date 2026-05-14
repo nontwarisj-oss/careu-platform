@@ -23,6 +23,11 @@ import { ProductionDashboard } from "@/components/dashboard/ProductionDashboard"
 import { AccountingDashboard } from "@/components/dashboard/AccountingDashboard";
 import { ManagerDashboard } from "@/components/dashboard/ManagerDashboard";
 import { ExecutiveDashboard } from "@/components/dashboard/ExecutiveDashboard";
+import type { DailySnapshotRow } from "@/lib/aggregationService";
+import {
+  assembleSnapshotKpis,
+  type SnapshotKpiBundle,
+} from "@/lib/dashboardSnapshotKpi";
 
 export default function Dashboard() {
   const { language } = useLanguage();
@@ -46,6 +51,13 @@ export default function Dashboard() {
     snapshotRefreshedAt: string | null;
     latestOrderAt?: string | null;
   } | null>(null);
+  // Snapshot-derived KPI bundle. Optional — when `hasData` is true the
+  // dashboard role components prefer these aggregates over walking the
+  // live orders array (cheaper at scale). When absent or empty, the
+  // components fall back to their existing live calculations.
+  const [snapshotKpis, setSnapshotKpis] = useState<SnapshotKpiBundle | null>(
+    null
+  );
 
   const allBranches = seesAllBranches(role);
 
@@ -72,7 +84,21 @@ export default function Dashboard() {
       ]);
       if (!cancelled) {
         setSnapshot(next);
-        setSnapshotMeta(summaryRes);
+        setSnapshotMeta(
+          summaryRes
+            ? {
+                usingSnapshot: summaryRes.usingSnapshot,
+                snapshotRefreshedAt: summaryRes.snapshotRefreshedAt,
+                latestOrderAt: summaryRes.latestOrderAt,
+              }
+            : null
+        );
+        // Build the KPI bundle if we got snapshot rows. Empty / fallback
+        // responses produce hasData=false so consumers know to fall
+        // back to live calc.
+        setSnapshotKpis(
+          summaryRes ? assembleSnapshotKpis(summaryRes.rows ?? []) : null
+        );
         setIsLoading(false);
       }
     })();
@@ -198,6 +224,7 @@ export default function Dashboard() {
           expenses={expenses}
           branchId={branch.id}
           customerCount={snapshot.customerCount}
+          snapshotKpis={snapshotKpis}
         />
       )}
     </div>
@@ -211,6 +238,7 @@ function DashboardView({
   expenses,
   branchId,
   customerCount,
+  snapshotKpis,
 }: {
   dashboard: DashboardKey;
   orders: AnalyticsOrder[];
@@ -218,6 +246,7 @@ function DashboardView({
   expenses: ExpenseRow[];
   branchId: string;
   customerCount: number;
+  snapshotKpis: SnapshotKpiBundle | null;
 }) {
   switch (dashboard) {
     case "frontdesk":
@@ -226,13 +255,20 @@ function DashboardView({
       return <ProductionDashboard orders={orders} />;
     case "accounting":
       // Accounting reads org-wide so they always see consolidated revenue.
-      return <AccountingDashboard orders={allOrders} expenses={expenses} />;
+      return (
+        <AccountingDashboard
+          orders={allOrders}
+          expenses={expenses}
+          snapshotKpis={snapshotKpis}
+        />
+      );
     case "manager":
       return (
         <ManagerDashboard
           orders={allOrders}
           expenses={expenses}
           branchId={branchId}
+          snapshotKpis={snapshotKpis}
         />
       );
     case "executive":
@@ -241,6 +277,7 @@ function DashboardView({
           orders={allOrders}
           expenses={expenses}
           customerCount={customerCount}
+          snapshotKpis={snapshotKpis}
         />
       );
     default:
@@ -261,6 +298,7 @@ async function fetchSnapshotSummary(
   usingSnapshot: boolean;
   snapshotRefreshedAt: string | null;
   latestOrderAt?: string | null;
+  rows: DailySnapshotRow[];
 } | null> {
   try {
     const params = new URLSearchParams();
@@ -275,12 +313,14 @@ async function fetchSnapshotSummary(
       usingSnapshot?: boolean;
       snapshotRefreshedAt?: string | null;
       latestOrderAt?: string | null;
+      rows?: DailySnapshotRow[];
     };
     if (!json.ok) return null;
     return {
       usingSnapshot: !!json.usingSnapshot,
       snapshotRefreshedAt: json.snapshotRefreshedAt ?? null,
       latestOrderAt: json.latestOrderAt ?? null,
+      rows: json.rows ?? [],
     };
   } catch {
     return null;

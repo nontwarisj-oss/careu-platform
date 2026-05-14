@@ -16,22 +16,37 @@ import {
   sumExpenses,
   type ExpenseRow,
 } from "@/lib/expenses";
+import type { SnapshotKpiBundle } from "@/lib/dashboardSnapshotKpi";
 
 interface ManagerDashboardProps {
   orders: AnalyticsOrder[];
   expenses: ExpenseRow[];
   branchId: string;
+  /** Snapshot-backed KPI bundle. When `hasData` is true the dashboard
+   *  prefers these aggregates over walking the live orders array; falls
+   *  back to live computation when null / hasData=false. */
+  snapshotKpis?: SnapshotKpiBundle | null;
 }
 
 export function ManagerDashboard({
   orders,
   expenses,
   branchId,
+  snapshotKpis,
 }: ManagerDashboardProps) {
   const scoped = orders.filter((o) => o.branch_id === branchId || !o.branch_id);
   const scopedExpenses = expenses.filter((e) => e.branch_id === branchId);
-  const todayRevenue = sumRevenue(scoped.filter((o) => isToday(o.created_at)));
-  const monthRevenue = sumRevenue(scoped.filter((o) => isThisMonth(o.created_at)));
+  // Sales aggregates prefer the snapshot when available — cheaper at scale
+  // than walking thousands of orders client-side. Operational counts
+  // (pending/in-progress/completed) stay live because they need per-row
+  // status detail.
+  const useSnapshot = !!snapshotKpis?.hasData;
+  const todayRevenue = useSnapshot
+    ? snapshotKpis!.salesToday
+    : sumRevenue(scoped.filter((o) => isToday(o.created_at)));
+  const monthRevenue = useSnapshot
+    ? snapshotKpis!.salesThisMonth
+    : sumRevenue(scoped.filter((o) => isThisMonth(o.created_at)));
   const monthExpense = sumExpenses(filterThisMonthExpenses(scopedExpenses));
   const monthProfit = monthRevenue - monthExpense;
   const pending = scoped.filter((o) => o.status === "pending").length;
