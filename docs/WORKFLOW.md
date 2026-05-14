@@ -476,6 +476,51 @@ A cron / worker is **out of scope this phase**. The table shape and retry helper
 - Read: RLS on `sync_failures` has two policies — `sync_failures_admin_read` (owner / hq_admin) and `sync_failures_branch_read` (branch_manager + own branch). LINE log mirrors the same pattern.
 - Write: `/api/admin/recovery/resolve` re-checks `requireBranchAccess(row.branch_id)` for branch_manager. Service-role client performs the actual UPDATE.
 
+### 9c.5b Retry worker + bulk actions (post-2026-05-14)
+
+> Status: **manual trigger live**. The library function `runRetryTick` is ready for a future cron schedule — wiring Supabase Cron / Vercel Cron is the only step left, and it's intentionally not done this phase.
+
+#### 9c.5b.1 The worker tick
+
+[`lib/retryWorker.ts::runRetryTick(opts)`](../lib/retryWorker.ts) drains up to `limit` rows from `public.sync_failures` (status in `pending` / `retrying`) ordered by `created_at`. Per row:
+
+1. **Cooldown gate.** If `last_attempt_at` is newer than `LAST_ATTEMPT_BACKOFF_SECONDS` (60s), skip — protects LINE customers from being spammed by an over-eager worker.
+2. **Flag retrying.** UPDATE attempts++, last_attempt_at=now, status='retrying'.
+3. **Dispatch via `retryFailureItem`.** Routes by `kind`:
+   - `order_to_sheet` → `syncOrderToSheetCore(targetId)` (server-side, RLS-bypassing admin client).
+   - `line_send` → `dispatchLineKind` resolves the `messageKind` from `payload.messageKind` and calls the matching orchestrator (`sendOrderCreatedMessage` / …). A LINE "skipped" outcome (no LINE link, customer unsubscribed) is treated as success so the worker stops retrying it.
+   - `receipt_rebuild` → no-op success; rebuild is a pure read and only meaningful in the admin UI.
+   - Other kinds → returns `manual retry only — kind "X" has no auto-retry path`. Worker leaves the row at status=pending without bumping toward dead.
+4. **Mark resolved or pending.** On success → status='resolved', resolved_at=now, payload merged with `autoResolvedBy` + `autoResolvedAt` + `lastRetryDetails`. On failure → if `attempts >= MAX_ATTEMPTS` (5) → status='dead'; otherwise → status='pending' with `payload.lastRetryReason`.
+
+The function never throws. Every per-row exception lands as `{ ok: false, reason }` in the returned `RetryTickResult.items`.
+
+#### 9c.5b.2 Manual trigger
+
+`POST /api/admin/recovery/run-worker` (owner / hq_admin / branch_manager). For `branch_manager`, the body's `branchCode` is ignored — the route forces it to `profile.branchCode`. Owner / HQ may pass `branchCode: null` to drain across every branch.
+
+The admin UI's "Run worker (25)" button surfaces a confirmation modal, then shows a per-row summary card (`WorkerSummary` component) with counts of succeeded / pending / dead / skipped plus collapsible per-row details.
+
+#### 9c.5b.3 Future cron entry point
+
+A cron job that POSTs to `/api/admin/recovery/run-worker` (or calls `runRetryTick({ actorId: 'cron' })` directly server-side) drains the queue without operator presence. The library is ready; cron config is the missing piece. Cron schedulers must respect the per-row cooldown — the worker rejects double-attempts inside 60s on their own, so a 60s cron tick is the lower bound.
+
+#### 9c.5b.4 Bulk resolve
+
+`POST /api/admin/recovery/bulk-resolve` accepts up to 100 `failureIds` and stamps each with a shared `bulkActionId` in `payload.jsonb`. Per-row branch isolation: a `branch_manager` who submits a foreign-branch id gets per-row 403 (`ไม่มีสิทธิ์เข้าถึงสาขาของรายการนี้`); the rest of the list still processes. Already-resolved rows short-circuit as `alreadyResolved: true`.
+
+#### 9c.5b.5 Safety contract recap
+
+| Concern | Mitigation |
+|---|---|
+| LINE spam on a flaky channel | 60s per-row cooldown + MAX_ATTEMPTS=5 + LINE "skipped" treated as success |
+| Sheet duplicate rows | Column-B Job ID dedup in `writeOrderRow` (see GOOGLE_SHEET_SYNC.md §8b) |
+| Worker timeout | Hard-capped `limit` at 50 per tick |
+| Stuck "retrying" rows | Cooldown gate re-evaluates on next tick; UI shows `attempts` so admins can resolve manually |
+| Unknown kind | Dispatcher returns `unknown kind "..."` — never crashes the loop |
+| Service-role unset | Worker returns a skipped-only result with a clear reason |
+| Cross-branch retry | Branch manager's `branchCode` is forced server-side; per-row check in bulk-resolve |
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.

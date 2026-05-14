@@ -533,16 +533,85 @@ Two operational adjustments:
 | Cross-branch retry | `requireBranchAccess` re-checks in `/api/sync-order-to-sheet`, `/api/line/send`, and `/api/admin/recovery/resolve`. |
 | Service-role unset | Resolve returns 503 with a clear reason; read paths still work via RLS. |
 
-### 12d.4 Future automation entry points
+### 12d.4 Retry worker (post-2026-05-14)
 
-The retry / cron worker (deliberately not built this phase) plugs into the same data + helper layer:
+The worker ships **as a library + manual trigger**. Cron is intentionally not wired this phase — when a scheduler is added later it calls the same library.
 
-1. `select * from public.sync_failures where status='pending' order by created_at limit N` — picks N candidates per tick.
-2. Map by `kind` → `resyncOrderToSheet` / `resendLineMessage` / future helpers.
-3. On success: call `resolveSyncFailure(id, note)`.
-4. After K failures: write `status='dead'` and alert.
+```
+┌────────────────────────────────────────────────────────────┐
+│  POST /api/admin/recovery/run-worker                       │
+│    • requireRole(owner / hq_admin / branch_manager)        │
+│    • branch_manager: branchCode FORCED to profile.branch   │
+│    • owner / hq_admin: free branchCode (incl. null = all)  │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  lib/retryWorker.ts::runRetryTick(opts)                    │
+│    • SELECT … FROM sync_failures                           │
+│        WHERE status IN ('pending','retrying')              │
+│        AND (kinds filter) AND (branch filter)              │
+│        ORDER BY created_at LIMIT limit (≤50)               │
+│    • For each row:                                         │
+│        - cooldown check (LAST_ATTEMPT_BACKOFF_SECONDS=60)  │
+│        - UPDATE status='retrying', attempts++              │
+│        - dispatch via retryFailureItem(row)                │
+│        - on ok  → status='resolved', payload+autoResolved* │
+│        - on err → if attempts ≥ MAX_ATTEMPTS (5) → 'dead'  │
+│                  else → status='pending' + lastRetryReason │
+│    • Returns RetryTickResult { processed, succeeded,       │
+│                                failed, dead, skipped,      │
+│                                items[]: per-row outcome }  │
+│    • Never throws.                                         │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  retryFailureItem(row, ctx)                                │
+│    order_to_sheet  → syncOrderToSheetCore(targetId)        │
+│    line_send       → dispatchLineKind(payload.messageKind) │
+│                       → sendOrder{Created,Ready}Message /  │
+│                         sendPickupReminderMessage /        │
+│                         sendReceiptMessage                 │
+│                       (LINE "skipped" treated as success)  │
+│    receipt_rebuild → no-op success                         │
+│    others          → manual-retry-only                     │
+└────────────────────────────────────────────────────────────┘
+```
 
-The schema already has `attempts`, `last_attempt_at`, and `resolved_at` — the worker just maintains them.
+#### Safety limits (constants)
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `MAX_ATTEMPTS` | 5 | After 5 dispatches a row goes `dead`. |
+| `LAST_ATTEMPT_BACKOFF_SECONDS` | 60 | Per-row cooldown — protects LINE customers from spam. |
+| Hard limit per tick | 50 | Keeps one serverless invocation inside its timeout. |
+| Bulk-resolve cap | 100 | Per request. |
+
+#### Bulk-resolve route
+
+`POST /api/admin/recovery/bulk-resolve` is the sibling endpoint. Takes `failureIds: string[]` (≤100), per-row branch check (managers refused on foreign-branch rows), stamps every successful row with a shared `bulkActionId` in `payload.jsonb` for grouping.
+
+#### Future cron entry point
+
+`runRetryTick({ actorId: 'cron' })` is the public function a Supabase Cron or Vercel Cron job calls. No HTTP / route layer needed for that path — the schedule honors the cooldown on its own. Cron config is the only missing piece this phase did not ship.
+
+---
+
+## 12e. Google Sheet dedup (post-2026-05-14)
+
+Front_Desk orders are now idempotent — the retry worker and any manual "ลองใหม่" produces zero duplicate rows. Two new building blocks:
+
+| Helper | File | Purpose |
+|---|---|---|
+| `findRowByColumnValue(tab, "B", jobId)` | [`lib/googleSheets.ts`](../lib/googleSheets.ts) | `values.get` on a single column, returns the 0-indexed match row or -1. |
+| `updateRowValues(tab, rowIndex, values, { preservedColumns })` | [`lib/googleSheets.ts`](../lib/googleSheets.ts) | `values.update` PUT per contiguous run of non-preserved columns. Operator-managed checkboxes (Front_Desk M/N/O) are preserved on update. |
+
+`writeOrderRow` now:
+1. Tries `findRowByColumnValue` for the Job ID.
+2. If found → `updateRowValues` with preserved [12,13,14] → result `mode: "updated"`.
+3. Otherwise → fall through to `insertFormattedRow` → result `mode: "appended"`.
+4. Lookup failures (auth glitch, rate limit) log a warning and fall back to append — single-shot syncs keep working.
+
+Tabs that are append-only by design (`Pricing`, `Expense_Log`, `Debug`) skip dedup entirely. See [GOOGLE_SHEET_SYNC.md §8b](./GOOGLE_SHEET_SYNC.md) for the full contract.
 
 ---
 
@@ -624,8 +693,10 @@ app/
 │   └── sync-pricing-to-sheet/route.ts  ← DB → Sheet (Pricing snapshot)
 ├── admin/page.tsx                      ← Admin centre landing (owner / hq_admin)
 ├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
-├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild
+├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild + bulk actions
 ├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
+├── api/admin/recovery/bulk-resolve/route.ts  ← Bulk resolve (≤100 ids)
+├── api/admin/recovery/run-worker/route.ts    ← Manual retry-worker trigger
 ├── customers/page.tsx
 ├── expenses/page.tsx
 ├── intake/page.tsx                     ← walk-in counterpart of /orders
@@ -682,7 +753,9 @@ lib/
 ├── lineDelivery.ts   ← orchestrator: send + log + per-customer prefs
 ├── lineOA.ts         ← browser-side wrappers (sendLineMessage + legacy sendToLineOA)
 ├── staffService.ts   ← /admin/staff data layer (fetch profiles, upsert technician_profiles)
-└── statusBadges.ts   ← canonical status / payment / sync vocabulary (labels + colours)
+├── statusBadges.ts   ← canonical status / payment / sync vocabulary (labels + colours)
+├── orderSheetSync.ts ← syncOrderToSheetCore (route + worker share this)
+└── retryWorker.ts    ← runRetryTick + retryFailureItem + safety limits
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -708,4 +781,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (operational recovery foundation — /admin/recovery UI, gated resolve route, `20260528` migration)
+**Last updated:** 2026-05-14 (retry worker + bulk recovery + sheet dedup — `lib/retryWorker.ts`, bulk-resolve / run-worker routes, Front_Desk dedup)

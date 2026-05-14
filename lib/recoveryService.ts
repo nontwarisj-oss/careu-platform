@@ -325,6 +325,112 @@ export async function resolveSyncFailure(
   }
 }
 
+// ---------- Bulk + worker (client wrappers) ------------------------------
+
+export type RetryItemOutcome = {
+  failureId: string;
+  kind: SyncFailureRow["kind"];
+  targetId: string | null;
+  succeeded: boolean;
+  dead: boolean;
+  pendingRetry: boolean;
+  skipped: boolean;
+  reason?: string;
+  details?: Record<string, unknown>;
+};
+
+export type RetryTickResult = {
+  ok: true;
+  actorRole: string;
+  scopedBranch: string | null;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  dead: number;
+  skipped: number;
+  items: RetryItemOutcome[];
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type BulkResolveResult = {
+  ok: true;
+  bulkActionId: string;
+  resolved: number;
+  skipped: number;
+  items: Array<{
+    failureId: string;
+    ok: boolean;
+    reason?: string;
+    alreadyResolved?: boolean;
+  }>;
+};
+
+/**
+ * Drain up to `limit` pending failures via the manual worker endpoint.
+ * Owner / HQ may pass a branchCode; branch_manager always runs scoped to
+ * their own branch (the server enforces this).
+ */
+export async function runRetryWorker(
+  opts: { limit?: number; kinds?: string[]; branchCode?: string | null } = {}
+): Promise<RetryTickResult | { ok: false; reason: string }> {
+  try {
+    const res = await fetch("/api/admin/recovery/run-worker", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: opts.limit ?? 25,
+        kinds: opts.kinds ?? null,
+        branchCode: opts.branchCode ?? null,
+      }),
+    });
+    const json = (await res.json()) as RetryTickResult | { ok: false; reason: string };
+    if (!res.ok || !("ok" in json) || json.ok !== true) {
+      const reason =
+        (json as { reason?: string }).reason ?? `HTTP ${res.status}`;
+      return { ok: false, reason };
+    }
+    return json;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
+}
+
+/**
+ * Bulk-mark sync_failures rows as resolved in one call. Up to 100 ids per
+ * request. The server stamps every row with a shared `bulkActionId` in
+ * payload.jsonb so admins can group them later.
+ */
+export async function bulkResolveSyncFailures(
+  failureIds: string[],
+  note?: string
+): Promise<BulkResolveResult | { ok: false; reason: string }> {
+  try {
+    const res = await fetch("/api/admin/recovery/bulk-resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ failureIds, note }),
+    });
+    const json = (await res.json()) as
+      | BulkResolveResult
+      | { ok: false; reason: string };
+    if (!res.ok || !("ok" in json) || json.ok !== true) {
+      const reason =
+        (json as { reason?: string }).reason ?? `HTTP ${res.status}`;
+      return { ok: false, reason };
+    }
+    return json;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
+}
+
 // ---------- KPI rebuild (placeholder) ------------------------------------
 
 /**

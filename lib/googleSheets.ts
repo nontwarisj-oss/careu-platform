@@ -173,6 +173,140 @@ async function findLastDataRow(
   return -1;
 }
 
+/**
+ * Scan a single-column range and return the 0-indexed row whose value
+ * exactly matches `target` (string compare, trimmed). Returns -1 when no
+ * match. Used by the dedup path in writeOrderRow.
+ *
+ *   • `tabName` — case-sensitive tab title.
+ *   • `columnLetter` — "A", "B", …; the only column scanned.
+ *   • `target` — string to compare against; values are trimmed before compare.
+ *   • `skipHeader` — when true (default), row 0 is ignored.
+ *
+ * Cost: one values.get per call. The recovery worker invokes this once per
+ * order being retried — acceptable for the volumes the platform sees today.
+ */
+export async function findRowByColumnValue(
+  tabName: string,
+  columnLetter: string,
+  target: string,
+  options: { skipHeader?: boolean } = {}
+): Promise<number> {
+  const config = readGoogleSheetsConfig();
+  if (!config) {
+    throw new Error("Google Sheets sync ยังไม่ตั้งค่า");
+  }
+  const token = await getAccessToken(config);
+  const range = `${tabName}!${columnLetter}:${columnLetter}`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${
+    config.sheetId
+  }/values/${encodeURIComponent(range)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Sheets values.get ${res.status}: ${body}`);
+  }
+  const json = (await res.json()) as { values?: string[][] };
+  const rows = json.values ?? [];
+  const startRow = options.skipHeader === false ? 0 : 1;
+  const needle = target.trim();
+  if (needle === "") return -1;
+  for (let i = startRow; i < rows.length; i++) {
+    const cell = rows[i]?.[0];
+    if (cell !== undefined && cell !== null && String(cell).trim() === needle) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Overwrite cells at a known 0-indexed row. Uses `values.update` (NOT
+ * batchUpdate) so per-row formatting stays intact — we only change the
+ * cell values, not the validation / colours / formulas. Columns omitted
+ * from the values array are left untouched.
+ *
+ *   • Cell values follow the same coercion as appendRow (booleans → TRUE/FALSE).
+ *   • The range is computed as `<tab>!A<rowIndex+1>:<lastCol>` (Sheets uses
+ *     1-based row numbers in A1 notation).
+ *   • `preservedColumns` lists 0-indexed columns whose existing cell value
+ *     must NOT be overwritten — used to keep operator-managed checkboxes
+ *     (Front_Desk M/N/O) untouched on dedup updates.
+ */
+export async function updateRowValues(
+  tabName: string,
+  rowIndex: number,
+  values: Array<string | number | boolean | null>,
+  options: { preservedColumns?: number[] } = {}
+): Promise<void> {
+  const config = readGoogleSheetsConfig();
+  if (!config) {
+    throw new Error("Google Sheets sync ยังไม่ตั้งค่า");
+  }
+  const token = await getAccessToken(config);
+
+  const preserved = new Set(options.preservedColumns ?? []);
+  // We can't sparsely write with values.update in a single call without
+  // overwriting preserved cells, so issue one range per contiguous run of
+  // non-preserved columns. For Front_Desk that's columns A–L (then skip
+  // M/N/O), so this is a single PUT in practice.
+  const runs: Array<{ start: number; vals: (string | number | boolean | null)[] }> = [];
+  let curStart = -1;
+  let curVals: (string | number | boolean | null)[] = [];
+  for (let col = 0; col < values.length; col++) {
+    if (preserved.has(col)) {
+      if (curStart !== -1) {
+        runs.push({ start: curStart, vals: curVals });
+        curStart = -1;
+        curVals = [];
+      }
+      continue;
+    }
+    if (curStart === -1) curStart = col;
+    curVals.push(values[col] ?? "");
+  }
+  if (curStart !== -1) runs.push({ start: curStart, vals: curVals });
+
+  for (const run of runs) {
+    const startLetter = columnIndexToLetter(run.start);
+    const endLetter = columnIndexToLetter(run.start + run.vals.length - 1);
+    const range = `${tabName}!${startLetter}${rowIndex + 1}:${endLetter}${rowIndex + 1}`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${
+      config.sheetId
+    }/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
+    const coerced = run.vals.map((v) => {
+      if (v === null || v === undefined) return "";
+      if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+      return v;
+    });
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ range, values: [coerced] }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Sheets values.update ${res.status}: ${body}`);
+    }
+  }
+}
+
+function columnIndexToLetter(index: number): string {
+  let n = index;
+  let result = "";
+  while (n >= 0) {
+    result = String.fromCharCode(65 + (n % 26)) + result;
+    n = Math.floor(n / 26) - 1;
+  }
+  return result;
+}
+
 // ---------- write helpers ------------------------------------------------
 
 export type SheetCellValue = string | number | boolean | null;

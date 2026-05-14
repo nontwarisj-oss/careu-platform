@@ -10,13 +10,16 @@ import { useBranch } from "@/lib/branchContext";
 import { canSeeFinancials, canViewAllBranches } from "@/lib/permissions";
 import { fetchBranchOptions, type BranchOption } from "@/lib/staffService";
 import {
+  bulkResolveSyncFailures,
   listFailedSyncs,
   listLineMessageLog,
   rebuildReceiptData,
   resendLineMessage,
   resolveSyncFailure,
   resyncOrderToSheet,
+  runRetryWorker,
   type LineMessageLogRow,
+  type RetryTickResult,
   type SyncFailureRow,
 } from "@/lib/recoveryService";
 import type { ReceiptData } from "@/lib/receiptData";
@@ -117,6 +120,24 @@ function RecoveryInner() {
   // In-flight retry trackers — prevent double-clicks on the same row.
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [resolving, setResolving] = useState<Set<string>>(new Set());
+
+  // Bulk selection for the sync_failures tab. Set of failure ids.
+  const [selectedSyncIds, setSelectedSyncIds] = useState<Set<string>>(new Set());
+
+  // Confirmation modal for destructive-ish bulk actions.
+  const [confirmAction, setConfirmAction] = useState<
+    | {
+        kind: "bulk-resolve";
+        ids: string[];
+      }
+    | {
+        kind: "run-worker";
+        limit: number;
+      }
+    | null
+  >(null);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [workerSummary, setWorkerSummary] = useState<RetryTickResult | null>(null);
 
   // Inspection modal
   const [inspect, setInspect] = useState<
@@ -292,6 +313,92 @@ function RecoveryInner() {
       return next;
     });
     await load();
+  };
+
+  // Reset bulk selection whenever the visible result set changes — keeps
+  // selection from referring to rows that filtered out.
+  useEffect(() => {
+    setSelectedSyncIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(syncRows.map((r) => r.id));
+      const next = new Set<string>();
+      for (const id of prev) if (visible.has(id)) next.add(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [syncRows]);
+
+  const toggleSelectAllVisible = (visible: SyncFailureRow[]) => {
+    const eligible = visible.filter((r) => r.status !== "resolved");
+    const allSelected =
+      eligible.length > 0 &&
+      eligible.every((r) => selectedSyncIds.has(r.id));
+    if (allSelected) {
+      setSelectedSyncIds(new Set());
+    } else {
+      setSelectedSyncIds(new Set(eligible.map((r) => r.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedSyncIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runBulkResolve = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setBulkRunning(true);
+    setMessage(null);
+    const res = await bulkResolveSyncFailures(ids);
+    if (res.ok) {
+      setMessage(
+        language === "th"
+          ? `ทำเครื่องหมายว่าจัดการเรียบร้อย ${res.resolved} รายการ • ข้าม ${res.skipped}`
+          : `Marked ${res.resolved} resolved • skipped ${res.skipped}`
+      );
+      setSelectedSyncIds(new Set());
+      await load();
+    } else {
+      setMessage(
+        language === "th"
+          ? `Bulk resolve ไม่สำเร็จ: ${res.reason}`
+          : `Bulk resolve failed: ${res.reason}`
+      );
+    }
+    setBulkRunning(false);
+  };
+
+  const runWorker = async (limit: number) => {
+    setBulkRunning(true);
+    setMessage(null);
+    setWorkerSummary(null);
+    const branchCode =
+      branchFilter === "all"
+        ? null
+        : branches.find((b) => b.id === branchFilter)?.code ?? null;
+    const res = await runRetryWorker({
+      limit,
+      branchCode,
+    });
+    if (res.ok) {
+      setWorkerSummary(res);
+      setMessage(
+        language === "th"
+          ? `Worker ทำงานเสร็จ — สำเร็จ ${res.succeeded} • ล้มเหลว ${res.failed} • ตาย ${res.dead} • ข้าม ${res.skipped} (ทั้งหมด ${res.processed})`
+          : `Worker done — succeeded ${res.succeeded} • failed ${res.failed} • dead ${res.dead} • skipped ${res.skipped} (processed ${res.processed})`
+      );
+      await load();
+    } else {
+      setMessage(
+        language === "th"
+          ? `Worker ไม่สำเร็จ: ${res.reason}`
+          : `Worker failed: ${res.reason}`
+      );
+    }
+    setBulkRunning(false);
   };
 
   const handleRebuildReceipt = async () => {
@@ -480,17 +587,50 @@ function RecoveryInner() {
 
       {/* Tab content */}
       {tab === "sync" && (
-        <SyncFailuresTable
-          rows={syncRows}
-          isLoading={isLoading}
-          canRetry={canRetry}
-          retrying={retrying}
-          resolving={resolving}
-          onRetry={handleRetrySync}
-          onResolve={handleResolve}
-          onInspect={(row) => setInspect({ kind: "sync", row })}
-          language={language}
-        />
+        <>
+          <BulkActionBar
+            language={language}
+            canRetry={canRetry}
+            selectedCount={selectedSyncIds.size}
+            pendingCount={
+              syncRows.filter(
+                (r) => r.status === "pending" || r.status === "retrying"
+              ).length
+            }
+            bulkRunning={bulkRunning}
+            onBulkResolve={() =>
+              setConfirmAction({
+                kind: "bulk-resolve",
+                ids: Array.from(selectedSyncIds),
+              })
+            }
+            onRunWorker={() =>
+              setConfirmAction({ kind: "run-worker", limit: 25 })
+            }
+            onClearSelection={() => setSelectedSyncIds(new Set())}
+          />
+          {workerSummary && (
+            <WorkerSummary
+              language={language}
+              result={workerSummary}
+              onDismiss={() => setWorkerSummary(null)}
+            />
+          )}
+          <SyncFailuresTable
+            rows={syncRows}
+            isLoading={isLoading}
+            canRetry={canRetry}
+            retrying={retrying}
+            resolving={resolving}
+            selectedIds={selectedSyncIds}
+            onToggleSelect={toggleSelect}
+            onToggleSelectAll={() => toggleSelectAllVisible(syncRows)}
+            onRetry={handleRetrySync}
+            onResolve={handleResolve}
+            onInspect={(row) => setInspect({ kind: "sync", row })}
+            language={language}
+          />
+        </>
       )}
       {tab === "line" && (
         <LineLogTable
@@ -534,6 +674,84 @@ function RecoveryInner() {
           <pre className="text-[11px] bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words">
             {JSON.stringify(inspect.row, null, 2)}
           </pre>
+        </Modal>
+      )}
+
+      {confirmAction && (
+        <Modal
+          isOpen={!!confirmAction}
+          onClose={() => setConfirmAction(null)}
+          size="md"
+          hideFooter
+          title={
+            confirmAction.kind === "bulk-resolve"
+              ? language === "th"
+                ? "ยืนยันการทำเครื่องหมายว่าจัดการ"
+                : "Confirm bulk resolve"
+              : language === "th"
+              ? "ยืนยันรัน worker"
+              : "Confirm run worker"
+          }
+        >
+          <div className="space-y-3 text-sm">
+            {confirmAction.kind === "bulk-resolve" ? (
+              <>
+                <p>
+                  {language === "th"
+                    ? `จะทำเครื่องหมาย ${confirmAction.ids.length} รายการเป็น "resolved" — การกระทำนี้ไม่ทำให้ Google Sheet หรือ LINE ส่งงานใหม่ มันแค่ปิดคิวว่าจัดการเองแล้ว`
+                    : `Mark ${confirmAction.ids.length} rows as resolved. Does NOT trigger any retry — it just closes the queue entry so you can move on.`}
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  {language === "th"
+                    ? "ทุกแถวที่เลือกจะได้ payload.bulkActionId เดียวกันเพื่อให้ค้นย้อนหลังได้"
+                    : "Every selected row is stamped with the same bulkActionId so you can find them later."}
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  {language === "th"
+                    ? `จะดึง ${confirmAction.limit} รายการแรกที่ "pending" และให้ worker ลองส่งใหม่ — รายการที่ลองเสร็จไม่นาน (60 วินาที) จะถูกข้าม`
+                    : `Will pick up to ${confirmAction.limit} pending rows and dispatch retries. Rows attempted in the last 60s are skipped by the cooldown.`}
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  {language === "th"
+                    ? "Worker จะทำงานครั้งเดียว ไม่มีลูปอัตโนมัติ — สามารถกดซ้ำได้หลังจากดูผลลัพธ์"
+                    : "Single tick only — no auto-loop. You can press again after reviewing the summary."}
+                </p>
+              </>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmAction(null)}
+                className="px-4 py-2 rounded-xl border border-gray-200 bg-white text-sm hover:bg-gray-50"
+              >
+                {language === "th" ? "ยกเลิก" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmAction.kind === "bulk-resolve") {
+                    void runBulkResolve(confirmAction.ids);
+                  } else {
+                    void runWorker(confirmAction.limit);
+                  }
+                  setConfirmAction(null);
+                }}
+                disabled={bulkRunning}
+                className="px-4 py-2 rounded-xl bg-green-700 hover:bg-green-800 text-white font-semibold text-sm disabled:opacity-60"
+              >
+                {bulkRunning
+                  ? language === "th"
+                    ? "กำลังทำงาน..."
+                    : "Running..."
+                  : language === "th"
+                  ? "ยืนยัน"
+                  : "Confirm"}
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
@@ -589,12 +807,149 @@ function TabButton({
   );
 }
 
+function BulkActionBar({
+  language,
+  canRetry,
+  selectedCount,
+  pendingCount,
+  bulkRunning,
+  onBulkResolve,
+  onRunWorker,
+  onClearSelection,
+}: {
+  language: "th" | "en";
+  canRetry: boolean;
+  selectedCount: number;
+  pendingCount: number;
+  bulkRunning: boolean;
+  onBulkResolve: () => void;
+  onRunWorker: () => void;
+  onClearSelection: () => void;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <div className="text-sm text-gray-700">
+        {language === "th"
+          ? selectedCount > 0
+            ? `เลือกไว้ ${selectedCount} รายการ`
+            : `รอจัดการ ${pendingCount} รายการ`
+          : selectedCount > 0
+          ? `${selectedCount} selected`
+          : `${pendingCount} pending`}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {selectedCount > 0 && (
+          <button
+            type="button"
+            onClick={onClearSelection}
+            className="text-xs text-gray-600 hover:text-gray-900"
+          >
+            {language === "th" ? "ล้างที่เลือก" : "Clear"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onBulkResolve}
+          disabled={!canRetry || selectedCount === 0 || bulkRunning}
+          className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 min-h-[40px]"
+        >
+          {language === "th"
+            ? `ทำเสร็จที่เลือก (${selectedCount})`
+            : `Resolve selected (${selectedCount})`}
+        </button>
+        <button
+          type="button"
+          onClick={onRunWorker}
+          disabled={!canRetry || pendingCount === 0 || bulkRunning}
+          className="rounded-xl bg-green-700 hover:bg-green-800 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50 min-h-[40px]"
+        >
+          {bulkRunning
+            ? language === "th"
+              ? "กำลังทำงาน..."
+              : "Working..."
+            : language === "th"
+            ? "รัน worker (25 รายการ)"
+            : "Run worker (25)"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WorkerSummary({
+  language,
+  result,
+  onDismiss,
+}: {
+  language: "th" | "en";
+  result: RetryTickResult;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="mb-3 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold text-green-900">
+            {language === "th" ? "ผลการรัน worker" : "Worker tick result"}
+          </p>
+          <p className="text-xs text-green-800 mt-0.5">
+            {language === "th"
+              ? `เริ่ม ${new Date(result.startedAt).toLocaleTimeString("th-TH")} • ${result.processed} รายการ • ${result.scopedBranch ? `สาขา ${result.scopedBranch}` : "ทุกสาขา"}`
+              : `Started ${new Date(result.startedAt).toLocaleTimeString()} • ${result.processed} processed • ${result.scopedBranch ? `branch ${result.scopedBranch}` : "all branches"}`}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-green-700 hover:text-green-900 text-lg leading-none"
+          aria-label="dismiss"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+        <span className="rounded-lg border border-green-200 bg-white px-2 py-1">
+          {language === "th" ? "สำเร็จ" : "Succeeded"}: <strong>{result.succeeded}</strong>
+        </span>
+        <span className="rounded-lg border border-yellow-200 bg-white px-2 py-1">
+          {language === "th" ? "ยังคิวอยู่" : "Pending"}: <strong>{result.failed}</strong>
+        </span>
+        <span className="rounded-lg border border-red-200 bg-white px-2 py-1">
+          {language === "th" ? "ตาย" : "Dead"}: <strong>{result.dead}</strong>
+        </span>
+        <span className="rounded-lg border border-gray-200 bg-white px-2 py-1">
+          {language === "th" ? "ข้าม (cooldown)" : "Skipped"}: <strong>{result.skipped}</strong>
+        </span>
+      </div>
+      {result.items.some((i) => i.reason) && (
+        <details className="mt-2">
+          <summary className="text-[11px] text-green-700 cursor-pointer">
+            {language === "th" ? "ดูรายละเอียดต่อรายการ" : "Per-row details"}
+          </summary>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-gray-700">
+            {result.items.map((i, idx) => (
+              <li key={`${i.failureId}-${idx}`} className="font-mono">
+                {i.succeeded ? "✓" : i.dead ? "💀" : i.skipped ? "·" : "↻"}{" "}
+                {i.kind} · {i.targetId ?? "—"}
+                {i.reason ? ` · ${i.reason}` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function SyncFailuresTable({
   rows,
   isLoading,
   canRetry,
   retrying,
   resolving,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
   onRetry,
   onResolve,
   onInspect,
@@ -605,11 +960,18 @@ function SyncFailuresTable({
   canRetry: boolean;
   retrying: Set<string>;
   resolving: Set<string>;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleSelectAll: () => void;
   onRetry: (row: SyncFailureRow) => void;
   onResolve: (failureId: string) => void;
   onInspect: (row: SyncFailureRow) => void;
   language: "th" | "en";
 }) {
+  const eligibleVisible = rows.filter((r) => r.status !== "resolved");
+  const allEligibleSelected =
+    eligibleVisible.length > 0 &&
+    eligibleVisible.every((r) => selectedIds.has(r.id));
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
       {isLoading ? (
@@ -627,6 +989,20 @@ function SyncFailuresTable({
           <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="p-3 w-8 text-left">
+                  <input
+                    type="checkbox"
+                    checked={allEligibleSelected}
+                    onChange={onToggleSelectAll}
+                    disabled={!canRetry || eligibleVisible.length === 0}
+                    aria-label={
+                      language === "th"
+                        ? "เลือกทั้งหมดที่มองเห็น"
+                        : "Select all visible"
+                    }
+                    className="w-4 h-4 accent-green-700"
+                  />
+                </th>
                 <th className="text-left p-3">{language === "th" ? "ชนิด" : "Kind"}</th>
                 <th className="text-left p-3">{language === "th" ? "เป้าหมาย" : "Target"}</th>
                 <th className="text-left p-3">{language === "th" ? "สาขา" : "Branch"}</th>
@@ -643,11 +1019,24 @@ function SyncFailuresTable({
                 const isRetrying = retrying.has(row.id);
                 const isResolving = resolving.has(row.id);
                 const disabled = !canRetry || row.status === "resolved";
+                const isSelected = selectedIds.has(row.id);
                 return (
                   <tr
                     key={row.id}
-                    className="border-t border-gray-100 hover:bg-green-50/30 align-top"
+                    className={`border-t border-gray-100 align-top ${
+                      isSelected ? "bg-green-50/60" : "hover:bg-green-50/30"
+                    }`}
                   >
+                    <td className="p-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleSelect(row.id)}
+                        disabled={!canRetry || row.status === "resolved"}
+                        aria-label="select row"
+                        className="w-4 h-4 accent-green-700"
+                      />
+                    </td>
                     <td className="p-3 text-gray-800 font-medium">{kindLabel}</td>
                     <td className="p-3 text-gray-700 font-mono text-[11px] break-all">
                       {row.target_id ?? "—"}

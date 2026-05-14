@@ -248,12 +248,58 @@ Every failure is logged to the Vercel function log via `console.error("[sync-…
 
 ---
 
+## 8b. Front_Desk dedup contract (post-2026-05-14)
+
+Order syncs are now **idempotent by Job ID**. The retry worker plus the manual "ลองใหม่" button on `/admin/recovery` would otherwise create one duplicate row per retry; the dedup contract prevents that.
+
+### 8b.1 Lookup key
+
+Column **B** (Job ID — first 8 chars of `orders.id` upper-cased) is the dedup key. Every order has a deterministic, stable Job ID before the first write, so two writes with the same input produce the same key.
+
+If `orders.job_id` is populated for a Care U order, that's the Job ID; otherwise the writer uses the short refId. The dedup key is whatever lands in column B — `writeOrderRow(input)` reads `input.jobId` directly.
+
+### 8b.2 Lookup → update or append
+
+[`lib/sheetWriters.ts::writeOrderRow`](../lib/sheetWriters.ts) runs this sequence:
+
+1. Call `findRowByColumnValue("Front_Desk", "B", jobId)` in [`lib/googleSheets.ts`](../lib/googleSheets.ts).
+   - `values.get` on `Front_Desk!B:B`.
+   - Row 0 (header) is skipped.
+   - Returns the first 0-indexed row where the trimmed cell equals `jobId`, or `-1`.
+2. If a match is found → call `updateRowValues` with **`preservedColumns: [12, 13, 14]`** so the operator-managed checkboxes in M / N / O are NOT overwritten.
+3. If no match → fall through to the existing `insertFormattedRow` append path (formatting preserved).
+4. The caller observes `mode: "appended" | "updated"` in the result.
+
+### 8b.3 What's preserved on update
+
+| Column | On update | Reason |
+|---|---|---|
+| A Date | overwritten | reflects latest sync timestamp |
+| B Job ID | overwritten (same value) | dedup key itself |
+| C–L Customer / Detail / Price / Status / Urgent | overwritten | reflects latest order row state |
+| **M / N checkboxes** | **preserved** | staff-managed on the sheet |
+| **O Archive** | **preserved** | staff-managed on the sheet |
+
+The accountant's pivot history stays intact; the dropdown / data-validation on M / N stays bound to whatever the sheet template configured.
+
+### 8b.4 Lookup failure fallback
+
+If `findRowByColumnValue` throws (auth glitch, rate limit, sheet renamed), the writer logs `[sheetWriters.writeOrderRow] dedup lookup failed — falling back to append` and proceeds with the normal append path. This keeps single-shot order syncs working; the operational cost is at most one duplicate row in pathological cases, observable in the resulting `mode: "appended"` field.
+
+### 8b.5 Tabs without dedup
+
+`Pricing`, `Expense_Log`, and `Debug` are **append-only by design** — every snapshot adds a fresh row. Dedup applies only to `Front_Desk`.
+
+---
+
 ## 9. Future architecture
 
 | Step | Why |
 |---|---|
 | ~~Switch Front_Desk to `batchUpdate` with `inheritFromBefore`~~ | ✅ Done — all `preserveFormatting: true` tabs use `insertFormattedRow`. |
-| `public.sync_failures` table + cron retry | `logSyncFailure` in [`lib/syncFailures.ts`](../lib/syncFailures.ts) is a stub today — it emits a structured `[sync-failure]` log line. Promote to a DB queue that a scheduled job retries. |
+| ~~`public.sync_failures` table + admin retry UI~~ | ✅ Done — `20260526` shipped the queue; `/admin/recovery` reads it; `lib/retryWorker.ts::runRetryTick` drains it. |
+| ~~Front_Desk dedup on retry~~ | ✅ Done — column B lookup + in-place update (see §8b). |
+| Scheduled cron job that calls `runRetryTick` | Wire Supabase Cron or Vercel Cron to POST `/api/admin/recovery/run-worker` (or call `runRetryTick` directly). Library is ready; cron config is the only missing piece. |
 | Add a "reconcile" job that diffs the DB against the sheet | Catch missed syncs (e.g. orders created during a credential outage). |
 | Per-branch tabs (e.g. `Front_Desk_SLM`, `Front_Desk_C24`) | Cleaner per-branch filtering for accountants. Implementation: tab name read from `branches.short_code`. |
 | Webhook trigger from sheet edits | Accountant edits a payment status in the sheet → server picks it up via Google Apps Script → updates DB. Today this would clobber the DB without warning, so it's gated behind a manual reconcile UI. |
@@ -268,4 +314,4 @@ Every failure is logged to the Vercel function log via `console.error("[sync-…
 
 ---
 
-**Last updated:** 2026-05-13 (sheet preservation refactor — `lib/sheetWriters.ts` + `lib/sheetConfigs.ts` + `insertFormattedRow`)
+**Last updated:** 2026-05-14 (dedup contract — Front_Desk column B lookup, retry worker integration)

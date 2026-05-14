@@ -63,6 +63,8 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/admin/recovery` UI (sync_failures + LINE log + receipt rebuild)** | ✅ all branches | ✅ all branches | ✅ 🏢 own branch | ❌ | ❌ |
 | **Retry sync / resend LINE** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
 | **Mark sync_failures resolved** | ✅ | ✅ | ✅ 🏢 (own branch only — gated via `/api/admin/recovery/resolve`) | ❌ | ❌ |
+| **Bulk resolve via `/api/admin/recovery/bulk-resolve`** | ✅ all | ✅ all | ✅ 🏢 (per-row branch check) | ❌ | ❌ |
+| **Run retry worker via `/api/admin/recovery/run-worker`** | ✅ any/all branches | ✅ any/all branches | ✅ 🏢 (branchCode forced to own) | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -223,4 +225,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (operational recovery phase)
+**Last updated:** 2026-05-14 (retry worker + bulk recovery + sheet dedup phase)
