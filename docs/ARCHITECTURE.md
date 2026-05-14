@@ -1703,6 +1703,81 @@ See [ENGAGEMENT_FEEDBACK_LOOP.md](./ENGAGEMENT_FEEDBACK_LOOP.md).
 
 ---
 
+## 12u. Operator controls + ROI tracking (post-`20260544`)
+
+> Status: **operator-configurable**. Branch managers tune retention thresholds, quiet hours, and channel toggles from `/admin/settings/triggers` without redeploy. Owners hit the emergency stop from `/admin/system/guardrails`. The public quote flow captures UTM + signed `nid`. Orders auto-attribute back to campaigns. Funnel rolls up by channel + branch.
+
+See [OPERATOR_CONTROLS.md](./OPERATOR_CONTROLS.md).
+
+### 12u.1 New tables
+
+- `campaign_funnel_metrics` — per (source_kind, source_id, channel, branch_id, metric_date) counters: delivered / opened / clicked / quote_started / order_created + revenue_thb. Composite PK; no double-counting under repeated calls.
+- `engagement_guardrails` — owner-managed safety layer. 5 seeded keys (`global_emergency_stop`, `max_sends_per_day_global`, `max_sends_per_day_branch`, `max_campaigns_per_week_branch`, `dry_run_required`). Partial unique indexes enforce one global row and one row per branch per key.
+- `quote_requests.utm_*` (source / medium / campaign / branch / channel) + `attributed_notification_id` — public-quote attribution columns.
+- `orders.attribution_source_*` (kind / id / channel) — denormalised campaign reference written by `/api/internal/attribute-order` after Phase 19 attribution succeeds.
+
+### 12u.2 New libraries
+
+- `lib/utm.ts` — `UTM_KEYS`, `buildCampaignUrl({baseUrl, utm, notificationId, ttlMs})` (appends utm_* + HMAC-signed `nid`), `parseUtmParams`, `verifiedNotificationIdFromUrl`, `attributionFromUrl`. Reuses Phase 19's `TRACKING_LINK_SECRET`.
+- `lib/engagementGuardrails.ts` — 60s cached reader. `isEmergencyStopped`, `checkGlobalDailySendCap`, `checkWeeklyCampaignCap`, `checkDryRunRequirement`, `listGuardrails`, `__resetGuardrailsCache`.
+- `lib/campaignFunnel.ts` — `incrementFunnel({sourceKind, sourceId, channel, branchId, stage, revenueThb?})`. Read-then-write pattern with PG row-level locking on the existing-row path. Best-effort + idempotent.
+
+### 12u.3 Worker integration
+
+- `lib/notificationDispatchWorker.ts::runDispatchTick` — emergency-stop check at top; returns skipped result immediately when active.
+- `lib/broadcastSendWorker.ts::processJobTick` — emergency-stop check at top; records `blockedReason="global_emergency_stop=true"` so heartbeat surfaces the cause.
+- `lib/retentionTriggerService.ts::runRetentionTriggerTick` — emergency-stop check at top.
+- `lib/broadcastPolicyService.ts::checkQuietHours(now, branchId)` — now branch-aware. Reads `quiet_hours_enforced` + `start_h` + `end_h` from `branch_trigger_overrides` (Phase 19), falls back to global `feature_flags` (Phase 16), then hard-coded 9–19.
+
+Cache TTL across guardrails + branch overrides is ~60s, so every operator change takes effect within ~60s without redeploy.
+
+### 12u.4 Attribution wiring
+
+- `lib/orderCreate.ts::createSmartOrder` — after every successful insert, calls `attributeOrderBestEffort(orderId, customerId, total, branchId)` which POSTs to `/api/internal/attribute-order`.
+- `POST /api/internal/attribute-order` — wraps Phase 19's `attributeOrderToCampaign`. On success: writes `attribution_source_kind/_id/_channel` to the orders row and calls `incrementFunnel({stage: "order_created", revenueThb})`.
+- `POST /api/public/quote` — reads `body.utm` or parses `body.referrerUrl` via `attributionFromUrl`. Persists 6 attribution columns on the new `quote_requests` row. When the signed `nid` verifies, increments `campaign_funnel_metrics.quote_started_count`.
+
+Funnel write sites today: `quote_started` (public quote), `order_created` (attribute-order). `delivered/opened/clicked` writers from Phase 19's tracking endpoints + Resend webhook are deferred — `incrementFunnel` exists; wiring is a 2-line follow-up per call site.
+
+### 12u.5 Operator UI
+
+- `/admin/settings/triggers` — per-branch override editor. 10 editable keys including the 4 Phase 18/19 thresholds, daily cap, quiet-hours window, `quiet_hours_enforced`, `birthday_trigger_enabled`. Owner / HQ / branch_manager (own-branch only); writes audited to `cron_heartbeat_logs` (cron_name='settings-edit').
+- `/admin/system/guardrails` — owner / HQ only. Big red emergency-stop banner with confirm dialog; per-row editor for each cap; per-branch override selector for branch-aware keys. Writes audited.
+- `/admin/crm/engagement` — extended with **Campaign funnel (30d)** section: 6 top stats + per-channel column + per-branch column. branch_manager sees own-branch funnel only.
+- `/admin` landing — adds 2 new cards: Branch trigger overrides + Engagement guardrails.
+
+### 12u.6 New APIs
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET / POST /api/admin/settings/branch-triggers` | owner / HQ / branch_manager (own-branch write) | List + upsert branch override rows |
+| `GET / POST /api/admin/system/guardrails` | owner / HQ; rate-limit 30 / 10min / IP | List + upsert guardrail rows including emergency stop |
+| `POST /api/internal/attribute-order` | any signed-in operator | Server-side attribution call from `lib/orderCreate.ts` |
+
+### 12u.7 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `branch_trigger_overrides` RLS | role + branch_id | enforced |
+| `engagement_guardrails` RLS | owner/HQ write; all read | enforced |
+| `campaign_funnel_metrics` RLS | role + branch | enforced |
+| `quote_requests.utm_*` | inherits Phase 15 RLS | unchanged |
+| `orders.attribution_source_*` | inherits orders RLS | unchanged |
+| `/api/admin/settings/branch-triggers` | role + `requireBranchAccess` | enforced |
+| `/api/admin/system/guardrails` | owner / HQ | enforced |
+| `checkQuietHours(_, branchId)` | server-only | per-branch resolution |
+| `isEmergencyStopped()` | server-only (cached) | global |
+
+### 12u.8 Known limitations
+
+- Funnel `delivered/opened/clicked` not yet auto-written from Phase 19 tracking endpoints + Resend webhook. Helpers exist; 2-line follow-up per site.
+- Daily / weekly caps not yet enforced at broadcast-send-create. Helpers exist; small follow-up.
+- Emergency stop is global-only for dispatch (per-branch would require per-row checks on every attempt; deferred).
+- `birthday_trigger_enabled` per-branch is read at UI/policy level; retention sweep does not yet consult the override before fetching candidates. 3-line follow-up.
+- UTM links not auto-generated by the broadcast send pipeline — operators wrap target URLs manually.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

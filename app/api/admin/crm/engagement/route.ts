@@ -377,6 +377,119 @@ export async function GET() {
       byChannel: perfByChannel,
       avgLatencyMs: overallAvgLatencyMs,
     },
+    // Phase 20 additions:
+    funnel: await loadFunnelRollup({
+      adminClient: admin,
+      isAll,
+      branchCode,
+      since: since30,
+    }),
     generatedAt: new Date().toISOString(),
   });
+}
+
+async function loadFunnelRollup(opts: {
+  adminClient: NonNullable<ReturnType<typeof getSupabaseAdmin>>;
+  isAll: boolean;
+  branchCode: string | null;
+  since: string;
+}): Promise<{
+  windowDays: number;
+  totals: {
+    delivered: number;
+    opened: number;
+    clicked: number;
+    quoteStarted: number;
+    orderCount: number;
+    revenue: number;
+  };
+  byChannel: Record<
+    string,
+    {
+      delivered: number;
+      opened: number;
+      clicked: number;
+      quoteStarted: number;
+      orderCount: number;
+      revenue: number;
+    }
+  >;
+  byBranch: Record<string, { delivered: number; orderCount: number; revenue: number }>;
+}> {
+  let q = opts.adminClient
+    .from("campaign_funnel_metrics")
+    .select(
+      "channel, branch_id, delivered_count, opened_count, clicked_count, quote_started_count, order_count, revenue_thb"
+    )
+    .gte("metric_date", opts.since.slice(0, 10));
+  if (!opts.isAll && opts.branchCode) q = q.eq("branch_id", opts.branchCode);
+  const res = await q.limit(2000);
+  const rows =
+    res.error || !res.data
+      ? []
+      : (res.data as Array<{
+          channel: string;
+          branch_id: string | null;
+          delivered_count: number;
+          opened_count: number;
+          clicked_count: number;
+          quote_started_count: number;
+          order_count: number;
+          revenue_thb: number | string;
+        }>);
+
+  const byChannel: Record<
+    string,
+    {
+      delivered: number;
+      opened: number;
+      clicked: number;
+      quoteStarted: number;
+      orderCount: number;
+      revenue: number;
+    }
+  > = {};
+  for (const ch of ["sms", "line", "email"]) {
+    byChannel[ch] = {
+      delivered: 0,
+      opened: 0,
+      clicked: 0,
+      quoteStarted: 0,
+      orderCount: 0,
+      revenue: 0,
+    };
+  }
+  const byBranch: Record<
+    string,
+    { delivered: number; orderCount: number; revenue: number }
+  > = {};
+  rows.forEach((r) => {
+    const slot = byChannel[r.channel];
+    if (slot) {
+      slot.delivered += r.delivered_count;
+      slot.opened += r.opened_count;
+      slot.clicked += r.clicked_count;
+      slot.quoteStarted += r.quote_started_count;
+      slot.orderCount += r.order_count;
+      slot.revenue += Number(r.revenue_thb);
+    }
+    const bKey = r.branch_id ?? "(no-branch)";
+    const bSlot = (byBranch[bKey] ??= {
+      delivered: 0,
+      orderCount: 0,
+      revenue: 0,
+    });
+    bSlot.delivered += r.delivered_count;
+    bSlot.orderCount += r.order_count;
+    bSlot.revenue += Number(r.revenue_thb);
+  });
+  const totals = {
+    delivered: rows.reduce((a, r) => a + r.delivered_count, 0),
+    opened: rows.reduce((a, r) => a + r.opened_count, 0),
+    clicked: rows.reduce((a, r) => a + r.clicked_count, 0),
+    quoteStarted: rows.reduce((a, r) => a + r.quote_started_count, 0),
+    orderCount: rows.reduce((a, r) => a + r.order_count, 0),
+    revenue: rows.reduce((a, r) => a + Number(r.revenue_thb), 0),
+  };
+  return { windowDays: 30, totals, byChannel, byBranch };
 }

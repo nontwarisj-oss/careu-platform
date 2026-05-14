@@ -183,6 +183,30 @@ const CARDS: AdminCard[] = [
       "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-6h2v6zm0-8h-2V7h2v4z",
     enabled: true,
   },
+  {
+    href: "/admin/settings/triggers",
+    titleTh: "Branch trigger overrides",
+    titleEn: "Branch trigger overrides",
+    descTh:
+      "ตั้งค่า dormant / at-risk / quiet hours ต่อสาขา — fall back to HQ defaults",
+    descEn:
+      "Per-branch dormant / at-risk / quiet-hour thresholds with HQ fallback.",
+    iconPath:
+      "M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65c-.04-.24-.24-.42-.49-.42h-4c-.24 0-.45.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.04.24.25.42.49.42h4c.24 0 .45-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z",
+    enabled: true,
+  },
+  {
+    href: "/admin/system/guardrails",
+    titleTh: "Engagement guardrails",
+    titleEn: "Engagement guardrails",
+    descTh:
+      "Emergency stop + daily caps + dry-run requirement — Owner / HQ",
+    descEn:
+      "Owner-managed safety layer with emergency stop, daily caps, dry-run requirement.",
+    iconPath:
+      "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

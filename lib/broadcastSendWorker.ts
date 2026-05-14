@@ -55,6 +55,7 @@ import {
   isChannelEnabled,
 } from "@/lib/broadcastPolicyService";
 import { getNumberFlag, FLAG_KEYS } from "@/lib/featureFlags";
+import { isEmergencyStopped } from "@/lib/engagementGuardrails";
 import { renderNotification } from "@/lib/notificationTemplates";
 import { branches as ALL_BRANCHES, getBranchById } from "@/lib/brandConfig";
 
@@ -198,6 +199,14 @@ async function processJobTick(
     });
   };
 
+  // 0. Phase 20: emergency stop — operator panic button halts every
+  //    in-flight broadcast tick before any work happens.
+  if (await isEmergencyStopped()) {
+    attempt.blockedReason = "global_emergency_stop=true";
+    await recordAttempt("global_emergency_stop=true");
+    return attempt;
+  }
+
   // 1. Schedule gate.
   const schedule = await checkSchedule({ scheduledFor: job.scheduled_for });
   if (!schedule.ok) {
@@ -206,8 +215,9 @@ async function processJobTick(
     return attempt;
   }
 
-  // 2. Quiet hours.
-  const quiet = await checkQuietHours();
+  // 2. Quiet hours — branch-aware so per-branch overrides apply.
+  //    Defer (no-op tick + heartbeat reason) instead of failing.
+  const quiet = await checkQuietHours(new Date(), job.branch_id);
   if (!quiet.ok) {
     attempt.blockedReason = quiet.reason;
     await recordAttempt(quiet.reason);

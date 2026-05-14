@@ -28,6 +28,7 @@ import {
 import { pushTextMessage } from "@/lib/lineMessaging";
 import { checkPerCustomerRateLimits } from "@/lib/customerRateLimit";
 import { sendEmail } from "@/lib/channels/email";
+import { isEmergencyStopped } from "@/lib/engagementGuardrails";
 
 // ---------- Safety constants ---------------------------------------------
 
@@ -378,6 +379,32 @@ export async function runDispatchTick(
           skipped: true,
           retryable: false,
           reason: "SUPABASE_SERVICE_ROLE_KEY ยังไม่ตั้งค่า",
+        },
+      ],
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  // Phase 20: emergency stop overrides every individual policy. Halt
+  // the whole dispatch tick when the owner-managed kill switch is on.
+  if (await isEmergencyStopped()) {
+    return {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      dead: 0,
+      skipped: 0,
+      items: [
+        {
+          notificationId: "",
+          channel: "sms",
+          kind: "guardrail",
+          succeeded: false,
+          dead: false,
+          skipped: true,
+          retryable: false,
+          reason: "global_emergency_stop=true",
         },
       ],
       startedAt,

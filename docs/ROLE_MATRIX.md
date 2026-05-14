@@ -120,6 +120,14 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`branch_trigger_overrides` table** | ✅ | ✅ | ✅ 🏢 own branch | ❌ | ❌ |
 | **`customer_branch_unsubscribes` table (admin read)** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
 | **`/admin/crm/triggers` UI + `/api/admin/crm/triggers`** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **`/admin/settings/triggers` UI** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
+| **`GET/POST /api/admin/settings/branch-triggers`** | ✅ all | ✅ all | ✅ 🏢 (own-branch write only) | ❌ | ❌ |
+| **`/admin/system/guardrails` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`GET/POST /api/admin/system/guardrails` (engagement_guardrails CRUD + emergency stop)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`engagement_guardrails` table read** | ✅ | ✅ | 👁 (read all rows — read-only at UI layer) | ❌ | ❌ |
+| **`engagement_guardrails` write** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`campaign_funnel_metrics` table read** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
+| **`POST /api/internal/attribute-order`** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ✅ 🏢 |
 | **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
 | **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
 | **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
@@ -307,7 +315,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-13 | Initial 5-role matrix established. | 4805d3b |
 | 2026-05-14 | Added `admin` page key. `/admin` + `/admin/staff` UI surfaces owner / hq_admin staff management (role, branch, active, wage, skills). Sidebar grouped Operations / Finance / Management. | — |
 | 2026-05-14 | Added `recovery` page key. `/admin/recovery` UI gives owner / hq_admin (all branches) + branch_manager (own branch) sync_failures + LINE log visibility, with retry / resend / resolve / receipt-rebuild actions. Migration `20260528` adds branch-scoped read on `sync_failures` and extends `kind` CHECK with `'line_send'` + `'receipt_rebuild'`. | — |
+| 2026-05-14 | Phase 20 — operator controls. Added `/admin/settings/triggers` (branch_manager own-branch write), `/admin/system/guardrails` (owner/HQ + emergency stop), `engagement_guardrails` + `campaign_funnel_metrics` tables, and `/api/internal/attribute-order` for server-side campaign attribution. Migration `20260544`. | — |
 
 ---
 
-**Last updated:** 2026-05-14 (customer portal + uploads + CRM progression)
+**Last updated:** 2026-05-14 (Phase 20 — operator-configurable engagement controls)

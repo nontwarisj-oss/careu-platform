@@ -31,6 +31,7 @@ import { checkQuietHours } from "@/lib/broadcastPolicyService";
 import { renderTemplate, type TemplateRow } from "@/lib/emailTemplateService";
 import { branches as ALL_BRANCHES, getBranchById } from "@/lib/brandConfig";
 import { resolveNumber } from "@/lib/branchTriggerOverrides";
+import { isEmergencyStopped } from "@/lib/engagementGuardrails";
 
 // ---------- Tunables ----------------------------------------------------
 
@@ -131,8 +132,21 @@ export async function runRetentionTriggerTick(
     };
   }
 
+  // Phase 20: emergency stop wins outright. Operator owners can
+  // freeze every outbound path with one toggle.
+  if (await isEmergencyStopped()) {
+    return {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      perKind,
+      blockedReason: "global_emergency_stop=true",
+    };
+  }
+
   // Quiet hours: if outside the window, this tick is a no-op. The
-  // cron records the reason via heartbeat.
+  // cron records the reason via heartbeat. (Retention sweep is
+  // global-scope; for per-branch quiet hours, the dispatch worker
+  // re-checks per row.)
   const quiet = await checkQuietHours();
   if (!quiet.ok) {
     return {

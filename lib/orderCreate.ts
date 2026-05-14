@@ -161,6 +161,45 @@ async function writeAuditCreated(
 }
 
 /**
+ * Phase 20: attribute this fresh order to the customer's most recent
+ * campaign send (if any). Best-effort — failures must NEVER block
+ * order creation. Denormalises the campaign source onto the orders
+ * row so future queries don't always need to join
+ * campaign_response_metrics.
+ *
+ * Called via POST to /api/internal/attribute-order from the server-
+ * only side. We use HTTP rather than a direct import because
+ * orderCreate runs in a browser-attached supabase context (anon key)
+ * — the attribution library needs the admin client.
+ */
+async function attributeOrderBestEffort(
+  orderId: string,
+  customerId: string | null,
+  orderValue: number,
+  branchId: string | null
+): Promise<void> {
+  if (!customerId) return;
+  try {
+    await fetch("/api/internal/attribute-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orderId,
+        customerId,
+        orderValue,
+        branchId,
+      }),
+    });
+  } catch (err) {
+    // Best-effort. Attribution failures must never propagate.
+    console.warn(
+      "[orderCreate] attribution call failed",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+/**
  * Insert a smart order with progressive fallback so the form keeps working
  * across migration states:
  *   v4 = job_id + created_by (20260520)
@@ -236,21 +275,45 @@ export async function createSmartOrder(
     };
   }
   if (!isMissingColumn(result.error ?? undefined)) {
-    if (result.orderId) await writeAuditCreated(result.orderId, jobId, input.createdBy);
+    if (result.orderId) {
+      await writeAuditCreated(result.orderId, jobId, input.createdBy);
+      void attributeOrderBestEffort(
+        result.orderId,
+        input.customerId,
+        input.total,
+        input.branchId
+      );
+    }
     return { ...result, jobId };
   }
 
   // Tier 3 — full smart schema (no job_id)
   result = await attempt(v3);
   if (!isMissingColumn(result.error ?? undefined)) {
-    if (result.orderId) await writeAuditCreated(result.orderId, null, input.createdBy);
+    if (result.orderId) {
+      await writeAuditCreated(result.orderId, null, input.createdBy);
+      void attributeOrderBestEffort(
+        result.orderId,
+        input.customerId,
+        input.total,
+        input.branchId
+      );
+    }
     return { ...result, jobId: null };
   }
 
   // Tier 2 — intake-extension schema
   result = await attempt(v2);
   if (!isMissingColumn(result.error ?? undefined)) {
-    if (result.orderId) await writeAuditCreated(result.orderId, null, input.createdBy);
+    if (result.orderId) {
+      await writeAuditCreated(result.orderId, null, input.createdBy);
+      void attributeOrderBestEffort(
+        result.orderId,
+        input.customerId,
+        input.total,
+        input.branchId
+      );
+    }
     return { ...result, jobId: null };
   }
 
@@ -260,6 +323,14 @@ export async function createSmartOrder(
     item_name: itemNameBase + (input.urgent ? " [ด่วน]" : ""),
   };
   const final = await attempt(legacyWithUrgent);
-  if (final.orderId) await writeAuditCreated(final.orderId, null, input.createdBy);
+  if (final.orderId) {
+    await writeAuditCreated(final.orderId, null, input.createdBy);
+    void attributeOrderBestEffort(
+      final.orderId,
+      input.customerId,
+      input.total,
+      input.branchId
+    );
+  }
   return { ...final, jobId: null };
 }

@@ -65,6 +65,32 @@ type Snapshot = {
     byChannel: Record<string, ChannelPerf>;
     avgLatencyMs: number | null;
   };
+  funnel?: {
+    windowDays: number;
+    totals: {
+      delivered: number;
+      opened: number;
+      clicked: number;
+      quoteStarted: number;
+      orderCount: number;
+      revenue: number;
+    };
+    byChannel: Record<
+      string,
+      {
+        delivered: number;
+        opened: number;
+        clicked: number;
+        quoteStarted: number;
+        orderCount: number;
+        revenue: number;
+      }
+    >;
+    byBranch: Record<
+      string,
+      { delivered: number; orderCount: number; revenue: number }
+    >;
+  };
   generatedAt: string;
 };
 
@@ -365,6 +391,98 @@ function Inner() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </section>
+        )}
+
+        {data.funnel && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-base font-bold text-gray-900">
+              Campaign funnel ({data.funnel.windowDays}d)
+            </h2>
+            <p className="mt-1 text-[11px] text-gray-500">
+              delivered → opened → clicked → quote started → order placed
+              · attributed revenue
+            </p>
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-6 gap-2">
+              <Stat
+                label="Delivered"
+                value={data.funnel.totals.delivered.toLocaleString()}
+              />
+              <Stat
+                label="Opened"
+                value={data.funnel.totals.opened.toLocaleString()}
+              />
+              <Stat
+                label="Clicked"
+                value={data.funnel.totals.clicked.toLocaleString()}
+              />
+              <Stat
+                label="Quote started"
+                value={data.funnel.totals.quoteStarted.toLocaleString()}
+              />
+              <Stat
+                label="Orders"
+                value={data.funnel.totals.orderCount.toLocaleString()}
+                tone="green"
+              />
+              <Stat
+                label="Revenue"
+                value={`฿${Math.round(data.funnel.totals.revenue).toLocaleString()}`}
+                tone="green"
+              />
+            </div>
+
+            <div className="mt-4 grid sm:grid-cols-2 gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-1">
+                  By channel
+                </p>
+                <div className="space-y-1">
+                  {Object.entries(data.funnel.byChannel).map(([ch, f]) => (
+                    <div
+                      key={ch}
+                      className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold">
+                          {ch.toUpperCase()}
+                        </span>
+                        <span className="text-green-700">
+                          ฿{Math.round(f.revenue).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-600">
+                        {f.delivered} delivered · {f.clicked} click ·{" "}
+                        {f.quoteStarted} quote · {f.orderCount} order
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mb-1">
+                  By branch
+                </p>
+                <div className="space-y-1">
+                  {Object.entries(data.funnel.byBranch).map(([b, f]) => (
+                    <div
+                      key={b}
+                      className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono">{b}</span>
+                        <span className="text-green-700">
+                          ฿{Math.round(f.revenue).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-600">
+                        {f.delivered} delivered · {f.orderCount} order
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </section>
         )}

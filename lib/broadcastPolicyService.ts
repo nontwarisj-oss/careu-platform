@@ -28,6 +28,10 @@ import {
   getNumberFlag,
   FLAG_KEYS,
 } from "@/lib/featureFlags";
+import {
+  resolveBoolean,
+  resolveNumber,
+} from "@/lib/branchTriggerOverrides";
 
 // ---------- Quiet hours --------------------------------------------------
 
@@ -61,19 +65,47 @@ export type QuietHoursCheck =
 
 /**
  * "Are we within the allowed broadcast window right now?" Used by
- * the broadcast send worker before each tick. The check uses
- * feature-flag values so an operator can widen / tighten the window
- * without a redeploy.
+ * the broadcast send worker before each tick AND by the retention
+ * trigger sweep + lifecycle notifier.
  *
- * The default window is 09:00 → 19:00 Bangkok (inclusive start,
- * exclusive end). A start=9 end=19 means "9, 10, …, 18" are allowed
- * hours.
+ * Resolution order:
+ *   1. Per-branch row in `branch_trigger_overrides`
+ *      (quiet_hours_start_h / quiet_hours_end_h / quiet_hours_enforced).
+ *   2. Global feature_flags row.
+ *   3. Hard-coded fallback (9 → 19).
+ *
+ * `quiet_hours_enforced=false` (per-branch only) bypasses the gate
+ * — a 24/7 emergency-response branch wouldn't sit idle at 4 AM.
+ *
+ * Returns `ok=true` to allow the send. The reason field on `ok=false`
+ * is a sentence the trigger / dispatch surfaces in dispatch_log so
+ * operators can see "deferred 02:13 — outside quiet hours" in the
+ * dashboard.
  */
 export async function checkQuietHours(
-  now: Date = new Date()
+  now: Date = new Date(),
+  branchId: string | null = null
 ): Promise<QuietHoursCheck> {
-  const startH = await getNumberFlag(FLAG_KEYS.BROADCAST_QUIET_HOURS_START_H);
-  const endH = await getNumberFlag(FLAG_KEYS.BROADCAST_QUIET_HOURS_END_H);
+  // Branch can opt OUT of quiet hours entirely. Default true.
+  const enforced = await resolveBoolean({
+    branchId,
+    key: "quiet_hours_enforced",
+    fallback: true,
+  });
+  if (!enforced) return { ok: true };
+
+  // Branch row → global flag → hard-coded default (resolveNumber
+  // already chains DEFAULTS for us).
+  const startH = await resolveNumber({
+    branchId,
+    key: "quiet_hours_start_h",
+    fallback: await getNumberFlag(FLAG_KEYS.BROADCAST_QUIET_HOURS_START_H),
+  });
+  const endH = await resolveNumber({
+    branchId,
+    key: "quiet_hours_end_h",
+    fallback: await getNumberFlag(FLAG_KEYS.BROADCAST_QUIET_HOURS_END_H),
+  });
   const hour = bangkokHour(now);
   if (hour >= startH && hour < endH) {
     return { ok: true };

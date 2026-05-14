@@ -22,6 +22,8 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { callerIp, rateLimit } from "@/lib/rateLimit";
 import { normalizePhone } from "@/lib/phone";
+import { attributionFromUrl, type UtmParams } from "@/lib/utm";
+import { incrementFunnel } from "@/lib/campaignFunnel";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,6 +37,12 @@ type Body = {
   serviceCategory?: string | null;
   notes?: string;
   photos?: string[];
+  /** Phase 20: UTM + signed nid passed from the campaign-landing URL.
+   *  When the customer lands on /quote?utm_source=...&nid=... the
+   *  client can either pass them verbatim or send the full
+   *  `referrerUrl` and we parse server-side. */
+  utm?: UtmParams;
+  referrerUrl?: string;
 };
 
 const ALLOWED_CONTACT = new Set(["phone", "line", "email", "any"]);
@@ -122,6 +130,14 @@ export async function POST(req: Request) {
     }
   }
 
+  // Phase 20: resolve attribution. The client either supplied `utm`
+  // directly OR passed `referrerUrl` and we parse server-side. The
+  // signed `nid` token is verified — only valid notification ids
+  // become attributedNotificationId.
+  const attrib = body.referrerUrl
+    ? attributionFromUrl(body.referrerUrl)
+    : { utm: body.utm ?? {}, notificationId: null };
+
   const insertRes = await admin
     .from("quote_requests")
     .insert({
@@ -134,6 +150,12 @@ export async function POST(req: Request) {
       notes: notes || null,
       photos,
       status: "new",
+      utm_source: attrib.utm.utm_source ?? null,
+      utm_medium: attrib.utm.utm_medium ?? null,
+      utm_campaign: attrib.utm.utm_campaign ?? null,
+      utm_branch: attrib.utm.utm_branch ?? null,
+      utm_channel: attrib.utm.utm_channel ?? null,
+      attributed_notification_id: attrib.notificationId,
     })
     .select("id, created_at")
     .single();
@@ -171,6 +193,59 @@ export async function POST(req: Request) {
       "[public-quote] activity insert failed:",
       err instanceof Error ? err.message : String(err)
     );
+  }
+
+  // Phase 20: when we have a verified notification id, increment the
+  // quote_started funnel counter for the originating campaign. Best-
+  // effort — failures don't block the submission.
+  if (attrib.notificationId) {
+    try {
+      const notif = await admin
+        .from("customer_notifications")
+        .select("kind, channel, branch_id, payload")
+        .eq("id", attrib.notificationId)
+        .maybeSingle();
+      const n = notif.data as
+        | {
+            kind: string;
+            channel: string;
+            branch_id: string | null;
+            payload: Record<string, unknown>;
+          }
+        | null;
+      if (n) {
+        let sourceKind: "broadcast_send_job" | "retention_trigger" | null =
+          null;
+        let sourceId: string | null = null;
+        if (n.kind === "broadcast") {
+          sourceKind = "broadcast_send_job";
+          sourceId =
+            typeof n.payload?.broadcastJobId === "string"
+              ? (n.payload.broadcastJobId as string)
+              : null;
+        } else if (n.kind === "retention") {
+          sourceKind = "retention_trigger";
+          // Look up the retention job for this notification.
+          const trigger = await admin
+            .from("retention_trigger_jobs")
+            .select("id")
+            .eq("notification_id", attrib.notificationId)
+            .maybeSingle();
+          sourceId = (trigger.data as { id: string } | null)?.id ?? null;
+        }
+        if (sourceKind && sourceId) {
+          await incrementFunnel({
+            sourceKind,
+            sourceId,
+            channel: n.channel,
+            branchId: n.branch_id ?? branchCode,
+            stage: "quote_started",
+          });
+        }
+      }
+    } catch {
+      // best-effort
+    }
   }
 
   return NextResponse.json({
