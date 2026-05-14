@@ -431,6 +431,61 @@ export async function bulkResolveSyncFailures(
   }
 }
 
+// ---------- Worker heartbeat (read-only) ---------------------------------
+
+export type WorkerRunRow = {
+  id: string;
+  worker_kind: string;
+  actor_id: string | null;
+  branch_code: string | null;
+  started_at: string;
+  finished_at: string;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  dead: number;
+  skipped: number;
+  created_at: string;
+};
+
+/**
+ * Read the most recent worker_runs row matching the filter. Used by
+ * /admin/recovery to show "last cron tick" / "last manual run". RLS on
+ * worker_runs scopes to owner / hq_admin only; branch_manager gets [].
+ */
+export async function fetchLastWorkerRun(
+  filter: { actorId?: string | null; workerKind?: string } = {}
+): Promise<WorkerRunRow | null> {
+  let q = supabase
+    .from("worker_runs")
+    .select(
+      "id, worker_kind, actor_id, branch_code, started_at, finished_at, processed, succeeded, failed, dead, skipped, created_at"
+    )
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (filter.workerKind) q = q.eq("worker_kind", filter.workerKind);
+  if (filter.actorId !== undefined && filter.actorId !== null) {
+    q = q.eq("actor_id", filter.actorId);
+  }
+
+  const { data, error } = await q;
+  if (error || !data || data.length === 0) return null;
+  return data[0] as WorkerRunRow;
+}
+
+/** Count of sync_failures rows in `status='dead'`. Returns 0 on error. */
+export async function countDeadFailures(branchCode?: string | null): Promise<number> {
+  let q = supabase
+    .from("sync_failures")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "dead");
+  if (branchCode) q = q.eq("branch_id", branchCode);
+  const { count, error } = await q;
+  if (error) return 0;
+  return count ?? 0;
+}
+
 // ---------- KPI rebuild (placeholder) ------------------------------------
 
 /**

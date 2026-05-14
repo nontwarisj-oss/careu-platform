@@ -189,6 +189,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260526_operational_hardening.sql` | `sync_failures` durable queue + RLS; `expense_audit_log` + trigger; `order_audit_log.action` enum extended (+ assigned, receipt_regenerated, sync_failed); `orders` NOT VALID CHECK constraints (status / payment_status / quantity / non-negative numerics); `validate_order_assignment` trigger (rejects inactive-tech + cross-branch); search indexes (orders.customer_name lower, orders(branch_id,status,created_at desc), pg_trgm GIN on customers.name + normalized_name) |
 | `20260527_line_oa_foundation.sql` | `customer_line_links` (line_user_id ↔ customer_id + per-kind prefs + consent); `line_message_log` (every send attempt); `branch_line_configs` (per-branch channel token, env fallback); RLS on all three |
 | `20260528_recovery_foundation.sql` | `sync_failures.kind` CHECK extended with `'line_send'` + `'receipt_rebuild'`; `sync_failures_branch_read` RLS policy so branch_manager sees own-branch failures in `/admin/recovery` |
+| `20260529_cron_and_line_follow.sql` | `worker_runs` heartbeat table (one row per retry-tick — cron or manual); `line_follow_events` audit table (every LINE webhook event, signature_verified flag, consented_at for verified follows); admin-read RLS on both |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -590,9 +591,28 @@ The worker ships **as a library + manual trigger**. Cron is intentionally not wi
 
 `POST /api/admin/recovery/bulk-resolve` is the sibling endpoint. Takes `failureIds: string[]` (≤100), per-row branch check (managers refused on foreign-branch rows), stamps every successful row with a shared `bulkActionId` in `payload.jsonb` for grouping.
 
-#### Future cron entry point
+#### Cron entry point (post-2026-05-14)
 
-`runRetryTick({ actorId: 'cron' })` is the public function a Supabase Cron or Vercel Cron job calls. No HTTP / route layer needed for that path — the schedule honors the cooldown on its own. Cron config is the only missing piece this phase did not ship.
+`GET / POST /api/cron/retry-worker` is the scheduled trigger. Auth shape: bearer token equal to `CRON_SECRET`. Vercel Cron sends that header automatically when `CRON_SECRET` is defined; Supabase Cron is configured the same way (see `app/api/cron/retry-worker/route.ts` header comment for the SQL).
+
+The route calls `runRetryTick({ actorId: 'cron', limit })` and returns the per-row summary. The worker writes one `public.worker_runs` row per tick (heartbeat) — `/admin/recovery` reads the most recent `actor_id='cron'` row to render "Last cron tick: 3m ago".
+
+#### Per-kind retry policy
+
+`lib/retryPolicy.ts` is the single source of truth. The worker reads `getRetryPolicy(row.kind)` and obeys:
+
+| kind | autoRetry | maxAttempts | cooldown |
+|---|---|---|---|
+| `order_to_sheet` | ✅ | 10 | 30 s |
+| `line_send` | ✅ | 3 | 300 s |
+| `receipt_rebuild` | ✅ | 3 | 60 s |
+| `pricing_to_sheet` | ❌ | — | — |
+| `customer_from_sheet` | ❌ | — | — |
+| `expense_from_sheet` | ❌ | — | — |
+| `debug_to_sheet` | ❌ | — | — |
+| unknown | ❌ (safe default) | 3 | 300 s |
+
+The admin panel surfaces this exact table inside the "Auto-retry status" expandable section on `/admin/recovery`. Operators can verify behaviour without reading code.
 
 ---
 
@@ -612,6 +632,52 @@ Front_Desk orders are now idempotent — the retry worker and any manual "ลอ
 4. Lookup failures (auth glitch, rate limit) log a warning and fall back to append — single-shot syncs keep working.
 
 Tabs that are append-only by design (`Pricing`, `Expense_Log`, `Debug`) skip dedup entirely. See [GOOGLE_SHEET_SYNC.md §8b](./GOOGLE_SHEET_SYNC.md) for the full contract.
+
+---
+
+## 12f. LINE follow webhook foundation (post-`20260529`)
+
+> Status: **webhook receive path live**. Customer linker UI deferred — once an admin pairs a `line_user_id` with a real customer row, the existing send orchestrator picks up the link automatically.
+
+```
+LINE platform → POST /api/line/webhook
+                  ▲
+                  │ x-line-signature: base64(HMAC-SHA256(LINE_CHANNEL_SECRET, raw))
+                  ▼
+           lib/lineWebhook.ts
+             • verifyLineSignature(raw, header)  — constant-time compare
+             • processLineWebhookBody(parsed, verified)
+                 ↓
+     Always:  INSERT line_follow_events  (audit row, signature_verified=true/false)
+                 ↓ (when verified + line_user_id present)
+     follow:  UPSERT customer_line_links (customer_id=NULL, consented_at=now())
+     unfollow: UPDATE customer_line_links SET unsubscribed_at=now()
+     message / other: audit only, no state change
+```
+
+### 12f.1 Why customer_line_links uses `customer_id=NULL` at first
+
+The webhook can't tell which customer just followed the OA — LINE only gives us the opaque `line_user_id`. The follow row is created upfront so a future admin linker UI can pair it with a real customer record (typically by asking the customer to type their phone in a LINE message and matching against `public.customers`). Until that pairing happens:
+- `lib/lineDelivery.ts` looks up by `customer_id` — unmapped follows return nothing — so no message ever fires to an unknown account.
+- The unique index `customer_line_links_line_user_id_uniq` keeps duplicate follows from creating duplicate rows.
+
+### 12f.2 Why the route always returns 200
+
+LINE's webhook contract disables a channel that repeatedly returns 4xx/5xx. Signature failures, unparseable JSON, and processor errors all return 200 — but the failure is captured in `line_follow_events` with `signature_verified=false` (or the response body contains `ok: false, reason: ...`). Admin postmortem reads the audit table; LINE keeps delivering.
+
+### 12f.3 Env vars
+
+| Env var | Purpose | Behaviour when unset |
+|---|---|---|
+| `LINE_CHANNEL_SECRET` | HMAC key for signature verification | Every event records `signature_verified=false`; customer_line_links is never touched. Audit-only mode. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Webhook writes | Processor returns `{ ok: false, reason: "SERVICE_ROLE_KEY ..." }` and skips writes. |
+
+### 12f.4 Console setup
+
+LINE Developer Console → channel settings:
+1. Webhook URL: `https://<deploy>/api/line/webhook`
+2. "Use webhook" → enabled.
+3. Press "Verify" — should return 200 (route's GET handler answers with a small JSON ack).
 
 ---
 
@@ -697,6 +763,8 @@ app/
 ├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
 ├── api/admin/recovery/bulk-resolve/route.ts  ← Bulk resolve (≤100 ids)
 ├── api/admin/recovery/run-worker/route.ts    ← Manual retry-worker trigger
+├── api/cron/retry-worker/route.ts            ← Scheduled retry-worker (CRON_SECRET)
+├── api/line/webhook/route.ts                 ← LINE follow / unfollow webhook
 ├── customers/page.tsx
 ├── expenses/page.tsx
 ├── intake/page.tsx                     ← walk-in counterpart of /orders
@@ -755,7 +823,9 @@ lib/
 ├── staffService.ts   ← /admin/staff data layer (fetch profiles, upsert technician_profiles)
 ├── statusBadges.ts   ← canonical status / payment / sync vocabulary (labels + colours)
 ├── orderSheetSync.ts ← syncOrderToSheetCore (route + worker share this)
-└── retryWorker.ts    ← runRetryTick + retryFailureItem + safety limits
+├── retryWorker.ts    ← runRetryTick + retryFailureItem + worker_runs heartbeat
+├── retryPolicy.ts    ← per-kind RETRY_POLICIES map + getRetryPolicy helper
+└── lineWebhook.ts    ← verifyLineSignature + processLineWebhookBody
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -781,4 +851,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (retry worker + bulk recovery + sheet dedup — `lib/retryWorker.ts`, bulk-resolve / run-worker routes, Front_Desk dedup)
+**Last updated:** 2026-05-14 (cron + per-kind retry policy + LINE follow webhook — `/api/cron/retry-worker`, `lib/retryPolicy.ts`, `/api/line/webhook`, `20260529` migration)

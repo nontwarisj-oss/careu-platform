@@ -299,7 +299,8 @@ If `findRowByColumnValue` throws (auth glitch, rate limit, sheet renamed), the w
 | ~~Switch Front_Desk to `batchUpdate` with `inheritFromBefore`~~ | ✅ Done — all `preserveFormatting: true` tabs use `insertFormattedRow`. |
 | ~~`public.sync_failures` table + admin retry UI~~ | ✅ Done — `20260526` shipped the queue; `/admin/recovery` reads it; `lib/retryWorker.ts::runRetryTick` drains it. |
 | ~~Front_Desk dedup on retry~~ | ✅ Done — column B lookup + in-place update (see §8b). |
-| Scheduled cron job that calls `runRetryTick` | Wire Supabase Cron or Vercel Cron to POST `/api/admin/recovery/run-worker` (or call `runRetryTick` directly). Library is ready; cron config is the only missing piece. |
+| ~~Scheduled cron job that calls `runRetryTick`~~ | ✅ Done — `GET / POST /api/cron/retry-worker` (Bearer `CRON_SECRET`). Vercel Cron / Supabase Cron config in route header comment. Per-kind policy in [`lib/retryPolicy.ts`](../lib/retryPolicy.ts) (order_to_sheet: 10 attempts × 30s; line_send: 3 × 300s; receipt_rebuild: 3 × 60s). |
+| Reconcile job that diffs the DB against the sheet | Catch missed syncs (e.g. orders created during a credential outage). Lower priority now that cron + dedup combine to make retries near-free. |
 | Add a "reconcile" job that diffs the DB against the sheet | Catch missed syncs (e.g. orders created during a credential outage). |
 | Per-branch tabs (e.g. `Front_Desk_SLM`, `Front_Desk_C24`) | Cleaner per-branch filtering for accountants. Implementation: tab name read from `branches.short_code`. |
 | Webhook trigger from sheet edits | Accountant edits a payment status in the sheet → server picks it up via Google Apps Script → updates DB. Today this would clobber the DB without warning, so it's gated behind a manual reconcile UI. |
@@ -314,4 +315,4 @@ If `findRowByColumnValue` throws (auth glitch, rate limit, sheet renamed), the w
 
 ---
 
-**Last updated:** 2026-05-14 (dedup contract — Front_Desk column B lookup, retry worker integration)
+**Last updated:** 2026-05-14 (cron retry job wired — `/api/cron/retry-worker` + `CRON_SECRET`)

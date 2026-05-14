@@ -11,6 +11,8 @@ import { canSeeFinancials, canViewAllBranches } from "@/lib/permissions";
 import { fetchBranchOptions, type BranchOption } from "@/lib/staffService";
 import {
   bulkResolveSyncFailures,
+  countDeadFailures,
+  fetchLastWorkerRun,
   listFailedSyncs,
   listLineMessageLog,
   rebuildReceiptData,
@@ -21,7 +23,9 @@ import {
   type LineMessageLogRow,
   type RetryTickResult,
   type SyncFailureRow,
+  type WorkerRunRow,
 } from "@/lib/recoveryService";
+import { RETRY_POLICIES, type RetryPolicy } from "@/lib/retryPolicy";
 import type { ReceiptData } from "@/lib/receiptData";
 
 type Tab = "sync" | "line" | "receipt";
@@ -152,6 +156,11 @@ function RecoveryInner() {
   const [rebuiltReceipt, setRebuiltReceipt] = useState<ReceiptData | null>(null);
   const [rebuildError, setRebuildError] = useState<string | null>(null);
 
+  // Auto-retry visibility — last cron run, last manual run, dead count.
+  const [lastCronRun, setLastCronRun] = useState<WorkerRunRow | null>(null);
+  const [lastManualRun, setLastManualRun] = useState<WorkerRunRow | null>(null);
+  const [deadCount, setDeadCount] = useState(0);
+
   const load = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -159,21 +168,34 @@ function RecoveryInner() {
       branchFilter === "all"
         ? null
         : branches.find((b) => b.id === branchFilter)?.code ?? null;
-    const [syncResult, lineResult] = await Promise.all([
-      listFailedSyncs({
-        status: syncStatusFilter === "all" ? undefined : syncStatusFilter,
-        kind: syncKindFilter === "all" ? undefined : syncKindFilter,
-        branchCode,
-        limit: 100,
-      }),
-      listLineMessageLog({
-        status: lineStatusFilter === "all" ? undefined : lineStatusFilter,
-        branchCode,
-        limit: 100,
-      }),
-    ]);
+    const [syncResult, lineResult, cron, manualNonCron, deads] =
+      await Promise.all([
+        listFailedSyncs({
+          status: syncStatusFilter === "all" ? undefined : syncStatusFilter,
+          kind: syncKindFilter === "all" ? undefined : syncKindFilter,
+          branchCode,
+          limit: 100,
+        }),
+        listLineMessageLog({
+          status: lineStatusFilter === "all" ? undefined : lineStatusFilter,
+          branchCode,
+          limit: 100,
+        }),
+        fetchLastWorkerRun({ workerKind: "retry_tick", actorId: "cron" }),
+        fetchLastWorkerRun({ workerKind: "retry_tick" }),
+        countDeadFailures(branchCode),
+      ]);
     setSyncRows(syncResult);
     setLineRows(lineResult);
+    setLastCronRun(cron);
+    // "Last manual run" = the most recent worker_run whose actor isn't 'cron'.
+    // We don't have an easy DB-side `actor_id != 'cron'` shortcut without
+    // touching the service layer, so just pick the latest tick and
+    // disambiguate client-side.
+    setLastManualRun(
+      manualNonCron && manualNonCron.actor_id !== "cron" ? manualNonCron : null
+    );
+    setDeadCount(deads);
     setIsLoading(false);
   }, [syncStatusFilter, syncKindFilter, lineStatusFilter, branchFilter, branches]);
 
@@ -482,6 +504,13 @@ function RecoveryInner() {
           tone="gray"
         />
       </div>
+
+      <AutoRetryPanel
+        language={language}
+        lastCronRun={lastCronRun}
+        lastManualRun={lastManualRun}
+        deadCount={deadCount}
+      />
 
       {message && (
         <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-start justify-between gap-3">
@@ -804,6 +833,163 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+function AutoRetryPanel({
+  language,
+  lastCronRun,
+  lastManualRun,
+  deadCount,
+}: {
+  language: "th" | "en";
+  lastCronRun: WorkerRunRow | null;
+  lastManualRun: WorkerRunRow | null;
+  deadCount: number;
+}) {
+  const formatAge = (iso: string | null): string => {
+    if (!iso) return language === "th" ? "ยังไม่เคย" : "never";
+    const ageMs = Date.now() - new Date(iso).getTime();
+    if (ageMs < 0) return new Date(iso).toLocaleString("th-TH");
+    const mins = Math.floor(ageMs / 60000);
+    if (mins < 1) return language === "th" ? "เมื่อสักครู่" : "just now";
+    if (mins < 60) return language === "th" ? `${mins} นาทีที่แล้ว` : `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return language === "th" ? `${hours} ชั่วโมงที่แล้ว` : `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return language === "th" ? `${days} วันที่แล้ว` : `${days}d ago`;
+  };
+
+  const summarise = (run: WorkerRunRow | null): string => {
+    if (!run) return "—";
+    return language === "th"
+      ? `สำเร็จ ${run.succeeded} • ล้มเหลว ${run.failed} • ตาย ${run.dead} • ข้าม ${run.skipped} (จาก ${run.processed} รายการ)`
+      : `ok ${run.succeeded} • fail ${run.failed} • dead ${run.dead} • skip ${run.skipped} (of ${run.processed})`;
+  };
+
+  const policyEntries = Object.entries(RETRY_POLICIES) as Array<
+    [string, RetryPolicy]
+  >;
+
+  return (
+    <details className="mb-4 rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-800 flex items-center justify-between gap-3">
+        <span>
+          {language === "th" ? "ระบบ retry อัตโนมัติ" : "Auto-retry status"}
+        </span>
+        <span className="text-xs font-normal text-gray-500">
+          {lastCronRun
+            ? language === "th"
+              ? `cron: ${formatAge(lastCronRun.finished_at)}`
+              : `cron: ${formatAge(lastCronRun.finished_at)}`
+            : language === "th"
+            ? "cron: ยังไม่เคยทำงาน"
+            : "cron: never run"}
+          {deadCount > 0 && (
+            <span className="ml-2 inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-800">
+              {language === "th" ? `ตาย ${deadCount}` : `dead ${deadCount}`}
+            </span>
+          )}
+        </span>
+      </summary>
+      <div className="border-t border-gray-100 p-4 space-y-4 text-sm">
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
+            <p className="text-[11px] uppercase tracking-widest text-blue-700 font-semibold">
+              {language === "th" ? "cron ล่าสุด" : "Last cron tick"}
+            </p>
+            <p className="mt-1 font-medium text-blue-900">
+              {lastCronRun
+                ? `${formatAge(lastCronRun.finished_at)} (${new Date(
+                    lastCronRun.finished_at
+                  ).toLocaleString("th-TH", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })})`
+                : language === "th"
+                ? "ยังไม่เคยทำงาน — ตั้ง CRON_SECRET + Vercel/Supabase Cron"
+                : "Never run — set CRON_SECRET + Vercel/Supabase Cron"}
+            </p>
+            <p className="text-[11px] text-blue-700 mt-1">
+              {summarise(lastCronRun)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+            <p className="text-[11px] uppercase tracking-widest text-gray-600 font-semibold">
+              {language === "th" ? "manual ล่าสุด" : "Last manual run"}
+            </p>
+            <p className="mt-1 font-medium text-gray-800">
+              {lastManualRun
+                ? `${formatAge(lastManualRun.finished_at)} (${
+                    lastManualRun.actor_id ?? "?"
+                  })`
+                : language === "th"
+                ? "ยังไม่เคยกด Run worker"
+                : "No manual run yet"}
+            </p>
+            <p className="text-[11px] text-gray-600 mt-1">
+              {summarise(lastManualRun)}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[11px] uppercase tracking-widest text-gray-500 font-semibold mb-2">
+            {language === "th" ? "นโยบาย retry ต่อชนิด" : "Per-kind retry policy"}
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-gray-100">
+            <table className="w-full text-[12px]">
+              <thead className="bg-gray-50 text-[10px] uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="text-left p-2">{language === "th" ? "ชนิด" : "Kind"}</th>
+                  <th className="text-left p-2">
+                    {language === "th" ? "Auto" : "Auto"}
+                  </th>
+                  <th className="text-left p-2">
+                    {language === "th" ? "ลองสูงสุด" : "Max attempts"}
+                  </th>
+                  <th className="text-left p-2">
+                    {language === "th" ? "Cooldown" : "Cooldown"}
+                  </th>
+                  <th className="text-left p-2">
+                    {language === "th" ? "เหตุผล" : "Reason"}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {policyEntries.map(([kind, policy]) => (
+                  <tr key={kind} className="border-t border-gray-100 align-top">
+                    <td className="p-2 font-mono text-gray-800">{kind}</td>
+                    <td className="p-2">
+                      {policy.autoRetry ? (
+                        <span className="inline-flex rounded-full border border-green-200 bg-green-50 text-green-800 px-2 py-0.5 text-[10px] font-semibold">
+                          auto
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full border border-gray-200 bg-gray-50 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                          manual
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2 text-gray-800">
+                      {policy.autoRetry ? policy.maxAttempts : "—"}
+                    </td>
+                    <td className="p-2 text-gray-800">
+                      {policy.autoRetry ? `${policy.cooldownSeconds}s` : "—"}
+                    </td>
+                    <td className="p-2 text-gray-600">
+                      {language === "th"
+                        ? policy.description.th
+                        : policy.description.en}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </details>
   );
 }
 

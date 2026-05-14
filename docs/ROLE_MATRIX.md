@@ -65,6 +65,10 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Mark sync_failures resolved** | ✅ | ✅ | ✅ 🏢 (own branch only — gated via `/api/admin/recovery/resolve`) | ❌ | ❌ |
 | **Bulk resolve via `/api/admin/recovery/bulk-resolve`** | ✅ all | ✅ all | ✅ 🏢 (per-row branch check) | ❌ | ❌ |
 | **Run retry worker via `/api/admin/recovery/run-worker`** | ✅ any/all branches | ✅ any/all branches | ✅ 🏢 (branchCode forced to own) | ❌ | ❌ |
+| **Cron retry tick via `/api/cron/retry-worker`** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate; not callable from the UI | same | same | same | same |
+| **LINE follow webhook `/api/line/webhook`** | ⚠ machine-only (LINE platform; verified by HMAC over LINE_CHANNEL_SECRET) | same | same | same | same |
+| **`worker_runs` read** | ✅ all branches | ✅ all branches | ❌ (admin-only RLS policy) | ❌ | ❌ |
+| **`line_follow_events` read** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -225,4 +229,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (retry worker + bulk recovery + sheet dedup phase)
+**Last updated:** 2026-05-14 (cron + per-kind retry policy + LINE follow webhook phase)

@@ -521,6 +521,78 @@ A cron job that POSTs to `/api/admin/recovery/run-worker` (or calls `runRetryTic
 | Service-role unset | Worker returns a skipped-only result with a clear reason |
 | Cross-branch retry | Branch manager's `branchCode` is forced server-side; per-row check in bulk-resolve |
 
+### 9c.5c Cron + per-kind policy + LINE follow webhook (post-2026-05-14)
+
+> Status: **automation loop live**. `runRetryTick` now fires automatically from a scheduled cron job (Vercel Cron / Supabase Cron) gated on `CRON_SECRET`. LINE follows are captured into `customer_line_links` with `consented_at` so a future linker UI can pair them with real customers.
+
+#### 9c.5c.1 Cron flow
+
+```
+Vercel Cron (or Supabase Cron / external scheduler) every 5 min
+   ↓
+GET /api/cron/retry-worker  (Authorization: Bearer CRON_SECRET)
+   ↓
+runRetryTick({ actorId: 'cron', limit: 25 })
+   ↓
+   Reads sync_failures (pending / retrying)
+   Per row → getRetryPolicy(kind) → dispatch via retryFailureItem
+   Writes:
+     • sync_failures.status / attempts / payload (per row)
+     • worker_runs heartbeat (one row per tick) ← read by /admin/recovery
+```
+
+#### 9c.5c.2 Per-kind retry policy
+
+`lib/retryPolicy.ts` is the only place to tune retry behaviour. Today's values:
+
+| kind | autoRetry | maxAttempts | cooldown | reason |
+|---|---|---|---|---|
+| `order_to_sheet` | ✅ | 10 | 30 s | Customer-invisible; retry hard until the sheet row lands. |
+| `line_send` | ✅ | 3 | 300 s | Customer-visible; few attempts + long cooldown = no spam. |
+| `receipt_rebuild` | ✅ | 3 | 60 s | Pure read; confirms DB reachability. |
+| `pricing_to_sheet` / `customer_from_sheet` / `expense_from_sheet` / `debug_to_sheet` | ❌ | — | — | Admin-driven imports / snapshots — worker never touches them. |
+
+Manual-only kinds: the worker enters the loop, sees `policy.autoRetry === false`, and skips without incrementing `attempts` (so they never drift toward `dead`). The row stays at `status='pending'` until an admin resolves it via `/admin/recovery`.
+
+Reaching `maxAttempts`: the worker promotes the row to `status='dead'` and stamps `payload.deadReason / deadAt`. No further dispatch occurs.
+
+#### 9c.5c.3 LINE follow webhook flow
+
+```
+Customer scans OA QR / adds Care U → LINE delivers a `follow` event
+   ↓
+POST /api/line/webhook  (x-line-signature: base64 HMAC)
+   ↓
+lib/lineWebhook.ts
+   • verifyLineSignature(rawBody, header)        — constant-time compare
+   • INSERT line_follow_events (always — audit)
+   • If verified + follow + userId:
+       UPSERT customer_line_links (line_user_id, consented_at=now)
+         customer_id stays NULL until a future admin linker UI fills it
+   • If verified + unfollow:
+       UPDATE customer_line_links SET unsubscribed_at=now() WHERE line_user_id=...
+   ↓
+Always 200 (LINE disables channels on 4xx/5xx)
+```
+
+The orchestrator in `lib/lineDelivery.ts` looks up by `customer_id`, so an unmapped follow can't trigger an accidental send — the lookup simply returns nothing.
+
+#### 9c.5c.4 Required env vars
+
+| Variable | Used by | Effect when missing |
+|---|---|---|
+| `CRON_SECRET` | `/api/cron/retry-worker` | Route returns 503 — cron never runs (safe default). |
+| `LINE_CHANNEL_SECRET` | `/api/line/webhook` signature verification | Webhook stays alive but every event records `signature_verified=false`; `customer_line_links` is NEVER mutated. Audit-only mode. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Both — worker + webhook | Both routes return early with a clear `reason` string. |
+
+#### 9c.5c.5 Admin visibility
+
+`/admin/recovery` shows an "Auto-retry status" expander with:
+- Last cron tick: relative age + per-tick summary (succeeded / failed / dead / skipped).
+- Last manual run: same shape, distinguishing it from cron.
+- Permanently-failed count (sync_failures `status='dead'`).
+- The full per-kind policy table (kind → autoRetry / maxAttempts / cooldown / reason).
+
 ### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.

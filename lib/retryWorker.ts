@@ -25,6 +25,7 @@
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import type { SyncFailureRow } from "@/lib/recoveryService";
 import { syncOrderToSheetCore } from "@/lib/orderSheetSync";
+import { getRetryPolicy } from "@/lib/retryPolicy";
 import {
   sendOrderCreatedMessage,
   sendOrderReadyMessage,
@@ -33,21 +34,16 @@ import {
   type LineMessageKind,
 } from "@/lib/lineDelivery";
 
-// ---------- Safety limits -------------------------------------------------
+// ---------- Safety limits (legacy fallback) -------------------------------
+//
+// As of 2026-05-14 per-kind policy in lib/retryPolicy.ts overrides these
+// for any known kind. They remain exported so older callers keep building
+// and so the policy module has sane defaults to fall back to.
 
-/**
- * Hard cap on attempts. After this many failures the row is marked `dead`
- * and the worker stops touching it. Manual operator resolution (or a
- * future "reset to pending" admin action) is the only way out.
- */
+/** @deprecated use `getRetryPolicy(kind).maxAttempts` instead. */
 export const MAX_ATTEMPTS = 5;
 
-/**
- * Minimum seconds between attempts on the same row. Protects LINE OA
- * users from being spammed if a misconfigured worker hammers the queue.
- * Cron schedulers in the future should respect this on top of their own
- * cadence — the worker is the authoritative gate.
- */
+/** @deprecated use `getRetryPolicy(kind).cooldownSeconds` instead. */
 export const LAST_ATTEMPT_BACKOFF_SECONDS = 60;
 
 // ---------- Public types --------------------------------------------------
@@ -333,11 +329,59 @@ export async function runRetryTick(
 
   const rows = data as SyncFailureRow[];
   const nowMs = Date.now();
-  const cooldownMs = LAST_ATTEMPT_BACKOFF_SECONDS * 1000;
 
   for (const row of rows) {
+    const policy = getRetryPolicy(row.kind);
+
+    // Manual-only kinds — worker never touches state, just records the
+    // skip so the admin UI can show why the row wasn't picked up.
+    if (!policy.autoRetry) {
+      items.push({
+        failureId: row.id,
+        kind: row.kind,
+        targetId: row.target_id,
+        succeeded: false,
+        dead: false,
+        pendingRetry: true,
+        skipped: true,
+        reason: `manual-only kind "${row.kind}" — worker leaves it for admin resolution`,
+      });
+      continue;
+    }
+
+    // Already at the cap — promote to `dead` without dispatching. Stops
+    // the row from re-queuing forever.
+    if ((row.attempts ?? 0) >= policy.maxAttempts) {
+      if (!opts.dryRun) {
+        await admin
+          .from("sync_failures")
+          .update({
+            status: "dead",
+            payload: {
+              ...(row.payload ?? {}),
+              deadReason: `exceeded maxAttempts (${policy.maxAttempts}) for kind ${row.kind}`,
+              deadAt: new Date().toISOString(),
+            },
+          })
+          .eq("id", row.id);
+      }
+      items.push({
+        failureId: row.id,
+        kind: row.kind,
+        targetId: row.target_id,
+        succeeded: false,
+        dead: true,
+        pendingRetry: false,
+        skipped: false,
+        reason: `attempts ${row.attempts ?? 0} ≥ maxAttempts ${policy.maxAttempts}`,
+      });
+      continue;
+    }
+
     // Cooldown gate — refuse to hammer a row that was just attempted.
-    if (row.last_attempt_at) {
+    // Uses the per-kind cooldown (LINE 5min, sheets 30s, …).
+    const cooldownMs = policy.cooldownSeconds * 1000;
+    if (row.last_attempt_at && cooldownMs > 0) {
       const ageMs = nowMs - new Date(row.last_attempt_at).getTime();
       if (ageMs < cooldownMs) {
         items.push({
@@ -348,7 +392,7 @@ export async function runRetryTick(
           dead: false,
           pendingRetry: true,
           skipped: true,
-          reason: `cooldown — ${Math.round((cooldownMs - ageMs) / 1000)}s remaining`,
+          reason: `cooldown — ${Math.round((cooldownMs - ageMs) / 1000)}s remaining (policy ${policy.cooldownSeconds}s)`,
         });
         continue;
       }
@@ -437,8 +481,9 @@ export async function runRetryTick(
       continue;
     }
 
-    // Dispatcher said no. Decide: dead or pending again?
-    const reachedDead = nextAttempts >= MAX_ATTEMPTS;
+    // Dispatcher said no. Decide: dead or pending again? Use the
+    // per-kind cap so LINE rows die faster than Sheet rows.
+    const reachedDead = nextAttempts >= policy.maxAttempts;
     if (!opts.dryRun) {
       const mergedPayload: Record<string, unknown> = {
         ...(row.payload ?? {}),
@@ -472,10 +517,40 @@ export async function runRetryTick(
   const failed = items.filter(
     (i) => !i.succeeded && !i.skipped && !i.dead
   ).length;
+  const finishedAt = new Date().toISOString();
 
   console.info(
     `[retry-worker] tick processed=${items.length} succeeded=${succeeded} failed=${failed} dead=${dead} skipped=${skipped} actor=${opts.actorId ?? "?"}`
   );
+
+  // Heartbeat row in public.worker_runs so /admin/recovery can show
+  // "last cron tick: 3m ago • succeeded 4 / failed 1 / dead 0 / skipped 2".
+  // Best-effort: a failed insert MUST NOT mask the work the worker just did.
+  if (!opts.dryRun) {
+    try {
+      await admin.from("worker_runs").insert({
+        worker_kind: "retry_tick",
+        actor_id: opts.actorId ?? null,
+        branch_code: opts.branchCode ?? null,
+        started_at: startedAt,
+        finished_at: finishedAt,
+        processed: items.length,
+        succeeded,
+        failed,
+        dead,
+        skipped,
+        // Trim items to keep the row from getting massive when a cron tick
+        // processes 50 rows. Per-row reason/details stay; the typed flags
+        // are enough for the admin UI summary.
+        result: { items },
+      });
+    } catch (err) {
+      console.warn(
+        "[retry-worker] heartbeat write failed:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
 
   return {
     processed: items.length,
@@ -485,6 +560,6 @@ export async function runRetryTick(
     skipped,
     items,
     startedAt,
-    finishedAt: new Date().toISOString(),
+    finishedAt,
   };
 }
