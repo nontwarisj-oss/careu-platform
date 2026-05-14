@@ -65,6 +65,10 @@ export type PolicyContext = {
   /** When the caller has already loaded the customer phone, supply
    *  it here to skip another DB round-trip. */
   hasPhone?: boolean;
+  /** Phase 19 — branch context for per-branch unsubscribe checks.
+   *  When set, the policy looks up customer_branch_unsubscribes for
+   *  this (customer, branch, channel). */
+  branchId?: string | null;
 };
 
 export type PolicyDecision =
@@ -141,6 +145,27 @@ async function customerHasPhone(customerId: string): Promise<boolean> {
   if (!data) return false;
   const row = data as { normalized_phone: string | null; phone: string | null };
   return !!(row.normalized_phone || row.phone);
+}
+
+async function checkBranchUnsubscribe(opts: {
+  customerId: string;
+  branchId: string;
+  channel: PolicyChannel;
+}): Promise<boolean> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return false;
+  // Match either an exact channel row or a wildcard channel='all' row,
+  // OR scope='all' (which veto all promotional sends including
+  // implicit transactional drift).
+  const res = await admin
+    .from("customer_branch_unsubscribes")
+    .select("id, channel, scope")
+    .eq("customer_id", opts.customerId)
+    .eq("branch_id", opts.branchId)
+    .in("channel", [opts.channel, "all"])
+    .limit(1)
+    .maybeSingle();
+  return !!res.data;
 }
 
 function channelEnabled(prefs: PrefsRow, channel: PolicyChannel): boolean {
@@ -252,6 +277,25 @@ export async function evaluatePolicy(
   }
   if (ctx.channel === "in_app") {
     return { ok: true };
+  }
+
+  // Phase 19 — per-branch unsubscribe. Layered on top of the global
+  // prefs above. An unsubscribe row for the specific (customer,
+  // branch, channel) — or a wildcard channel='all' — vetoes the send
+  // even when the global toggle is on.
+  if (ctx.branchId && ctx.intent === "promotional") {
+    const branchOptOut = await checkBranchUnsubscribe({
+      customerId: ctx.customerId,
+      branchId: ctx.branchId,
+      channel: ctx.channel,
+    });
+    if (branchOptOut) {
+      return {
+        ok: false,
+        bucket: "branch_unsubscribed",
+        reason: `ลูกค้าเลิกรับข้อความจากสาขานี้`,
+      };
+    }
   }
 
   // 3. Rate limit — defer to the existing per-customer module.

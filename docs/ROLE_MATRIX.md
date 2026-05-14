@@ -116,6 +116,14 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Template restore (`/api/admin/communications/templates/[id]/restore`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Cron engagement-aggregate (`/api/cron/engagement-aggregate`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron retention-triggers (`/api/cron/retention-triggers`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **Cron comm-performance-aggregate (`/api/cron/comm-performance-aggregate`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **`branch_trigger_overrides` table** | ✅ | ✅ | ✅ 🏢 own branch | ❌ | ❌ |
+| **`customer_branch_unsubscribes` table (admin read)** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **`/admin/crm/triggers` UI + `/api/admin/crm/triggers`** | ✅ all | ✅ all | ✅ 🏢 | ❌ | ❌ |
+| **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
+| **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
+| **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
+| **Portal DOB (`/api/portal/profile` PATCH `birthDate`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
 | **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Cron HEIC transcode (`/api/cron/heic-transcode`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |

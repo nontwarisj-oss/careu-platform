@@ -24,7 +24,11 @@
 
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
-// ---------- Thresholds (Phase 18 constants) ----------------------------
+// ---------- Thresholds (Phase 18 defaults, Phase 19 overridable) ------
+//
+// These exports remain the HQ defaults. Per-branch overrides resolve
+// via lib/branchTriggerOverrides — call `classifyLifecycle` with
+// an `overrides` argument to apply them.
 
 export const NEW_WINDOW_DAYS = 30;
 export const AT_RISK_DAYS = 90;
@@ -32,6 +36,13 @@ export const DORMANT_DAYS = 180;
 export const CHURN_DAYS = 365;
 export const LOYAL_ORDER_THRESHOLD = 8;
 export const ACTIVE_RECENCY_DAYS = 90;
+
+export type LifecycleOverrides = {
+  /** Override AT_RISK_DAYS. */
+  atRiskDays?: number;
+  /** Override DORMANT_DAYS. */
+  dormantDays?: number;
+};
 
 // ---------- Types -------------------------------------------------------
 
@@ -66,9 +77,18 @@ export type LifecycleDecision = {
 /**
  * Pure classifier. No DB calls — easy to unit-test. The aggregator
  * loads inputs once and calls this per customer.
+ *
+ * Per-branch thresholds: pass `overrides` when the caller has
+ * already resolved them via lib/branchTriggerOverrides. Falls back
+ * to module-level defaults when absent.
  */
-export function classifyLifecycle(inputs: LifecycleInputs): LifecycleDecision {
+export function classifyLifecycle(
+  inputs: LifecycleInputs,
+  overrides: LifecycleOverrides = {}
+): LifecycleDecision {
   const { totalOrders, daysSinceVisit, daysSinceFirstOrder } = inputs;
+  const atRiskDays = overrides.atRiskDays ?? AT_RISK_DAYS;
+  const dormantDays = overrides.dormantDays ?? DORMANT_DAYS;
 
   // Zero-orders customer.
   if (totalOrders === 0) {
@@ -87,10 +107,10 @@ export function classifyLifecycle(inputs: LifecycleInputs): LifecycleDecision {
       inputs,
     };
   }
-  if (daysSinceVisit != null && daysSinceVisit > DORMANT_DAYS) {
+  if (daysSinceVisit != null && daysSinceVisit > dormantDays) {
     return {
       status: "dormant",
-      reason: `ไม่ได้กลับมา ${daysSinceVisit} วัน (${DORMANT_DAYS}–${CHURN_DAYS}) — dormant`,
+      reason: `ไม่ได้กลับมา ${daysSinceVisit} วัน (${dormantDays}–${CHURN_DAYS}) — dormant`,
       inputs,
     };
   }
@@ -99,7 +119,7 @@ export function classifyLifecycle(inputs: LifecycleInputs): LifecycleDecision {
   // not "at-risk loyal".
   if (
     daysSinceVisit != null &&
-    daysSinceVisit > AT_RISK_DAYS &&
+    daysSinceVisit > atRiskDays &&
     totalOrders >= 3
   ) {
     return {

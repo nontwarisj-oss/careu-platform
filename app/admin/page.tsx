@@ -172,6 +172,17 @@ const CARDS: AdminCard[] = [
       "M19 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h11v12zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z",
     enabled: true,
   },
+  {
+    href: "/admin/crm/triggers",
+    titleTh: "Trigger explainability",
+    titleEn: "Trigger explainability",
+    descTh:
+      "เห็นเหตุผลของทุก retention trigger — ทำไมยิง / ทำไม skip — Owner / HQ / Branch Manager",
+    descEn: "See why every retention trigger fired or was skipped.",
+    iconPath:
+      "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-6h2v6zm0-8h-2V7h2v4z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

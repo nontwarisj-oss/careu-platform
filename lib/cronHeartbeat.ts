@@ -24,7 +24,8 @@ export type CronName =
   | "heic-transcode"
   | "reconcile"
   | "engagement-aggregate"
-  | "retention-triggers";
+  | "retention-triggers"
+  | "comm-performance-aggregate";
 
 export type HeartbeatPayload = {
   rowsProcessed?: number;

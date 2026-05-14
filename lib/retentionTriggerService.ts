@@ -30,6 +30,7 @@ import { evaluatePolicy } from "@/lib/communicationPolicyService";
 import { checkQuietHours } from "@/lib/broadcastPolicyService";
 import { renderTemplate, type TemplateRow } from "@/lib/emailTemplateService";
 import { branches as ALL_BRANCHES, getBranchById } from "@/lib/brandConfig";
+import { resolveNumber } from "@/lib/branchTriggerOverrides";
 
 // ---------- Tunables ----------------------------------------------------
 
@@ -184,12 +185,15 @@ export async function runRetentionTriggerTick(
         continue;
       }
 
-      // Policy gate (preferences + rate limit + recipient).
+      // Policy gate (preferences + rate limit + recipient + per-
+      // branch unsubscribe). branchId propagated for Phase 19's
+      // per-branch opt-out check.
       const policy = await evaluatePolicy({
         customerId: c.id,
         channel,
         kind: "retention",
         intent: "promotional",
+        branchId: c.branch_id,
       });
       if (!policy.ok) {
         perKind[kind].skipped += 1;
@@ -374,11 +378,36 @@ async function fetchCandidates(
       return (r.data ?? []) as CustomerCandidate[];
     }
     case "birthday_month": {
-      // The customers table doesn't carry a DOB column in Phase 18.
-      // Return empty so the trigger is a no-op until DOB capture
-      // ships. The kind stays in the catalog so operators can wire
-      // it later without code changes.
-      return [];
+      // Phase 19: birthday-month trigger activated.
+      // Matches customers whose birth_date month equals the current
+      // month AND the customer has confirmed (birth_month_verified=
+      // true). Unverified DOBs are skipped to avoid spamming a guess.
+      const now = new Date();
+      const month = now.getUTCMonth() + 1;
+      const r = await admin
+        .from("customers")
+        .select(select + ", birth_date")
+        .eq("birth_month_verified", true)
+        .not("birth_date", "is", null)
+        .limit(limit * 2);
+      if (r.error || !r.data) return [];
+      const candidates = (
+        r.data as unknown as Array<CustomerCandidate & { birth_date: string | null }>
+      )
+        .filter((c) => {
+          if (!c.birth_date) return false;
+          // birth_date is stored as a date; the month part is
+          // sufficient. Parse defensively in case it arrives as a
+          // string from PG.
+          try {
+            const m = new Date(c.birth_date).getUTCMonth() + 1;
+            return m === month;
+          } catch {
+            return false;
+          }
+        })
+        .slice(0, limit);
+      return candidates;
     }
     case "first_time_followup": {
       const window = new Date(

@@ -20,6 +20,7 @@ import {
   upsertLifecycleStatus,
   type LifecycleInputs,
 } from "@/lib/customerLifecycle";
+import { resolveNumber } from "@/lib/branchTriggerOverrides";
 
 // ---------- Types -------------------------------------------------------
 
@@ -136,7 +137,22 @@ export async function runEngagementAggregateTick(
       daysSinceVisit,
       daysSinceFirstOrder,
     };
-    const decision = classifyLifecycle(inputs);
+    // Per-branch overrides — fall back to HQ defaults inside the
+    // resolver. Two values flow into the classifier today.
+    const atRiskDays = await resolveNumber({
+      branchId: c.branch_id,
+      key: "at_risk_days",
+      fallback: 90,
+    });
+    const dormantDays = await resolveNumber({
+      branchId: c.branch_id,
+      key: "dormant_days",
+      fallback: 180,
+    });
+    const decision = classifyLifecycle(inputs, {
+      atRiskDays,
+      dormantDays,
+    });
 
     // 1. Upsert lifecycle row.
     try {

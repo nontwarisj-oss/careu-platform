@@ -14,6 +14,8 @@ type Profile = {
   lastVisitAt: string | null;
   totalOrders: number;
   lifetimeSpend: number;
+  birthDate: string | null;
+  birthMonthVerified: boolean;
 };
 
 type ActivityEvent = {
@@ -231,6 +233,20 @@ export default function PortalProfilePage() {
         </dl>
       </section>
 
+      <DobSection
+        currentBirthDate={profile.birthDate}
+        currentVerified={profile.birthMonthVerified}
+        onSaved={(b, v) =>
+          setProfile({
+            ...profile,
+            birthDate: b,
+            birthMonthVerified: v,
+          })
+        }
+      />
+
+      <BranchUnsubscribeSection />
+
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <h2 className="text-lg font-bold text-gray-900">กิจกรรมล่าสุด</h2>
         <p className="mt-1 text-[11px] text-gray-500">
@@ -284,5 +300,164 @@ function Field({ label, value }: { label: string; value: string }) {
       </dt>
       <dd className="mt-0.5 font-semibold text-gray-900">{value}</dd>
     </div>
+  );
+}
+
+function DobSection({
+  currentBirthDate,
+  currentVerified,
+  onSaved,
+}: {
+  currentBirthDate: string | null;
+  currentVerified: boolean;
+  onSaved: (birthDate: string | null, verified: boolean) => void;
+}) {
+  const [dob, setDob] = useState(currentBirthDate ?? "");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const res = await fetch("/api/portal/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ birthDate: dob || null }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        setErr(json.reason ?? `บันทึกไม่สำเร็จ (HTTP ${res.status})`);
+      } else {
+        setMsg(dob ? "บันทึกวันเกิดเรียบร้อย" : "ลบวันเกิดเรียบร้อย");
+        onSaved(dob || null, !!dob);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5 space-y-3">
+      <div>
+        <h2 className="text-base font-bold text-gray-900">วันเกิด (ทางเลือก)</h2>
+        <p className="mt-0.5 text-[11px] text-gray-500">
+          ใส่เพื่อรับโปรช่วงเดือนเกิด — เก็บแค่เดือนพอ (ใส่ปีอะไรก็ได้)
+        </p>
+      </div>
+      {msg && (
+        <div className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+          {msg}
+        </div>
+      )}
+      {err && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {err}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          type="date"
+          value={dob}
+          onChange={(e) => setDob(e.target.value)}
+          className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="rounded-xl bg-green-700 hover:bg-green-800 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50 whitespace-nowrap"
+        >
+          {saving ? "..." : "บันทึก"}
+        </button>
+      </div>
+      {currentBirthDate && (
+        <p className="text-[10px] text-gray-500">
+          ตั้งค่าแล้ว · ได้รับสิทธิ์เดือนเกิด:{" "}
+          {currentVerified ? "เปิด" : "ปิด"}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function BranchUnsubscribeSection() {
+  type Row = {
+    id: string;
+    branch_id: string;
+    channel: string;
+    scope: string;
+    reason: string | null;
+    unsubscribed_at: string;
+  };
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    try {
+      const res = await fetch("/api/portal/unsubscribe", { cache: "no-store" });
+      const json = (await res.json()) as { ok?: boolean; rows?: Row[] };
+      if (json.ok) setRows(json.rows ?? []);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const handleResubscribe = async (id: string) => {
+    if (!window.confirm("เลิกการเลิกรับข้อความจากสาขานี้?")) return;
+    try {
+      const res = await fetch(
+        `/api/portal/unsubscribe?id=${encodeURIComponent(id)}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) void load();
+    } catch {}
+  };
+
+  if (loading) return null;
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5">
+      <h2 className="text-base font-bold text-gray-900">
+        การเลิกรับข้อความเฉพาะสาขา
+      </h2>
+      <p className="mt-0.5 text-[11px] text-gray-500">
+        คุณได้เลิกรับข้อความจากสาขาเหล่านี้
+      </p>
+      <ul className="mt-3 divide-y divide-gray-100">
+        {rows.map((r) => (
+          <li
+            key={r.id}
+            className="py-2 flex items-center justify-between gap-2"
+          >
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900">
+                {r.branch_id}
+              </div>
+              <div className="text-[10px] text-gray-500">
+                {r.channel.toUpperCase()} · {r.scope}{" "}
+                {r.reason && `· ${r.reason}`}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleResubscribe(r.id)}
+              className="rounded-md border border-green-200 bg-green-50 hover:bg-green-100 text-green-800 px-2 py-1 text-[10px] font-semibold"
+            >
+              re-subscribe
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

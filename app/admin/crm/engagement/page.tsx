@@ -13,6 +13,18 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
 
+type ChannelPerf = {
+  sent: number;
+  delivered: number;
+  opened: number;
+  clicked: number;
+  bounced: number;
+  unsubscribed: number;
+  avgLatencyMs: number | null;
+  openRate: number | null;
+  clickRate: number | null;
+};
+
 type Snapshot = {
   ok?: boolean;
   reason?: string;
@@ -41,6 +53,18 @@ type Snapshot = {
     dormant: number;
     churned: number;
   }>;
+  campaignRoi?: {
+    windowDays: number;
+    attributedOrders: number;
+    totalAttributedRevenue: number;
+    recoveredDormantCount: number;
+    avgResponseDays: number;
+  };
+  commsPerformance?: {
+    windowDays: number;
+    byChannel: Record<string, ChannelPerf>;
+    avgLatencyMs: number | null;
+  };
   generatedAt: string;
 };
 
@@ -258,6 +282,93 @@ function Inner() {
           </section>
         </div>
 
+        {data.campaignRoi && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-base font-bold text-gray-900">
+              Campaign ROI ({data.campaignRoi.windowDays}d)
+            </h2>
+            <p className="mt-1 text-[11px] text-gray-500">
+              attributed orders + recovered dormant customers within
+              attribution window
+            </p>
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <Stat
+                label="ออเดอร์ attributed"
+                value={data.campaignRoi.attributedOrders.toLocaleString()}
+                tone="green"
+              />
+              <Stat
+                label="รายได้ attributed"
+                value={`฿${Math.round(data.campaignRoi.totalAttributedRevenue).toLocaleString()}`}
+                tone="green"
+              />
+              <Stat
+                label="ลูกค้า dormant ที่กลับมา"
+                value={data.campaignRoi.recoveredDormantCount.toLocaleString()}
+                tone="green"
+              />
+              <Stat
+                label="avg response (วัน)"
+                value={String(data.campaignRoi.avgResponseDays)}
+              />
+            </div>
+          </section>
+        )}
+
+        {data.commsPerformance && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-base font-bold text-gray-900">
+              Comms performance ({data.commsPerformance.windowDays}d)
+            </h2>
+            <p className="mt-1 text-[11px] text-gray-500">
+              open + click + bounce + unsubscribe per channel · avg
+              latency {data.commsPerformance.avgLatencyMs ?? "—"}ms
+            </p>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wider text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2">Channel</th>
+                    <th className="px-3 py-2">Sent</th>
+                    <th className="px-3 py-2">Delivered</th>
+                    <th className="px-3 py-2">Open %</th>
+                    <th className="px-3 py-2">Click %</th>
+                    <th className="px-3 py-2">Bounced</th>
+                    <th className="px-3 py-2">Unsub</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {Object.entries(data.commsPerformance.byChannel).map(
+                    ([ch, p]) => (
+                      <tr key={ch} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {ch.toUpperCase()}
+                        </td>
+                        <td className="px-3 py-2 text-xs">{p.sent}</td>
+                        <td className="px-3 py-2 text-xs text-green-700">
+                          {p.delivered}
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          {p.openRate == null ? "—" : `${p.openRate}%`}
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          {p.clickRate == null ? "—" : `${p.clickRate}%`}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-red-700">
+                          {p.bounced}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-amber-700">
+                          {p.unsubscribed}
+                        </td>
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">
             Retention triggers (24h)
@@ -322,6 +433,33 @@ function Inner() {
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "green" | "red" | "amber";
+}) {
+  const valueClass =
+    tone === "green"
+      ? "text-green-700"
+      : tone === "red"
+        ? "text-red-700"
+        : tone === "amber"
+          ? "text-amber-800"
+          : "text-gray-900";
+  return (
+    <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+        {label}
+      </p>
+      <p className={`mt-0.5 text-lg font-extrabold ${valueClass}`}>{value}</p>
     </div>
   );
 }

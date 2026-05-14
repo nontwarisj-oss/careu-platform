@@ -286,12 +286,15 @@ async function processJobTick(
       continue;
     }
 
-    // Communication policy (prefs + rate limit + recipient).
+    // Communication policy (prefs + rate limit + recipient + per-
+    // branch unsubscribe). branchId propagated for Phase 19's per-
+    // branch opt-out check.
     const policy = await evaluatePolicy({
       customerId: target.customer_id,
       channel: target.channel,
       kind: "broadcast",
       intent: "promotional",
+      branchId: job.branch_id,
     });
     if (!policy.ok) {
       await markSkipped(admin, target.id, `${policy.bucket}: ${policy.reason}`);

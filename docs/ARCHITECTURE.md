@@ -1640,6 +1640,69 @@ Phase 15's `SegmentDefinition` gains 5 new filters: `lifecycleStatuses`, `totalS
 
 ---
 
+## 12t. Engagement feedback loop (post-`20260543`)
+
+> Status: **closed loop**. Per-branch trigger overrides, optional DOB capture, block-composable HTML email, signed click+open tracking, Resend webhook, campaign→order attribution, per-channel performance aggregator, per-branch customer unsubscribe.
+
+See [ENGAGEMENT_FEEDBACK_LOOP.md](./ENGAGEMENT_FEEDBACK_LOOP.md).
+
+### 12t.1 New tables
+
+- `branch_trigger_overrides` — per-branch threshold rows; falls back to HQ defaults via `lib/branchTriggerOverrides.ts`.
+- `customers.birth_date` + `birth_month_verified` — optional DOB columns. Activates Phase 18's birthday trigger.
+- `communication_events` — append-only customer-side event stream (delivered/opened/clicked/bounced/complained/unsubscribed/failed). Replay-safe via unique (provider, provider_event_id).
+- `customer_branch_unsubscribes` — per (customer, branch, channel, scope) opt-out. Layered above Phase 13 global prefs.
+- `campaign_response_metrics` — attribution rows; 14-day window; unique (source_kind, source_id, customer_id).
+- `communication_performance_daily` — per (branch, channel, date) aggregated metrics.
+
+### 12t.2 New libraries
+
+- `lib/branchTriggerOverrides.ts` — resolveNumber/resolveBoolean with branch → DEFAULTS → fallback ordering. 60s cache.
+- `lib/communicationEvents.ts` — `recordCommunicationEvent(input)` + `maybeApplyDeliveryStatus`. IP hashed at insert. Dedup via provider_event_id unique.
+- `lib/trackingLinks.ts` — HMAC-SHA256 signed tokens with TTL. `buildClickUrl` + `buildOpenPixelUrl`. `verifyTrackingToken` constant-time.
+- `lib/campaignAttribution.ts` — `attributeOrderToCampaign({...})`. 14-day lookback. Reads current lifecycle to flag recovered_dormant.
+- `lib/commPerformanceAggregator.ts` — nightly per (branch, channel, date) UPSERT into `communication_performance_daily`.
+- `lib/email/renderers/blocks.ts` — 7 composable block types.
+- `lib/email/renderers/layout.ts` — 600px responsive shell + plain-text fallback.
+
+### 12t.3 Tracking + webhook routes
+
+- `GET /api/track/click?t=...` — HMAC verify → record event → 302 redirect. Bad/expired → fallback redirect + forensic log.
+- `GET /api/track/open?t=...` — HMAC verify → record event → 1×1 GIF. Always returns 200 to keep email clients happy.
+- `POST /api/webhooks/email-status` — Svix-signed Resend webhook receiver. Updates `customer_notifications.status` on delivered/failed (monotonic).
+
+### 12t.4 Policy integration
+
+- `lib/customerLifecycle.ts::classifyLifecycle({...}, overrides)` accepts `atRiskDays` + `dormantDays`. Engagement aggregator resolves per-branch values before calling.
+- `lib/communicationPolicyService.ts::evaluatePolicy` accepts `branchId` in context. For promotional intent, checks `customer_branch_unsubscribes` after global prefs. Bucket = `branch_unsubscribed`.
+- `lib/broadcastSendWorker.ts` + `lib/retentionTriggerService.ts` now pass `branchId` into `evaluatePolicy`.
+
+### 12t.5 Dashboard + explainability
+
+- `/admin/crm/engagement` (Phase 18) extended with Campaign ROI (30d) + Comms performance (30d) sections.
+- `/admin/crm/triggers` new — explainability list of retention_trigger_jobs with status / kind filters. Every row shows `fired_reason` + `skip_reason`.
+
+### 12t.6 Customer portal additions
+
+- `/portal/profile` adds DOB editor (set / clear; flips `birth_month_verified`).
+- Per-branch unsubscribe list section with re-subscribe buttons.
+- `/api/portal/unsubscribe` (GET/POST/DELETE) — customer manages their own branch unsubscribes.
+
+### 12t.7 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `branch_trigger_overrides` RLS | role + branch_id | enforced |
+| `communication_events` RLS | role + branch | enforced |
+| `customer_branch_unsubscribes` RLS | role + branch | enforced |
+| `campaign_response_metrics` RLS | role + branch | enforced |
+| `communication_performance_daily` RLS | role + branch | enforced |
+| `/api/admin/crm/triggers` | role + branch_id filter | enforced |
+| `/api/portal/unsubscribe` | customer cookie | per-customer (own rows) |
+| `evaluatePolicy` per-branch unsubscribe | server-side | enforced |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

@@ -30,6 +30,7 @@ const CRON_EXPECTED_INTERVAL_MIN: Record<CronName, number> = {
   reconcile: 60,
   "engagement-aggregate": 24 * 60, // nightly
   "retention-triggers": 60, // hourly
+  "comm-performance-aggregate": 24 * 60, // nightly
 };
 
 /** "A queued row should leave the queue within N minutes." Beyond
