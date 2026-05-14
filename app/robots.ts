@@ -32,6 +32,7 @@ export default function robots(): MetadataRoute.Robots {
           "/reports",
           "/pricing",
           "/login",
+          "/portal",
         ],
       },
     ],

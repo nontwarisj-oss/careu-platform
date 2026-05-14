@@ -61,6 +61,7 @@ function PublicHeader() {
           <NavLink href="/branches">สาขา</NavLink>
           <NavLink href="/track">ติดตามงาน</NavLink>
           <NavLink href="/quote">ขอใบเสนอราคา</NavLink>
+          <NavLink href="/portal">พอร์ทัล</NavLink>
           <NavLink href="/about">เกี่ยวกับเรา</NavLink>
           <NavLink href="/contact">ติดต่อ</NavLink>
         </nav>

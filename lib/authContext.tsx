@@ -63,6 +63,7 @@ const PUBLIC_PREFIXES = [
   "/quote",
   "/about",
   "/contact",
+  "/portal",
 ];
 
 function isPublicPath(path: string | null): boolean {

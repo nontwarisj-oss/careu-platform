@@ -146,6 +146,38 @@ By design — these belong to a future CRM / marketing phase:
 
 ---
 
+## 4b. Progression layer (post-`20260535`)
+
+Two new columns on `public.customers` add the lifecycle dimension on top of the existing tier:
+
+| Column | Domain | Writer |
+|---|---|---|
+| `lifecycle_stage` | `new` / `active` / `at_risk` / `dormant` / `reactivated` / `churned` | `lib/crmProgressionService.ts::refreshCustomerProgression` |
+| `retention_score` | 0–100 (two decimals) | same |
+
+Plus a new outbound queue:
+
+| Table | Purpose |
+|---|---|
+| `public.customer_notifications` | Outbound message queue (channels: line / email / in_app / sms). `enqueueNotification` writes; dispatcher worker reads (deferred). |
+
+Plus phone-auth scaffolding for the portal:
+
+| Table | Purpose |
+|---|---|
+| `public.customer_otp_codes` | Issued OTP codes (hashed). Anti-replay via `consumed_at`; expiry via `expires_at`. |
+
+Plus identity helpers (no schema):
+
+- `lib/customerIdentityResolver.ts::resolveByPhone(phone)` — find every row sharing a normalised phone.
+- `resolveByLineUserId(lineUserId)` — find customer through `customer_line_links`.
+- `findOrCreateByPhone(phone, opts)` — idempotent. Used by the portal sign-in flow.
+- `mergeCandidates(customerId)` / `mergeCustomers(...)` — read-only candidate listing + throw-only merge stub (admin SQL until a future merge UI ships).
+
+`refreshCustomerProgression` is called on every successful portal sign-in (`/api/portal/auth/verify-otp`). A future cron / DB-trigger keeps non-portal customers in sync.
+
+---
+
 ## 5. Future readers (entry points)
 
 A future CRM phase plugs into this layer at these seams:
@@ -158,4 +190,4 @@ A future CRM phase plugs into this layer at these seams:
 
 ---
 
-**Last updated:** 2026-05-14 (CRM foundation tables + RLS shipped)
+**Last updated:** 2026-05-14 (CRM progression + customer portal sign-in integration)

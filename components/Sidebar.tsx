@@ -82,6 +82,7 @@ const Sidebar: React.FC = () => {
     "/quote",
     "/about",
     "/contact",
+    "/portal",
   ];
   if (
     pathname &&

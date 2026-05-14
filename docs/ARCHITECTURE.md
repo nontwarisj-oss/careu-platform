@@ -195,6 +195,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260532_bonus_engine_columns.sql` | `technician_payroll_items.bonus_suggested` + `bonus_rule_version` audit columns. Bonus engine writes both at save time so historical override deviations are queryable. |
 | `20260533_brandconfig_db_mirror.sql` | `public.branches` gains UI-metadata columns: `short_label`, `short_name`, `receipt_name`, `tagline`, `address`, `phone`, `logo_path`, `accent_class`. Seeded rows updated to mirror `lib/brandConfig.ts`. branchContext reads from DB with hardcoded list as fallback. |
 | `20260534_public_website_and_crm_foundation.sql` | New tables: `quote_requests` (inbox for public /quote submissions, anon INSERT allowed), `customer_tags`, `customer_notes`, `customer_activity`, `customer_channels` — CRM scaffolding for future segmentation / VIP / LINE CRM. RLS on every table; branch isolation joins via customer.branch_id where the row lacks one. |
+| `20260535_customer_portal_and_crm_progression.sql` | `customer_otp_codes` (phone+OTP sign-in, hashed codes), `customer_notifications` (outbound queue). `customers` gets `lifecycle_stage` + `retention_score` columns (computed by `crmProgressionService`). Private Supabase Storage bucket `customer-uploads` created via `storage.buckets`. Admin-read RLS on the two new tables. |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -1081,6 +1082,92 @@ Each public page exports `metadata` (Thai-first title + description). `app/sitem
 
 ---
 
+## 12l. Customer portal + uploads + CRM progression (post-`20260535`)
+
+> Status: **foundation live**. Phone+OTP sign-in, customer-safe order surface, signed-URL upload pipeline, CRM progression columns + service, notification queue. SMS provider + dispatcher worker + customer-facing language switcher are deliberately deferred.
+
+See [CUSTOMER_PORTAL.md](./CUSTOMER_PORTAL.md), [UPLOADS.md](./UPLOADS.md), and [CRM_FOUNDATION.md](./CRM_FOUNDATION.md) for surface-by-surface specs.
+
+### 12l.1 Two cookies, one secret
+
+```
+careu_session            ── OPS  (operator)  ── set by /api/auth/line/callback
+careu_customer_session   ── PORTAL (customer)── set by /api/portal/auth/verify-otp
+```
+
+Both signed HMAC-SHA256 with `SESSION_SECRET`. Cookie name + payload shape diverge so a forged operator cookie can never satisfy a portal route (and vice versa). Both are HttpOnly + SameSite=Lax + Secure-in-prod.
+
+### 12l.2 OTP sign-in
+
+```
+/portal/signin
+  ├─ phone form → POST /api/portal/auth/request-otp
+  │                ├─ rate-limit 5/10min/IP
+  │                └─ customerOtp.issueCustomerOtp(phone)
+  │                     • normalises phone
+  │                     • invalidates older un-consumed codes
+  │                     • inserts customer_otp_codes (hashed)
+  │                     • logs the code (no SMS gateway yet)
+  │
+  └─ code form → POST /api/portal/auth/verify-otp
+                   ├─ customerOtp.verifyCustomerOtp(phone, code)
+                   │    • constant-time hash compare
+                   │    • universal dev code "123456" in non-prod
+                   │    • caps attempts at 5
+                   ├─ identityResolver.findOrCreateByPhone(phone)
+                   ├─ customerSession.encodeCustomerSession(...)
+                   ├─ customerSession.setCustomerSessionCookie(value)
+                   └─ crmProgressionService.refreshCustomerProgression(id)
+```
+
+### 12l.3 Customer-safe data shapes
+
+Every portal API route handpicks the response shape. `orders.labor_cost`, `material_cost`, `tech`, `assigned_technician_id`, and free-form `notes` never reach the customer. Wrong-owner attempts on `/api/portal/orders/[id]` get the same 404 as a missing id — no enumeration leak.
+
+### 12l.4 Upload pipeline
+
+```
+client
+  └─ POST /api/{public,portal}/upload-url
+       ├─ rate-limit  (public 10/hr, portal 30/10min)
+       ├─ MIME + size + scope validation
+       └─ uploadService.issueUploadUrl
+            └─ admin.storage.from('customer-uploads')
+                 .createSignedUploadUrl(<branch>/{scope}/<id>/<uuid>.<ext>)
+            → returns { signedUrl, token, path, expiresAt }
+
+client PUTs bytes directly to signedUrl (bypasses the platform).
+client stores `path` in quote_requests.photos (or future order_attachments).
+```
+
+Bucket `customer-uploads` is private. Read access via `issueReadUrl(path, ttl)` — short-lived signed GET URLs the portal / admin renderers use.
+
+### 12l.5 CRM progression
+
+`lib/crmProgressionService.ts` is the writer for two new `customers` columns:
+
+| Column | Domain | Source |
+|---|---|---|
+| `lifecycle_stage` | `new` / `active` / `at_risk` / `dormant` / `reactivated` / `churned` | `calculateLifecycleStage(stats)` — top-down rules on recency + frequency + prior stage |
+| `retention_score` | 0–100 | `calculateRetentionScore(stats)` — weighted recency (50 %) + frequency (30 %) + spend (20 %) |
+
+Sibling to `customerTierService` (which produces `customer_tier`). The two answer different questions: tier is "how valuable?", lifecycle is "where in the relationship?". Future automation reads `lifecycle_stage` to drive reactivation campaigns without re-computing per call.
+
+### 12l.6 Notification queue
+
+`lib/notificationService.ts::enqueueNotification` writes to `customer_notifications` and returns. Channels: `line`, `email`, `in_app`, `sms`. Status flow: `queued → sending → (sent|failed|skipped)`. **No dispatcher worker this phase** — the table is the contract; the future broadcast / reminder engine reads it.
+
+### 12l.7 Branch isolation reuse
+
+| Surface | Auth | Branch isolation |
+|---|---|---|
+| `/portal/*` | `careu_customer_session` | n/a — customer scope is enforced by `customer_id` match on every read |
+| `/api/portal/*` | session cookie | response shape never leaks branch slugs of other branches |
+| `/api/public/upload-url` | anonymous + rate-limited | branchCode validated against active branches; falls back to `no-branch/...` |
+| `/api/portal/upload-url` | session cookie | branch resolved server-side from `customers.branch_id`; client cannot override |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -1183,6 +1270,15 @@ app/
 ├── api/public/track/route.ts                 ← Public job-tracking lookup (rate-limited)
 ├── api/public/quote/route.ts                 ← Public quote-request submission
 ├── api/public/branches-list/route.ts         ← Public active-branches dropdown
+├── api/public/upload-url/route.ts            ← Anon signed PUT URL for quote photos
+├── api/portal/auth/request-otp/route.ts      ← Customer OTP issue
+├── api/portal/auth/verify-otp/route.ts       ← Customer OTP verify + mint cookie
+├── api/portal/auth/me/route.ts               ← Current customer session
+├── api/portal/auth/logout/route.ts           ← Clear customer cookie
+├── api/portal/orders/route.ts                ← Customer order list (narrow projection)
+├── api/portal/orders/[id]/route.ts           ← Customer order detail (owner check)
+├── api/portal/profile/route.ts               ← GET + PATCH customer profile
+├── api/portal/upload-url/route.ts            ← Authenticated signed PUT URL
 ├── (public)/layout.tsx                       ← Public-website route group layout
 ├── (public)/website/page.tsx                 ← Public marketing landing
 ├── (public)/branches/page.tsx                ← Active branches grid
@@ -1192,6 +1288,13 @@ app/
 ├── (public)/quote/page.tsx                   ← Quote-request form
 ├── (public)/about/page.tsx                   ← Static brand story
 ├── (public)/contact/page.tsx                 ← Contact options
+├── (public)/portal/layout.tsx                ← Customer portal layout
+├── (public)/portal/page.tsx                  ← Portal dashboard (signed-in home)
+├── (public)/portal/signin/page.tsx           ← Phone + OTP sign-in
+├── (public)/portal/orders/page.tsx           ← All orders list
+├── (public)/portal/orders/[id]/page.tsx      ← Order detail (customer-safe)
+├── (public)/portal/profile/page.tsx          ← Self-edit name + email
+├── (public)/portal/history/page.tsx          ← Completed / ready / cancelled
 ├── sitemap.ts                                ← Dynamic sitemap incl. branch URLs
 ├── robots.ts                                 ← Allow public, disallow /api + /admin + OPS
 ├── customers/page.tsx
@@ -1262,8 +1365,14 @@ lib/
 ├── aggregationService.ts ← materialised-view reads + refreshDashboardSnapshot
 ├── bonusEngine.ts        ← calculateSuggestedBonus + BONUS_RULES + isOverride
 ├── dashboardSnapshotKpi.ts ← assembleSnapshotKpis + date-bucketed helpers over matview rows
-├── rateLimit.ts          ← in-memory token bucket for /api/public/* routes
-└── publicTheme.ts        ← BRAND_THEMES + themeForBranch for the customer-facing website
+├── rateLimit.ts          ← in-memory token bucket for /api/public/* + /api/portal/*
+├── publicTheme.ts        ← BRAND_THEMES + themeForBranch for the customer-facing website
+├── customerSession.ts    ← HMAC customer cookie codec (careu_customer_session)
+├── customerOtp.ts        ← OTP issue / verify (hashed; universal dev code 123456)
+├── customerIdentityResolver.ts ← resolveByPhone / Line / findOrCreateByPhone / merge stub
+├── crmProgressionService.ts ← calculateLifecycleStage + calculateRetentionScore + refresh
+├── notificationService.ts ← enqueueNotification + read helpers
+└── uploadService.ts      ← issueUploadUrl + issueReadUrl against customer-uploads bucket
 
 components/receipt/
 ├── ReceiptA4.tsx        ← full-page branded receipt
@@ -1289,4 +1398,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (public website + CRM foundation — `app/(public)/*`, `/api/public/*`, `20260534` migration, new `PUBLIC_WEBSITE.md` + `CRM_FOUNDATION.md`)
+**Last updated:** 2026-05-14 (customer portal + uploads + CRM progression — `app/(public)/portal/*`, `/api/portal/*`, `lib/customerOtp.ts`, `lib/uploadService.ts`, `lib/crmProgressionService.ts`, `20260535` migration, new `CUSTOMER_PORTAL.md` + `UPLOADS.md`)

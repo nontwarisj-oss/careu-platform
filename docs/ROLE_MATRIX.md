@@ -97,6 +97,14 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`customer_notes` write** | ✅ | ✅ | ✅ 🏢 (branch_id matches) | ✅ 🏢 | ❌ |
 | **`customer_activity` read** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | 👁 🏢 (read-only) |
 | **`customer_channels` write** | ✅ | ✅ | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **Customer portal (`/portal/*`)** | n/a — customer cookie surface | same | same | same | n/a |
+| **Customer OTP routes (`/api/portal/auth/request-otp` + `verify-otp`)** | anonymous; rate-limited; sets `careu_customer_session` cookie | same | same | same | same |
+| **Customer portal data (`/api/portal/orders` + `[id]` + `profile`)** | requires customer cookie; `customer_id` match enforced | same | same | same | same |
+| **Customer upload URL (`/api/portal/upload-url`)** | customer cookie; scope forced to own customer/order | same | same | same | same |
+| **Anon quote upload URL (`/api/public/upload-url`)** | anonymous; rate-limited 10/hr/IP; scope always 'quote' | same | same | same | same |
+| **`customer_otp_codes` read** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`customer_notifications` read** | ✅ | ✅ | ✅ 🏢 (own branch) | ❌ | ❌ |
+| **`customers.lifecycle_stage` + `retention_score`** | written by `crmProgressionService` (admin client); RLS read inherits the existing `customers` policies | same | same | same | n/a |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -257,4 +265,4 @@ This document defines the contract. Whenever a permission changes:
 
 ---
 
-**Last updated:** 2026-05-14 (public website + CRM foundation)
+**Last updated:** 2026-05-14 (customer portal + uploads + CRM progression)
