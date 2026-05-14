@@ -22,6 +22,7 @@ import {
 } from "@/lib/pricing";
 import { fetchPricingCatalog } from "@/lib/pricingDb";
 import { createSmartOrder, type BusinessType } from "@/lib/orderCreate";
+import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { normalizePhone } from "@/lib/phone";
 import { normalizeJobId } from "@/lib/jobId";
 import { useAuth } from "@/lib/authContext";
@@ -432,6 +433,11 @@ export function SmartOrderForm({
     }).catch(() => {
       // Network errors swallowed intentionally; the manual button is the UX.
     });
+
+    // Lifecycle notification trigger — fire-and-forget. Adds an SMS +
+    // LINE row to the dispatch queue if the customer has SMS / LINE
+    // enabled in their preferences. Dispatch worker handles the rest.
+    void triggerLifecycleEvent("order_created", orderId);
 
     const summary: SmartOrderCreatedSummary = {
       orderId,

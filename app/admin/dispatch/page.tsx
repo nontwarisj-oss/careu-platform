@@ -74,12 +74,29 @@ type TickResult = {
   finishedAt: string;
 };
 
+type Observability = {
+  windowHours: number;
+  sampleSize: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  successRate: number | null;
+  avgRetryDepth: number;
+  providerLatencyMs: { p50: number | null; p95: number | null; samples: number };
+  deadLetterTrend: Array<{ hour: string; failed: number; sent: number }>;
+  byChannel: Record<
+    string,
+    { sent: number; failed: number; skipped: number; total: number; successRate: number | null }
+  >;
+};
+
 type Summary = {
   ok: boolean;
   counts: Counts;
   recentFailures: FailureRow[];
   pendingPreview: PendingRow[];
   smsProvider: string;
+  observability?: Observability;
 };
 
 function fmt(iso: string | null | undefined): string {
@@ -261,6 +278,10 @@ function DispatchInner() {
               <KpiCard label="Skipped" value={summary.counts.skipped} tone="gray" />
             </div>
 
+            {summary.observability && (
+              <ObservabilityPanel data={summary.observability} />
+            )}
+
             {lastTick && (
               <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4">
                 <p className="text-xs uppercase tracking-widest text-green-800 font-semibold">
@@ -423,6 +444,153 @@ function DispatchInner() {
         )}
       </div>
     </div>
+  );
+}
+
+function ObservabilityPanel({ data }: { data: Observability }) {
+  const successColor =
+    data.successRate == null
+      ? "text-gray-500"
+      : data.successRate >= 95
+      ? "text-green-700"
+      : data.successRate >= 80
+      ? "text-amber-700"
+      : "text-red-700";
+  const maxBucket = Math.max(
+    1,
+    ...data.deadLetterTrend.map((b) => Math.max(b.failed, b.sent))
+  );
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">
+            Observability (24h)
+          </h2>
+          <p className="text-[11px] text-gray-500">
+            sample: {data.sampleSize} attempts · {data.sent} sent ·{" "}
+            {data.failed} failed · {data.skipped} skipped
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <dt className="text-[10px] uppercase tracking-widest text-gray-500">
+            Success rate
+          </dt>
+          <dd className={`mt-0.5 text-xl font-extrabold ${successColor}`}>
+            {data.successRate == null ? "—" : `${data.successRate}%`}
+          </dd>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <dt className="text-[10px] uppercase tracking-widest text-gray-500">
+            Avg retry depth
+          </dt>
+          <dd className="mt-0.5 text-xl font-extrabold text-gray-900">
+            {data.avgRetryDepth}
+          </dd>
+          <div className="text-[10px] text-gray-500">
+            attempts per failure
+          </div>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <dt className="text-[10px] uppercase tracking-widest text-gray-500">
+            Provider p50
+          </dt>
+          <dd className="mt-0.5 text-xl font-extrabold text-gray-900">
+            {data.providerLatencyMs.p50 != null
+              ? `${data.providerLatencyMs.p50}ms`
+              : "—"}
+          </dd>
+          <div className="text-[10px] text-gray-500">
+            n={data.providerLatencyMs.samples}
+          </div>
+        </div>
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+          <dt className="text-[10px] uppercase tracking-widest text-gray-500">
+            Provider p95
+          </dt>
+          <dd className="mt-0.5 text-xl font-extrabold text-gray-900">
+            {data.providerLatencyMs.p95 != null
+              ? `${data.providerLatencyMs.p95}ms`
+              : "—"}
+          </dd>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+          Trend (per hour) — green=sent · red=failed
+        </p>
+        <div
+          className="mt-2 grid gap-0.5 h-16"
+          style={{
+            gridTemplateColumns: "repeat(24, minmax(0, 1fr))",
+          }}
+        >
+          {data.deadLetterTrend.map((b, i) => {
+            const sentHeight = (b.sent / maxBucket) * 100;
+            const failedHeight = (b.failed / maxBucket) * 100;
+            return (
+              <div
+                key={`${b.hour}-${i}`}
+                className="flex flex-col-reverse"
+                title={`${b.hour}: ${b.sent} sent · ${b.failed} failed`}
+              >
+                <div
+                  className="bg-green-500 rounded-t-sm"
+                  style={{ height: `${sentHeight}%` }}
+                />
+                <div
+                  className="bg-red-500 rounded-t-sm"
+                  style={{ height: `${failedHeight}%` }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {Object.keys(data.byChannel).length > 0 && (
+        <div className="mt-4">
+          <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
+            Per channel
+          </p>
+          <div className="mt-2 grid sm:grid-cols-2 gap-2">
+            {Object.entries(data.byChannel).map(([ch, s]) => (
+              <div
+                key={ch}
+                className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 flex items-center justify-between"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">
+                    {ch.toUpperCase()}
+                  </div>
+                  <div className="text-[10px] text-gray-500">
+                    {s.total} total · {s.sent} sent · {s.failed} failed ·{" "}
+                    {s.skipped} skipped
+                  </div>
+                </div>
+                <div
+                  className={`text-lg font-extrabold ${
+                    s.successRate == null
+                      ? "text-gray-500"
+                      : s.successRate >= 95
+                      ? "text-green-700"
+                      : s.successRate >= 80
+                      ? "text-amber-700"
+                      : "text-red-700"
+                  }`}
+                >
+                  {s.successRate == null ? "—" : `${s.successRate}%`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

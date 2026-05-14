@@ -60,11 +60,135 @@ export async function GET() {
     .order("send_after", { ascending: true })
     .limit(25);
 
+  // Observability — last 24h dispatch log slice. Aggregate in-app to
+  // avoid a dependency on a Postgres aggregate view; the log is bounded
+  // by retention and the slice is small (typically 100s of rows).
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const dispatchLogRes = await admin
+    .from("notification_dispatch_log")
+    .select("channel, outcome, attempt, latency_ms, created_at")
+    .gte("created_at", since24h)
+    .limit(1000);
+  const obsRows =
+    dispatchLogRes.error || !dispatchLogRes.data
+      ? []
+      : (dispatchLogRes.data as Array<{
+          channel: string;
+          outcome: string;
+          attempt: number;
+          latency_ms: number | null;
+          created_at: string;
+        }>);
+
+  const observability = computeObservability(obsRows);
+
   return NextResponse.json({
     ok: true,
     counts: { queued, sending, sent, failed, skipped },
     recentFailures: failuresRes.data ?? [],
     pendingPreview: queuedRes.data ?? [],
     smsProvider: (process.env.SMS_PROVIDER ?? "console").toLowerCase(),
+    observability,
   });
+}
+
+type DispatchLogSlice = Array<{
+  channel: string;
+  outcome: string;
+  attempt: number;
+  latency_ms: number | null;
+  created_at: string;
+}>;
+
+function computeObservability(rows: DispatchLogSlice) {
+  const total = rows.length;
+  const sent = rows.filter((r) => r.outcome === "sent").length;
+  const failed = rows.filter((r) => r.outcome === "failed").length;
+  const skipped = rows.filter((r) => r.outcome === "skipped").length;
+
+  const successRate = total > 0 ? Math.round((sent / total) * 1000) / 10 : null;
+
+  // Retry depth — average attempt number for failed rows. Higher means
+  // the worker is grinding before giving up.
+  const failedRows = rows.filter((r) => r.outcome === "failed");
+  const avgRetryDepth =
+    failedRows.length === 0
+      ? 0
+      : Math.round(
+          (failedRows.reduce((acc, r) => acc + r.attempt, 0) /
+            failedRows.length) *
+            10
+        ) / 10;
+
+  // Provider latency proxy — p50 + p95 over sent rows that have a
+  // latency_ms set. Skipped rows skip the provider entirely so they
+  // have no latency.
+  const latencies = rows
+    .filter((r) => r.outcome === "sent" && r.latency_ms != null)
+    .map((r) => r.latency_ms as number)
+    .sort((a, b) => a - b);
+
+  const p50 = percentile(latencies, 0.5);
+  const p95 = percentile(latencies, 0.95);
+
+  // Dead-letter trend — last 24h vs prior 24h. The dispatch log only
+  // has the last 24h above; we approximate by sampling failed rows
+  // bucketed by hour for a small trend line.
+  const trend: Array<{ hour: string; failed: number; sent: number }> = [];
+  const now = Date.now();
+  for (let i = 23; i >= 0; i--) {
+    const bucketStart = now - (i + 1) * 60 * 60 * 1000;
+    const bucketEnd = now - i * 60 * 60 * 1000;
+    const inBucket = rows.filter((r) => {
+      const t = new Date(r.created_at).getTime();
+      return t >= bucketStart && t < bucketEnd;
+    });
+    trend.push({
+      hour: new Date(bucketEnd).toISOString().slice(0, 13),
+      failed: inBucket.filter((r) => r.outcome === "failed").length,
+      sent: inBucket.filter((r) => r.outcome === "sent").length,
+    });
+  }
+
+  // Per-channel breakdown.
+  const byChannel: Record<
+    string,
+    { sent: number; failed: number; skipped: number; total: number; successRate: number | null }
+  > = {};
+  rows.forEach((r) => {
+    const slot = (byChannel[r.channel] ??= {
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      total: 0,
+      successRate: null,
+    });
+    slot.total += 1;
+    if (r.outcome === "sent") slot.sent += 1;
+    else if (r.outcome === "failed") slot.failed += 1;
+    else if (r.outcome === "skipped") slot.skipped += 1;
+  });
+  Object.values(byChannel).forEach((slot) => {
+    slot.successRate =
+      slot.total > 0 ? Math.round((slot.sent / slot.total) * 1000) / 10 : null;
+  });
+
+  return {
+    windowHours: 24,
+    sampleSize: total,
+    sent,
+    failed,
+    skipped,
+    successRate,
+    avgRetryDepth,
+    providerLatencyMs: { p50, p95, samples: latencies.length },
+    deadLetterTrend: trend,
+    byChannel,
+  };
+}
+
+function percentile(sorted: number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  const idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length));
+  return sorted[idx];
 }

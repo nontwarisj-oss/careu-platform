@@ -15,6 +15,21 @@ import {
   ORDER_STATUS_FLOW,
   orderStatusLabel,
 } from "@/lib/statusBadges";
+import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
+import type { LifecycleEvent } from "@/lib/lifecycleNotifier";
+
+function mapStatusToLifecycleEvent(
+  before: string | null,
+  after: string
+): LifecycleEvent | null {
+  // Only "into" transitions trigger a customer-facing notification.
+  // Reverse changes (e.g. completed → in-progress, a fix-up flow) do
+  // not re-notify — the customer was already told.
+  if (after === "in-progress" && before !== "in-progress") return "repair_started";
+  if (after === "ready-for-pickup" && before !== "ready-for-pickup") return "ready_for_pickup";
+  if (after === "completed" && before !== "completed") return "order_completed";
+  return null;
+}
 
 type Order = {
   id: string;
@@ -127,6 +142,14 @@ export default function OrdersPage() {
       )
     ) {
       console.warn("[orders] audit write failed", auditRes.error.message);
+    }
+
+    // Lifecycle notification trigger — fire-and-forget. The notifier
+    // dedups, consults preferences, and enqueues the message; it never
+    // blocks the OPS flow.
+    const lifecycleEvent = mapStatusToLifecycleEvent(previousStatus, newStatus);
+    if (lifecycleEvent) {
+      void triggerLifecycleEvent(lifecycleEvent, orderId);
     }
   };
 

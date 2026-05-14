@@ -27,6 +27,7 @@ The portal is **separate from the OPS auth**. Operators sign in via LINE login â
 | `/portal/orders/[id]` | `app/(public)/portal/orders/[id]/page.tsx` | required + customer_id match | Customer-safe order detail + timeline + photo gallery |
 | `/portal/profile` | `app/(public)/portal/profile/page.tsx` | required | Self-edit name + email |
 | `/portal/phone-change` | `app/(public)/portal/phone-change/page.tsx` | required | OTP-verified phone change |
+| `/portal/preferences` | `app/(public)/portal/preferences/page.tsx` | required | Notification channel + kind toggles |
 | `/portal/history` | `app/(public)/portal/history/page.tsx` | required | Completed / ready / cancelled orders |
 
 `/portal/*` is included in the `PUBLIC_PREFIXES` list (lib/authContext.tsx) so the OPS strict-mode redirect leaves it alone. Crawlers are blocked by `robots.ts` because the portal is a private surface.

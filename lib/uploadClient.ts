@@ -35,12 +35,23 @@ export type UploadResult =
       mime: string;
       sizeBytes: number;
       compressed: boolean;
+      /** True when the server still needs to transcode this object
+       *  (e.g. an Android upload of HEIC bytes that the client couldn't
+       *  decode). A future Storage trigger picks these up. */
+      needsTranscoding: boolean;
+      /** Whether EXIF orientation was applied on the client. */
+      orientationFixed: boolean;
     }
   | { ok: false; reason: string };
 
 const TARGET_MAX_DIMENSION = 1920;
 const TARGET_JPEG_QUALITY = 0.82;
-const PASSTHROUGH_MIMES = new Set(["image/heic", "image/heif", "image/gif"]);
+// GIF stays as-is (re-encode loses animation). HEIC/HEIF are tried via
+// `createImageBitmap` (which Safari iOS supports natively); when the
+// decode fails, we pass the raw bytes through and the server-side
+// transcoder picks it up. See COMPRESSION below.
+const FORCE_PASSTHROUGH_MIMES = new Set(["image/gif"]);
+const HEIC_MIMES = new Set(["image/heic", "image/heif"]);
 const RETRY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 600;
 
@@ -59,27 +70,81 @@ export async function compressImageIfBeneficial(file: File): Promise<{
   blob: Blob;
   mime: string;
   compressed: boolean;
+  /** True when the upload contains raw HEIC bytes a Storage trigger
+   *  still needs to transcode. The caller forwards this hint to the
+   *  /api/portal/upload-url endpoint as `needsTranscoding`. */
+  needsTranscoding: boolean;
+  /** Whether EXIF orientation was applied during re-encode. */
+  orientationFixed: boolean;
 }> {
   const mime = (file.type ?? "").toLowerCase();
-  if (PASSTHROUGH_MIMES.has(mime) || !mime.startsWith("image/")) {
-    return { blob: file, mime: mime || "application/octet-stream", compressed: false };
+  if (!mime.startsWith("image/")) {
+    return {
+      blob: file,
+      mime: mime || "application/octet-stream",
+      compressed: false,
+      needsTranscoding: false,
+      orientationFixed: false,
+    };
+  }
+  if (FORCE_PASSTHROUGH_MIMES.has(mime)) {
+    return {
+      blob: file,
+      mime,
+      compressed: false,
+      needsTranscoding: false,
+      orientationFixed: false,
+    };
+  }
+
+  // Attempt to decode + auto-apply EXIF orientation. `imageOrientation:
+  // 'from-image'` is the standard option; older browsers ignore it and
+  // we fall back to "no rotation" — which matches what pre-EXIF iOS
+  // upload gave anyway.
+  const bitmap = await createImageBitmap(file, {
+    imageOrientation: "from-image",
+  }).catch(() => null);
+
+  if (!bitmap) {
+    // Decode failed. For HEIC/HEIF this is the expected path on Chrome/
+    // Android — we upload the raw bytes and flag for server transcode.
+    return {
+      blob: file,
+      mime,
+      compressed: false,
+      needsTranscoding: HEIC_MIMES.has(mime),
+      orientationFixed: false,
+    };
   }
 
   try {
-    const bitmap = await createImageBitmap(file).catch(() => null);
-    if (!bitmap) {
-      return { blob: file, mime, compressed: false };
-    }
     const { width, height } = bitmap;
     const longer = Math.max(width, height);
-    if (longer <= TARGET_MAX_DIMENSION && file.size < 1.5 * 1024 * 1024) {
-      // Already small enough — skip the re-encode round-trip.
-      bitmap.close?.();
-      return { blob: file, mime, compressed: false };
-    }
+
+    // For HEIC we ALWAYS re-encode (output JPEG so older browsers can
+    // render). For other images we re-encode only when it helps —
+    // either to downscale or to apply EXIF orientation.
     const scale = longer > TARGET_MAX_DIMENSION ? TARGET_MAX_DIMENSION / longer : 1;
     const w = Math.round(width * scale);
     const h = Math.round(height * scale);
+
+    // Skip re-encode for already-small non-HEIC images. The browser's
+    // auto-orientation works at render time so we can safely ship the
+    // original bytes for tiny screenshots etc.
+    if (
+      scale === 1 &&
+      file.size < 1.2 * 1024 * 1024 &&
+      !HEIC_MIMES.has(mime)
+    ) {
+      bitmap.close?.();
+      return {
+        blob: file,
+        mime,
+        compressed: false,
+        needsTranscoding: false,
+        orientationFixed: false,
+      };
+    }
 
     let canvas: HTMLCanvasElement | OffscreenCanvas;
     if (typeof OffscreenCanvas !== "undefined") {
@@ -95,7 +160,13 @@ export async function compressImageIfBeneficial(file: File): Promise<{
       | null;
     if (!ctx) {
       bitmap.close?.();
-      return { blob: file, mime, compressed: false };
+      return {
+        blob: file,
+        mime,
+        compressed: false,
+        needsTranscoding: HEIC_MIMES.has(mime),
+        orientationFixed: false,
+      };
     }
     ctx.drawImage(bitmap, 0, 0, w, h);
     bitmap.close?.();
@@ -114,16 +185,44 @@ export async function compressImageIfBeneficial(file: File): Promise<{
         );
       }
     });
-    if (!blob) return { blob: file, mime, compressed: false };
-
-    // If the "compressed" output is larger than the original, keep the
-    // original. Re-encoding tiny PNG screenshots can balloon them.
-    if (blob.size >= file.size) {
-      return { blob: file, mime, compressed: false };
+    if (!blob) {
+      return {
+        blob: file,
+        mime,
+        compressed: false,
+        needsTranscoding: HEIC_MIMES.has(mime),
+        orientationFixed: false,
+      };
     }
-    return { blob, mime: "image/jpeg", compressed: true };
+
+    // If the "compressed" output is larger than the original AND the
+    // input wasn't HEIC, keep the original. For HEIC we always prefer
+    // the JPEG output even if larger — older browsers can't render
+    // HEIC, so universal compatibility beats byte count.
+    if (blob.size >= file.size && !HEIC_MIMES.has(mime)) {
+      return {
+        blob: file,
+        mime,
+        compressed: false,
+        needsTranscoding: false,
+        orientationFixed: false,
+      };
+    }
+    return {
+      blob,
+      mime: "image/jpeg",
+      compressed: true,
+      needsTranscoding: false,
+      orientationFixed: true,
+    };
   } catch {
-    return { blob: file, mime, compressed: false };
+    return {
+      blob: file,
+      mime,
+      compressed: false,
+      needsTranscoding: HEIC_MIMES.has(mime),
+      orientationFixed: false,
+    };
   }
 }
 
@@ -263,7 +362,13 @@ export async function uploadFile(input: {
     return { ok: false, reason: "ไฟล์ว่างเปล่า" };
   }
 
-  const { blob, mime, compressed } = await compressImageIfBeneficial(file);
+  const {
+    blob,
+    mime,
+    compressed,
+    needsTranscoding,
+    orientationFixed,
+  } = await compressImageIfBeneficial(file);
   const sizeBytes = blob.size;
 
   let lastReason = "Unknown";
@@ -297,6 +402,8 @@ export async function uploadFile(input: {
         mime,
         sizeBytes,
         compressed,
+        needsTranscoding,
+        orientationFixed,
       };
     }
 

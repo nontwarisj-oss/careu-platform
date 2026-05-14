@@ -116,7 +116,7 @@ Future phase: if Storage RLS becomes useful (e.g. for direct anon reads on truly
 
 | Step | Behaviour |
 |---|---|
-| Compress | `createImageBitmap` → `OffscreenCanvas` re-encode → JPEG @ quality 0.82 capped at 1920 px (longer side). Skipped for HEIC / HEIF / GIF (canvas can't decode) and for already-small images. Falls back to the original blob if the re-encoded version would be *larger* than the input. |
+| Compress | `createImageBitmap(file, { imageOrientation: "from-image" })` auto-applies EXIF orientation. Re-encode → JPEG @ quality 0.82 capped at 1920 px (longer side). GIF passes through (animation). HEIC/HEIF: iOS Safari decodes natively (→ JPEG); other browsers fail the decode (→ raw bytes uploaded + `needsTranscoding: true`). |
 | Signed URL | POSTs to `/api/portal/upload-url` or `/api/public/upload-url` depending on scope. |
 | PUT with retry | XHR-based, emits `onProgress({ bytesSent, bytesTotal, percent })`. Retries on status 0/408/429/5xx with exponential backoff (600 ms → 1.8 s → 5.4 s). Non-retryable failures (400 MIME, 403 expired) bail immediately. |
 

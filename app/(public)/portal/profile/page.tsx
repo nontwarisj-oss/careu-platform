@@ -16,9 +16,19 @@ type Profile = {
   lifetimeSpend: number;
 };
 
+type ActivityEvent = {
+  id: string;
+  kind: string;
+  label: string;
+  timestamp: string;
+  source: "activity" | "notification";
+  detail: string | null;
+};
+
 export default function PortalProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(true);
@@ -28,12 +38,15 @@ export default function PortalProfilePage() {
 
   useEffect(() => {
     void (async () => {
-      const res = await fetch("/api/portal/profile", { cache: "no-store" });
-      if (res.status === 401) {
+      const [profileRes, activityRes] = await Promise.all([
+        fetch("/api/portal/profile", { cache: "no-store" }),
+        fetch("/api/portal/activity?limit=20", { cache: "no-store" }),
+      ]);
+      if (profileRes.status === 401 || activityRes.status === 401) {
         router.replace("/portal/signin");
         return;
       }
-      const json = (await res.json()) as {
+      const json = (await profileRes.json()) as {
         ok?: boolean;
         profile?: Profile;
         reason?: string;
@@ -46,6 +59,15 @@ export default function PortalProfilePage() {
       setProfile(json.profile);
       setName(json.profile.name);
       setEmail(json.profile.email);
+      if (activityRes.ok) {
+        const aj = (await activityRes.json()) as {
+          ok?: boolean;
+          events?: ActivityEvent[];
+        };
+        if (aj.ok && Array.isArray(aj.events)) {
+          setActivity(aj.events);
+        }
+      }
       setLoading(false);
     })();
   }, [router]);
@@ -168,6 +190,23 @@ export default function PortalProfilePage() {
       </form>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">การแจ้งเตือน</h2>
+            <p className="mt-0.5 text-[11px] text-gray-500">
+              จัดการช่องทางและประเภทข้อความที่จะรับ
+            </p>
+          </div>
+          <a
+            href="/portal/preferences"
+            className="rounded-xl border border-green-200 bg-green-50 hover:bg-green-100 text-green-800 px-3 py-2 text-xs font-semibold whitespace-nowrap"
+          >
+            ตั้งค่า →
+          </a>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <h2 className="text-lg font-bold text-gray-900">ข้อมูลสมาชิก</h2>
         <dl className="mt-3 grid sm:grid-cols-2 gap-3 text-sm">
           <Field label="Tier" value={profile.tier ?? "—"} />
@@ -190,6 +229,48 @@ export default function PortalProfilePage() {
           />
           <Field label="สาขาหลัก" value={profile.branchId ?? "—"} />
         </dl>
+      </section>
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <h2 className="text-lg font-bold text-gray-900">กิจกรรมล่าสุด</h2>
+        <p className="mt-1 text-[11px] text-gray-500">
+          แสดง 20 รายการล่าสุด (ใน 90 วัน)
+        </p>
+        {activity.length === 0 ? (
+          <p className="mt-3 text-sm text-gray-500">
+            ยังไม่มีกิจกรรม — มาเริ่มต้นกับเราด้วยการส่งงานสักรายการสิ
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-gray-100">
+            {activity.map((ev) => (
+              <li key={ev.id} className="py-2.5 flex items-start gap-3">
+                <span
+                  className={`mt-1 inline-block h-2 w-2 rounded-full flex-shrink-0 ${
+                    ev.source === "notification"
+                      ? "bg-blue-400"
+                      : "bg-green-500"
+                  }`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-gray-900">
+                      {ev.label}
+                    </span>
+                    <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                      {new Date(ev.timestamp).toLocaleString("th-TH", {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })}
+                    </span>
+                  </div>
+                  {ev.detail && (
+                    <div className="text-[11px] text-gray-600">{ev.detail}</div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

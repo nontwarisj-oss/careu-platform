@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { usePortalRefresh } from "@/lib/usePortalRefresh";
 
 type PortalOrderDetail = {
   id: string;
@@ -53,54 +54,61 @@ export default function PortalOrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
     if (!id) return;
-    void (async () => {
-      const [orderRes, timelineRes, photosRes] = await Promise.all([
-        fetch(`/api/portal/orders/${id}`, { cache: "no-store" }),
-        fetch(`/api/portal/orders/${id}/timeline`, { cache: "no-store" }),
-        fetch(`/api/portal/orders/${id}/photos`, { cache: "no-store" }),
-      ]);
-      if (
-        orderRes.status === 401 ||
-        timelineRes.status === 401 ||
-        photosRes.status === 401
-      ) {
-        router.replace("/portal/signin");
-        return;
-      }
-      const json = (await orderRes.json()) as {
-        ok?: boolean;
-        order?: PortalOrderDetail;
-        reason?: string;
-      };
-      if (!json.ok || !json.order) {
-        setError(json.reason ?? "ไม่พบงาน");
-        setLoading(false);
-        return;
-      }
-      setOrder(json.order);
-      if (timelineRes.ok) {
-        const tj = (await timelineRes.json()) as {
-          ok?: boolean;
-          events?: TimelineEvent[];
-        };
-        if (tj.ok && Array.isArray(tj.events)) {
-          setTimeline(tj.events);
-        }
-      }
-      if (photosRes.ok) {
-        const pj = (await photosRes.json()) as {
-          ok?: boolean;
-          photos?: PortalPhoto[];
-        };
-        if (pj.ok && Array.isArray(pj.photos)) {
-          setPhotos(pj.photos);
-        }
-      }
+    const [orderRes, timelineRes, photosRes] = await Promise.all([
+      fetch(`/api/portal/orders/${id}`, { cache: "no-store" }),
+      fetch(`/api/portal/orders/${id}/timeline`, { cache: "no-store" }),
+      fetch(`/api/portal/orders/${id}/photos`, { cache: "no-store" }),
+    ]);
+    if (
+      orderRes.status === 401 ||
+      timelineRes.status === 401 ||
+      photosRes.status === 401
+    ) {
+      router.replace("/portal/signin");
+      return;
+    }
+    const json = (await orderRes.json()) as {
+      ok?: boolean;
+      order?: PortalOrderDetail;
+      reason?: string;
+    };
+    if (!json.ok || !json.order) {
+      setError(json.reason ?? "ไม่พบงาน");
       setLoading(false);
-    })();
+      return;
+    }
+    setOrder(json.order);
+    if (timelineRes.ok) {
+      const tj = (await timelineRes.json()) as {
+        ok?: boolean;
+        events?: TimelineEvent[];
+      };
+      if (tj.ok && Array.isArray(tj.events)) {
+        setTimeline(tj.events);
+      }
+    }
+    if (photosRes.ok) {
+      const pj = (await photosRes.json()) as {
+        ok?: boolean;
+        photos?: PortalPhoto[];
+      };
+      if (pj.ok && Array.isArray(pj.photos)) {
+        setPhotos(pj.photos);
+      }
+    }
+    setLoading(false);
   }, [id, router]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Visibility-aware polling — refresh every 30s while the tab is in
+  // the foreground. Pauses entirely when the tab is hidden so a
+  // forgotten browser doesn't burn bandwidth all day.
+  usePortalRefresh(refresh, { intervalMs: 30_000, fireOnMount: false });
 
   if (loading) {
     return (

@@ -1247,6 +1247,81 @@ All three routes hard-check `orders.customer_id === session.customerId` (same 40
 
 ---
 
+## 12n. Customer engagement layer (post-`20260537`)
+
+> Status: **live**. Lifecycle events queue real notifications. Customers control SMS/LINE/kind toggles via `/portal/preferences`. Portal polls for live status. Admin sees per-customer comms history + dispatch observability.
+
+See [LIFECYCLE_NOTIFICATIONS.md](./LIFECYCLE_NOTIFICATIONS.md) for the operator runbook + cron wiring.
+
+### 12n.1 Notifier flow
+
+```
+OPS UI / cron ──► /api/internal/lifecycle-event
+                  ├─ requireRole + requireBranchAccess
+                  └─ notifyLifecycleEvent(event, orderId)
+                       ├─ load order + customer + prefs + LINE link
+                       ├─ render via lib/notificationTemplates
+                       ├─ dedup (6h window per kind+orderId+channel)
+                       ├─ enqueueNotification × {sms, line}
+                       └─ audit: order_audit_log.action='lifecycle_notified'
+
+dispatch worker  ──► customer_notifications (queue, one row per intent)
+                  ├─ runDispatchTick
+                  │   ├─ writeDispatchLog × {sent | failed | skipped}
+                  │   └─ retry with backoff
+                  └─ notification_dispatch_log (append-only telemetry)
+
+observability   ──► /api/admin/dispatch/summary
+                  ├─ counts by status (queue)
+                  ├─ aggregate over 24h dispatch_log
+                  │   ├─ success rate %
+                  │   ├─ avg retry depth
+                  │   ├─ provider p50 / p95
+                  │   └─ 24-bucket trend
+                  └─ /admin/dispatch UI renders inline
+```
+
+### 12n.2 New tables
+
+| Table | Purpose |
+|---|---|
+| `public.customer_notification_preferences` | Per-customer channel + kind toggles. Default opt-in transactional, opt-out promotional. |
+| `public.notification_dispatch_log` | One row per dispatch ATTEMPT. Append-only. Source for the observability panel. |
+
+### 12n.3 Templates
+
+`lib/notificationTemplates.ts` — pure renderer. Per-kind function returns `{ sms, line }`. Branch branding via `BranchTemplateBrand`. Tier-aware honorific ("คุณ" for gold/platinum/VIP). No `{{var}}` templating — variables are typed at every call site.
+
+### 12n.4 Preferences
+
+`/portal/preferences` is a sectioned toggle UI: master channel toggles (SMS / LINE / email) + per-kind toggles (order status, pickup reminders, payment alerts, promotional). Each save writes a `prefs_changed` row to `customer_activity` with the diff. The lifecycle notifier consults this row at enqueue time so a customer who's opted out never sees their messages queue or count against retry quotas.
+
+### 12n.5 Portal realtime
+
+`lib/usePortalRefresh.ts` — visibility-aware polling hook (30 s default). Pauses when the tab is hidden, refreshes on `visibilitychange`, skips overlapping fetches. Used by `/portal/orders/[id]` so a customer who keeps the page open sees status changes within one tick of the OPS operator changing them.
+
+### 12n.6 HEIC + EXIF orientation
+
+`lib/uploadClient.ts::compressImageIfBeneficial` upgraded:
+- `createImageBitmap(file, { imageOrientation: "from-image" })` auto-applies EXIF — no more sideways iPhone portraits.
+- HEIC/HEIF: iOS Safari decodes natively → re-encodes to JPEG. Other browsers fail the decode → uploads raw bytes + sets `needsTranscoding: true` for a future Storage trigger.
+
+### 12n.7 Admin customer view
+
+`/admin/customers/[id]` aggregates everything we know about one customer: profile + lifecycle stage + retention score + tier + prefs + LINE link + recent orders (10) + activity (25) + notifications (15) + dispatch log (15) + upload count. Owner / HQ unrestricted; branch_manager / front_staff scoped by `requireBranchAccess(customer.branch_id)`. Read-only — no broadcast / send-from-admin button this phase.
+
+### 12n.8 Branch isolation reuse
+
+| Surface | Auth | Branch scope |
+|---|---|---|
+| `/api/internal/lifecycle-event` | operator role | `requireBranchAccess(order.branch_id)` |
+| `/api/cron/overdue-pickup-sweep` | Bearer CRON_SECRET | n/a — machine endpoint |
+| `/api/portal/preferences` | customer cookie | per-customer (own row only) |
+| `/api/portal/activity` | customer cookie | per-customer (own row only) |
+| `/api/admin/customers/[id]` | operator role | `requireBranchAccess(customer.branch_id)` |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

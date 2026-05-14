@@ -212,6 +212,63 @@ async function dispatchRow(row: NotificationRow): Promise<DispatchOutcome> {
   }
 }
 
+// ---------- Dispatch log writer ------------------------------------------
+//
+// One row per attempt. Append-only — the queue stays tidy (one row per
+// intent), this log captures every transition for the admin
+// observability view. Failures here MUST NOT propagate; the queue's
+// own row already records the customer-visible outcome.
+
+async function writeDispatchLog(
+  admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
+  args: {
+    row: NotificationRow;
+    outcome: "sent" | "failed" | "skipped";
+    retryable: boolean;
+    attempt: number;
+    latencyMs: number | null;
+    details?: Record<string, unknown>;
+    reason?: string | null;
+  }
+): Promise<void> {
+  const provider =
+    args.row.channel === "sms"
+      ? (process.env.SMS_PROVIDER ?? "console").toLowerCase()
+      : null;
+  try {
+    await admin.from("notification_dispatch_log").insert({
+      notification_id: args.row.id,
+      customer_id: args.row.customer_id,
+      branch_id: args.row.branch_id,
+      channel: args.row.channel,
+      kind: args.row.kind,
+      outcome: args.outcome,
+      retryable: args.retryable,
+      attempt: args.attempt,
+      latency_ms: args.latencyMs,
+      provider,
+      details: args.details ?? {},
+      reason: args.reason ?? null,
+    });
+  } catch (err) {
+    // Table missing or schema cache stale → silent. The customer-
+    // facing queue row already captured the outcome.
+    if (
+      err &&
+      typeof err === "object" &&
+      "message" in err &&
+      !/relation .* does not exist|schema cache|column .* does not exist/i.test(
+        String((err as { message: unknown }).message)
+      )
+    ) {
+      console.warn(
+        "[dispatch-worker] log insert failed",
+        (err as { message: unknown }).message
+      );
+    }
+  }
+}
+
 // ---------- The tick ------------------------------------------------------
 
 function backoffSeconds(attempts: number): number {
@@ -327,7 +384,9 @@ export async function runDispatchTick(
       }
     }
 
+    const dispatchStart = Date.now();
     const outcome = await dispatchRow(row);
+    const latencyMs = Date.now() - dispatchStart;
     const reachedDead = nextAttempts >= MAX_ATTEMPTS;
 
     if (outcome.ok) {
@@ -340,6 +399,15 @@ export async function runDispatchTick(
             error_reason: null,
           })
           .eq("id", row.id);
+        await writeDispatchLog(admin, {
+          row,
+          outcome: "sent",
+          retryable: false,
+          attempt: nextAttempts,
+          latencyMs,
+          details: outcome.details,
+          reason: null,
+        });
       }
       items.push({
         notificationId: row.id,
@@ -372,6 +440,15 @@ export async function runDispatchTick(
         .from("customer_notifications")
         .update(patch)
         .eq("id", row.id);
+      await writeDispatchLog(admin, {
+        row,
+        outcome: "failed",
+        retryable: !willDeadLetter,
+        attempt: nextAttempts,
+        latencyMs,
+        details: outcome.details,
+        reason: outcome.reason,
+      });
     }
     items.push({
       notificationId: row.id,

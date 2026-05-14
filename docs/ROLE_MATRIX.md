@@ -92,7 +92,13 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Manual dispatch tick (`/api/admin/dispatch/run`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Dispatch summary (`/api/admin/dispatch/summary`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
+| **Cron overdue-pickup sweep (`/api/cron/overdue-pickup-sweep`)** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **Lifecycle event trigger (`/api/internal/lifecycle-event`)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ✅ 🏢 |
+| **`/admin/customers/[id]` UI (unified customer view)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ❌ |
+| **Admin customer read (`/api/admin/customers/[id]`)** | ✅ all | ✅ all | ✅ 🏢 (branch-scoped) | ✅ 🏢 | ❌ |
 | **Portal phone-change (`/api/portal/phone-change/{request,verify}`)** | n/a — customer cookie required | n/a | n/a | n/a | n/a |
+| **Portal preferences (`/api/portal/preferences`)** | n/a — customer cookie required | n/a | n/a | n/a | n/a |
+| **Portal activity feed (`/api/portal/activity`)** | n/a — customer cookie required | n/a | n/a | n/a | n/a |
 | **Public website (`/website`, `/branches/*`, `/services`, `/track`, `/quote`, `/about`, `/contact`)** | ⚠ anonymous — anyone can view; no PII surfaced | same | same | same | same |
 | **Public job tracking (`/api/public/track`)** | anonymous — phone+jobId is the auth factor; rate-limited; returns branch label only | same | same | same | same |
 | **Public quote submission (`/api/public/quote`)** | anonymous — rate-limited 5/hour/IP; writes to `quote_requests` (anon INSERT policy) | same | same | same | same |

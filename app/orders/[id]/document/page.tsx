@@ -11,6 +11,7 @@ import {
   type DocumentOrder,
 } from "@/lib/customerMessage";
 import { sendToLineOA } from "@/lib/lineOA";
+import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { useAuth } from "@/lib/authContext";
 import { buildReceiptData, type ReceiptData } from "@/lib/receiptData";
 import {
@@ -325,6 +326,9 @@ export default function OrderDocumentPage({
     } else {
       setToast("บันทึกสถานะการชำระเรียบร้อย");
       void writeAudit("payment_changed", previous, next);
+      if (next === "paid") {
+        void triggerLifecycleEvent("payment_received", order.id);
+      }
       setTimeout(() => setToast(null), 2500);
     }
     setPaymentSaving(false);
