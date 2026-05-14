@@ -41,14 +41,16 @@ const CARDS: AdminCard[] = [
     enabled: true,
   },
   {
-    href: "/admin",
-    titleTh: "ระบบกู้คืน Sync",
-    titleEn: "Sync recovery",
-    descTh: "ตรวจสอบ sync_failures และส่งคำสั่งซ่อมไปยัง Google Sheet อีกครั้ง",
-    descEn: "Review sync_failures and resync orders to Google Sheet.",
+    href: "/admin/recovery",
+    titleTh: "ระบบกู้คืน Sync / LINE",
+    titleEn: "Recovery & retries",
+    descTh:
+      "ดู sync_failures + LINE message log ลองส่งซ้ำ และสร้างใบเสร็จใหม่ — Owner / HQ / Branch Manager",
+    descEn:
+      "Review sync_failures + LINE message log, retry sends, rebuild receipts.",
     iconPath:
       "M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z",
-    enabled: false,
+    enabled: true,
   },
 ];
 

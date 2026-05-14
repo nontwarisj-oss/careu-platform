@@ -200,6 +200,131 @@ export async function resyncOrderToSheet(orderId: string): Promise<ResyncResult>
   }
 }
 
+// ---------- LINE message log (recovery surface) --------------------------
+
+export type LineMessageLogRow = {
+  id: string;
+  customer_id: string | null;
+  order_id: string | null;
+  branch_id: string | null;
+  line_user_id: string | null;
+  kind: "order_received" | "order_ready" | "pickup_reminder" | "receipt" | "manual" | "test";
+  message_text: string | null;
+  status: "pending" | "sent" | "failed" | "skipped";
+  error_reason: string | null;
+  attempts: number;
+  sent_at: string | null;
+  created_at: string;
+};
+
+export type LineMessageLogFilter = {
+  status?: LineMessageLogRow["status"];
+  kind?: LineMessageLogRow["kind"];
+  branchCode?: string | null;
+  /** Default 50. Capped at 200 server-side to keep the admin table responsive. */
+  limit?: number;
+};
+
+/**
+ * Read entries from public.line_message_log. RLS scopes the result:
+ *   • owner / hq_admin: every branch.
+ *   • branch_manager: rows where branch_id = current_user_branch_code().
+ *   • everyone else: empty (no read policy).
+ */
+export async function listLineMessageLog(
+  filter: LineMessageLogFilter = {}
+): Promise<LineMessageLogRow[]> {
+  let q = supabase
+    .from("line_message_log")
+    .select(
+      "id, customer_id, order_id, branch_id, line_user_id, kind, message_text, status, error_reason, attempts, sent_at, created_at"
+    )
+    .order("created_at", { ascending: false })
+    .limit(Math.min(filter.limit ?? 50, 200));
+
+  if (filter.status) q = q.eq("status", filter.status);
+  if (filter.kind) q = q.eq("kind", filter.kind);
+  if (filter.branchCode) q = q.eq("branch_id", filter.branchCode);
+
+  const { data, error } = await q;
+  if (error || !data) return [];
+  return data as LineMessageLogRow[];
+}
+
+// ---------- Retry LINE send -----------------------------------------------
+
+export type ResendLineResult =
+  | { ok: true; status: string }
+  | { ok: false; reason: string };
+
+/**
+ * Re-trigger a LINE OA send for a failed / skipped row by calling
+ * /api/line/send. The route enforces role + branch ownership, so this is
+ * safe to expose from the recovery UI.
+ *
+ * Idempotency: the underlying /api/line/send route writes one
+ * line_message_log row per attempt — meaning a retry creates a new log
+ * row rather than mutating the failed one. That's intentional: the
+ * audit trail keeps every attempt. The caller decides when "enough
+ * retries" turns into "mark resolved".
+ */
+export async function resendLineMessage(
+  orderId: string,
+  kind: LineMessageLogRow["kind"] = "receipt"
+): Promise<ResendLineResult> {
+  try {
+    const res = await fetch("/api/line/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId, kind }),
+    });
+    const json = (await res.json()) as {
+      ok?: boolean;
+      reason?: string;
+      status?: string;
+    };
+    if (!res.ok || !json.ok) {
+      return { ok: false, reason: json.reason ?? `HTTP ${res.status}` };
+    }
+    return { ok: true, status: json.status ?? "sent" };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
+}
+
+// ---------- Resolve helpers ----------------------------------------------
+
+/**
+ * Mark a sync failure resolved via the gated /api/admin/recovery/resolve
+ * route. The route re-checks owner / hq_admin / branch_manager + branch
+ * ownership before writing.
+ */
+export async function resolveSyncFailure(
+  failureId: string,
+  note?: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const res = await fetch("/api/admin/recovery/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ failureId, note }),
+    });
+    const json = (await res.json()) as { ok?: boolean; reason?: string };
+    if (!res.ok || !json.ok) {
+      return { ok: false, reason: json.reason ?? `HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : "Network error",
+    };
+  }
+}
+
 // ---------- KPI rebuild (placeholder) ------------------------------------
 
 /**

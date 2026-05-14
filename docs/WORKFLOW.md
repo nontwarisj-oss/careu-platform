@@ -421,7 +421,62 @@ Pages adopt it incrementally — old buttons keep working until they're rewritte
 
 The route is gated by the `"admin"` page key. `RouteGuard` renders the "ไม่มีสิทธิ์" panel for any role that lacks it.
 
-### 9c.5 What this phase does NOT do
+### 9c.5 Operational recovery (foundation)
+
+> Status: **foundation live** as of `20260528_recovery_foundation.sql`. The page `/admin/recovery` is the single operator surface for "the platform tried to do something and it didn't land — what now?".
+
+#### 9c.5a Three failure surfaces today
+
+| Surface | Source table | Writer | Reader (this phase) |
+|---|---|---|---|
+| Google Sheet syncs (orders, pricing, expenses, customers) | `public.sync_failures` | `lib/syncFailures.ts::logSyncFailure` (server-only) | Owner / HQ / Branch-manager (own branch) — read via supabase anon client (RLS-scoped) |
+| LINE OA push attempts | `public.line_message_log` | `lib/lineDelivery.ts` orchestrator (every attempt: sent / failed / skipped) | Same role gate; RLS policies `line_message_log_admin_read` + `line_message_log_branch_read` |
+| Receipt drift (cached UI vs. live DB) | none — derived on the fly | n/a | `rebuildReceiptData(orderId)` re-derives from the live order row |
+
+#### 9c.5b Recovery actions
+
+All actions go through `lib/recoveryService.ts` so the recovery UI doesn't learn N APIs:
+
+| Action | Function | Server gate |
+|---|---|---|
+| Resync an order to Google Sheet | `resyncOrderToSheet(orderId)` → `POST /api/sync-order-to-sheet` | `requireRole(...)` + `requireBranchAccess(order.branch_id)` |
+| Resend a LINE message | `resendLineMessage(orderId, kind)` → `POST /api/line/send` | `requireRole(...)` + `requireBranchAccess(order.branch_id)` |
+| Mark a sync_failures row resolved | `resolveSyncFailure(failureId, note?)` → `POST /api/admin/recovery/resolve` | `requireRole(owner / hq_admin / branch_manager)` + `requireBranchAccess(row.branch_id)` |
+| Rebuild a receipt | `rebuildReceiptData(orderId)` (client-side) | RLS on `orders` / `customers` |
+
+No destructive delete actions. Every retry creates an additive log row (`line_message_log` keeps every attempt; resync writes a new sheet row only when the underlying export confirms success).
+
+#### 9c.5c Idempotency + retry protection
+
+1. **Resolve is idempotent.** `/api/admin/recovery/resolve` short-circuits and returns `ok: true, alreadyResolved: true` when `status='resolved'` — clicking "Mark resolved" twice does nothing harmful.
+2. **In-flight set prevents double-click.** The UI tracks `retrying: Set<failureId>` and disables the row's retry button while a request is outstanding.
+3. **Auto-resolve on successful retry.** After a successful resync or resend, the UI calls `resolveSyncFailure(row.id, "auto-resolved after successful retry")` so the queue drains.
+4. **LINE log retries are additive.** Resending writes a new `line_message_log` row rather than mutating the failed one — the audit trail keeps every attempt.
+5. **Duplicate Sheet rows are deduplicated by the writer.** `lib/sheetWriters.ts` already follows the "append-only + UI sync-status pill" contract from `8.5b`; the receiver decides idempotency at the Sheet API layer.
+
+#### 9c.5d Failure groups (preparing for future workers)
+
+`sync_failures.kind` is the partitioning column the future retry worker will use. After `20260528` the CHECK accepts:
+
+| `kind` value | Source | Retry path |
+|---|---|---|
+| `order_to_sheet` | `/api/sync-order-to-sheet` write failure | `resyncOrderToSheet` |
+| `pricing_to_sheet` | `/api/sync-pricing-to-sheet` snapshot failure | manual re-press the button (no helper yet) |
+| `customer_from_sheet` | `/api/sync-customers` read failure | manual re-press |
+| `expense_from_sheet` | `/api/sync-expenses` read failure | manual re-press |
+| `debug_to_sheet` | `/api/debug-sheet` write failure | manual |
+| `line_send` | `lib/lineDelivery.ts` push failure | `resendLineMessage` |
+| `receipt_rebuild` | reserved for future cron rebuilds (no writer today) | n/a |
+
+A cron / worker is **out of scope this phase**. The table shape and retry helpers are designed so a future worker that reads `where status='pending' order by created_at` can fire the existing helpers without any new API.
+
+#### 9c.5e Branch isolation
+
+- UI: `/admin/recovery` uses `RouteGuard page="recovery"`. The `"recovery"` page key is granted to owner, hq_admin, and branch_manager.
+- Read: RLS on `sync_failures` has two policies — `sync_failures_admin_read` (owner / hq_admin) and `sync_failures_branch_read` (branch_manager + own branch). LINE log mirrors the same pattern.
+- Write: `/api/admin/recovery/resolve` re-checks `requireBranchAccess(row.branch_id)` for branch_manager. Service-role client performs the actual UPDATE.
+
+### 9c.6 What this phase does NOT do
 Deliberate non-goals to keep the foundation focused:
 - No CRM automation, no advanced BI, no franchise automation.
 - No full UI redesign — the storefront keeps its current shape.

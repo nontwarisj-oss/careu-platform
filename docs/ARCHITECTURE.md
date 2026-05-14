@@ -188,6 +188,7 @@ Single schema: `public`. Authoritative migrations under `supabase/migrations/`:
 | `20260525_payroll_foundation.sql` | `current_user_branch_id()` helper; `expenses` standardised (`created_by_uuid`, `updated_at`, `updated_by`, triggers) + RLS; `payroll_periods` + `technician_payroll_items` tables; `branch_monthly_profit` view; RLS on all new objects |
 | `20260526_operational_hardening.sql` | `sync_failures` durable queue + RLS; `expense_audit_log` + trigger; `order_audit_log.action` enum extended (+ assigned, receipt_regenerated, sync_failed); `orders` NOT VALID CHECK constraints (status / payment_status / quantity / non-negative numerics); `validate_order_assignment` trigger (rejects inactive-tech + cross-branch); search indexes (orders.customer_name lower, orders(branch_id,status,created_at desc), pg_trgm GIN on customers.name + normalized_name) |
 | `20260527_line_oa_foundation.sql` | `customer_line_links` (line_user_id ↔ customer_id + per-kind prefs + consent); `line_message_log` (every send attempt); `branch_line_configs` (per-branch channel token, env fallback); RLS on all three |
+| `20260528_recovery_foundation.sql` | `sync_failures.kind` CHECK extended with `'line_send'` + `'receipt_rebuild'`; `sync_failures_branch_read` RLS policy so branch_manager sees own-branch failures in `/admin/recovery` |
 
 Every new migration MUST:
 1. Be idempotent.
@@ -476,6 +477,75 @@ No schema change required in `20260526`. Hardening here is documentation + the n
 
 The trigger uses `raise exception … using errcode='check_violation'` so the error surfaces as a Postgres CHECK violation to PostgREST clients — friendly to the supabase-js error handler.
 
+## 12d. Operational recovery foundation (post-`20260528`)
+
+> Status: **foundation live**. The `/admin/recovery` UI is the single operator surface for failure queues. A retry worker / cron is **not** built yet — by design.
+
+### 12d.1 What ships
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  app/admin/recovery/page.tsx                               │
+│    • Tabs: Sync failures / LINE delivery / Receipt rebuild │
+│    • Filters: status / kind / branch (admin) / refresh     │
+│    • Inspect modal renders the raw JSON                    │
+│    • Per-row actions: Retry, Resolve, Resend, Inspect      │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  lib/recoveryService.ts          (single import surface)   │
+│    • listFailedSyncs(filter)                               │
+│    • listLineMessageLog(filter)        — NEW this phase    │
+│    • resyncOrderToSheet(orderId)                           │
+│    • resendLineMessage(orderId, kind)  — NEW this phase    │
+│    • resolveSyncFailure(failureId)     — NEW this phase    │
+│    • rebuildReceiptData(orderId)                           │
+│    • rebuildKpiSummaries()             — still a stub      │
+└──────────────┬─────────────────────────────────────────────┘
+               ▼
+┌────────────────────────────────────────────────────────────┐
+│  POST /api/admin/recovery/resolve                          │
+│    • requireRole(owner / hq_admin / branch_manager)        │
+│    • Loads sync_failures row via admin client              │
+│    • requireBranchAccess(row.branch_id) for managers       │
+│    • Idempotent: short-circuits on status='resolved'       │
+│    • Writes payload.resolvedBy / resolvedAt / note         │
+└────────────────────────────────────────────────────────────┘
+```
+
+The browser singleton supabase client reads `sync_failures` + `line_message_log` directly; RLS on those tables produces a branch-scoped view for the manager.
+
+### 12d.2 Migration `20260528_recovery_foundation.sql`
+
+Two operational adjustments:
+
+1. **Extend `sync_failures.kind` CHECK** to add `'line_send'` and `'receipt_rebuild'`. Fixes the misclassification noted in [TESTING_REPORT.md](./TESTING_REPORT.md) Bug #6 — LINE pushes now log under their own kind instead of `'order_to_sheet'`. The orchestrator in [`lib/lineDelivery.ts`](../lib/lineDelivery.ts) was updated to write the new kind in the same commit.
+2. **Add `sync_failures_branch_read` policy** so a branch_manager sees their own branch's failures. Combined with the existing `sync_failures_admin_read`, branch isolation flows through RLS for the read path.
+
+### 12d.3 Retry safety contract
+
+| Concern | Mitigation |
+|---|---|
+| Double-click a retry button | UI tracks `retrying: Set<rowId>`; button disables for the in-flight request. |
+| Resolve clicked twice | Server short-circuits on `status='resolved'`, returns `ok: true, alreadyResolved: true`. |
+| Re-sync writes a duplicate Sheet row | Server route always appends — accepted today; future enhancement could dedupe by `target_id` in the sheet column A. |
+| Re-send LINE duplicates a message | Append-only: each send writes a new `line_message_log` row. Customer might receive a duplicate — that is the intended trade-off for "the customer didn't get the first one". |
+| Cross-branch retry | `requireBranchAccess` re-checks in `/api/sync-order-to-sheet`, `/api/line/send`, and `/api/admin/recovery/resolve`. |
+| Service-role unset | Resolve returns 503 with a clear reason; read paths still work via RLS. |
+
+### 12d.4 Future automation entry points
+
+The retry / cron worker (deliberately not built this phase) plugs into the same data + helper layer:
+
+1. `select * from public.sync_failures where status='pending' order by created_at limit N` — picks N candidates per tick.
+2. Map by `kind` → `resyncOrderToSheet` / `resendLineMessage` / future helpers.
+3. On success: call `resolveSyncFailure(id, note)`.
+4. After K failures: write `status='dead'` and alert.
+
+The schema already has `attempts`, `last_attempt_at`, and `resolved_at` — the worker just maintains them.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
@@ -554,6 +624,8 @@ app/
 │   └── sync-pricing-to-sheet/route.ts  ← DB → Sheet (Pricing snapshot)
 ├── admin/page.tsx                      ← Admin centre landing (owner / hq_admin)
 ├── admin/staff/page.tsx                ← Staff list + role/branch/active/wage/skills
+├── admin/recovery/page.tsx             ← Sync failures + LINE log + receipt rebuild
+├── api/admin/recovery/resolve/route.ts ← Gated mark-resolved write
 ├── customers/page.tsx
 ├── expenses/page.tsx
 ├── intake/page.tsx                     ← walk-in counterpart of /orders
@@ -636,4 +708,4 @@ See [TESTING_REPORT.md](./TESTING_REPORT.md) for the full bug list, severity rat
 
 ---
 
-**Last updated:** 2026-05-14 (operational testing + bug sweep — sync-order-to-sheet auth/RLS fix, line/send branch guard, JWT bridge warning banner)
+**Last updated:** 2026-05-14 (operational recovery foundation — /admin/recovery UI, gated resolve route, `20260528` migration)

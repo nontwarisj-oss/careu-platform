@@ -1,0 +1,926 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { RouteGuard } from "@/components/RouteGuard";
+import { Modal } from "@/components/Modal";
+import { useLanguage } from "@/lib/languageContext";
+import { useRole } from "@/lib/roleContext";
+import { useBranch } from "@/lib/branchContext";
+import { canSeeFinancials, canViewAllBranches } from "@/lib/permissions";
+import { fetchBranchOptions, type BranchOption } from "@/lib/staffService";
+import {
+  listFailedSyncs,
+  listLineMessageLog,
+  rebuildReceiptData,
+  resendLineMessage,
+  resolveSyncFailure,
+  resyncOrderToSheet,
+  type LineMessageLogRow,
+  type SyncFailureRow,
+} from "@/lib/recoveryService";
+import type { ReceiptData } from "@/lib/receiptData";
+
+type Tab = "sync" | "line" | "receipt";
+
+type SyncStatusFilter = "all" | SyncFailureRow["status"];
+type SyncKindFilter = "all" | string;
+type LineStatusFilter = "all" | LineMessageLogRow["status"];
+
+const SYNC_KIND_LABELS: Record<string, { th: string; en: string }> = {
+  order_to_sheet: { th: "ออเดอร์ → Google Sheet", en: "Order → Google Sheet" },
+  pricing_to_sheet: { th: "ราคา → Google Sheet", en: "Pricing → Google Sheet" },
+  debug_to_sheet: { th: "ดีบัก → Google Sheet", en: "Debug → Google Sheet" },
+  customer_from_sheet: {
+    th: "ลูกค้า ← Google Sheet",
+    en: "Customer ← Google Sheet",
+  },
+  expense_from_sheet: {
+    th: "ค่าใช้จ่าย ← Google Sheet",
+    en: "Expense ← Google Sheet",
+  },
+  line_send: { th: "LINE OA push", en: "LINE OA push" },
+  receipt_rebuild: { th: "สร้างใบเสร็จใหม่", en: "Receipt rebuild" },
+};
+
+const LINE_KIND_LABELS: Record<LineMessageLogRow["kind"], { th: string; en: string }> = {
+  order_received: { th: "รับงาน", en: "Order received" },
+  order_ready: { th: "พร้อมรับ", en: "Order ready" },
+  pickup_reminder: { th: "เตือนมารับ", en: "Pickup reminder" },
+  receipt: { th: "ใบเสร็จ", en: "Receipt" },
+  manual: { th: "ส่งเอง", en: "Manual" },
+  test: { th: "ทดสอบ", en: "Test" },
+};
+
+const SYNC_STATUS_TONE: Record<SyncFailureRow["status"], string> = {
+  pending: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  retrying: "border-blue-200 bg-blue-50 text-blue-800",
+  resolved: "border-green-200 bg-green-50 text-green-800",
+  dead: "border-red-200 bg-red-50 text-red-800",
+};
+
+const LINE_STATUS_TONE: Record<LineMessageLogRow["status"], string> = {
+  pending: "border-yellow-200 bg-yellow-50 text-yellow-800",
+  sent: "border-green-200 bg-green-50 text-green-800",
+  failed: "border-red-200 bg-red-50 text-red-800",
+  skipped: "border-gray-200 bg-gray-50 text-gray-700",
+};
+
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("th-TH", {
+      dateStyle: "short",
+      timeStyle: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+export default function RecoveryPage() {
+  // "recovery" page key is granted to owner / hq_admin (via "*") and
+  // explicitly to branch_manager. front_staff / technician are denied.
+  return (
+    <RouteGuard page="recovery">
+      <RecoveryInner />
+    </RouteGuard>
+  );
+}
+
+function RecoveryInner() {
+  const { language } = useLanguage();
+  const { role } = useRole();
+  const { branch } = useBranch();
+
+  // canSeeFinancials = owner / hq_admin / branch_manager — the three roles
+  // that ROLE_MATRIX says can recover failures. Front staff / technician
+  // are filtered out by RouteGuard above (admin page key not granted to
+  // them) but we also gate retry buttons defensively.
+  const canRetry = canSeeFinancials(role);
+  const seesAllBranches = canViewAllBranches(role);
+
+  const [tab, setTab] = useState<Tab>("sync");
+  const [syncRows, setSyncRows] = useState<SyncFailureRow[]>([]);
+  const [lineRows, setLineRows] = useState<LineMessageLogRow[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Filters
+  const [syncStatusFilter, setSyncStatusFilter] = useState<SyncStatusFilter>("pending");
+  const [syncKindFilter, setSyncKindFilter] = useState<SyncKindFilter>("all");
+  const [lineStatusFilter, setLineStatusFilter] = useState<LineStatusFilter>("failed");
+  const [branchFilter, setBranchFilter] = useState<string>("all");
+
+  // In-flight retry trackers — prevent double-clicks on the same row.
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [resolving, setResolving] = useState<Set<string>>(new Set());
+
+  // Inspection modal
+  const [inspect, setInspect] = useState<
+    | { kind: "sync"; row: SyncFailureRow }
+    | { kind: "line"; row: LineMessageLogRow }
+    | null
+  >(null);
+
+  // Receipt rebuild state
+  const [rebuildOrderId, setRebuildOrderId] = useState("");
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuiltReceipt, setRebuiltReceipt] = useState<ReceiptData | null>(null);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    const branchCode =
+      branchFilter === "all"
+        ? null
+        : branches.find((b) => b.id === branchFilter)?.code ?? null;
+    const [syncResult, lineResult] = await Promise.all([
+      listFailedSyncs({
+        status: syncStatusFilter === "all" ? undefined : syncStatusFilter,
+        kind: syncKindFilter === "all" ? undefined : syncKindFilter,
+        branchCode,
+        limit: 100,
+      }),
+      listLineMessageLog({
+        status: lineStatusFilter === "all" ? undefined : lineStatusFilter,
+        branchCode,
+        limit: 100,
+      }),
+    ]);
+    setSyncRows(syncResult);
+    setLineRows(lineResult);
+    setIsLoading(false);
+  }, [syncStatusFilter, syncKindFilter, lineStatusFilter, branchFilter, branches]);
+
+  // One-shot branch options load.
+  useEffect(() => {
+    void (async () => {
+      const opts = await fetchBranchOptions();
+      setBranches(opts);
+    })();
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const syncSummary = useMemo(() => {
+    const byStatus = syncRows.reduce(
+      (acc, r) => {
+        acc[r.status] = (acc[r.status] ?? 0) + 1;
+        return acc;
+      },
+      {} as Record<SyncFailureRow["status"], number>
+    );
+    return {
+      pending: byStatus.pending ?? 0,
+      retrying: byStatus.retrying ?? 0,
+      resolved: byStatus.resolved ?? 0,
+      dead: byStatus.dead ?? 0,
+    };
+  }, [syncRows]);
+
+  const lineSummary = useMemo(() => {
+    const byStatus = lineRows.reduce(
+      (acc, r) => {
+        acc[r.status] = (acc[r.status] ?? 0) + 1;
+        return acc;
+      },
+      {} as Record<LineMessageLogRow["status"], number>
+    );
+    return {
+      failed: byStatus.failed ?? 0,
+      skipped: byStatus.skipped ?? 0,
+      sent: byStatus.sent ?? 0,
+    };
+  }, [lineRows]);
+
+  const handleRetrySync = async (row: SyncFailureRow) => {
+    if (!canRetry) return;
+    if (!row.target_id) {
+      setMessage(
+        language === "th"
+          ? "รายการนี้ไม่มี target_id — retry อัตโนมัติทำไม่ได้"
+          : "Row has no target_id — automatic retry unavailable."
+      );
+      return;
+    }
+    setRetrying((prev) => new Set(prev).add(row.id));
+    setMessage(null);
+
+    if (row.kind === "order_to_sheet") {
+      const res = await resyncOrderToSheet(row.target_id);
+      setMessage(
+        res.ok
+          ? language === "th"
+            ? `ซิงค์สำเร็จ — เพิ่มแถวที่ ${res.rowIndex ?? "?"} ในแท็บ ${res.sheet ?? "Front_Desk"}`
+            : `Resynced — row ${res.rowIndex ?? "?"} in ${res.sheet ?? "Front_Desk"}`
+          : `${language === "th" ? "Retry ไม่สำเร็จ" : "Retry failed"}: ${res.reason}`
+      );
+      if (res.ok) {
+        await resolveSyncFailure(row.id, "auto-resolved after successful retry");
+      }
+    } else if (row.kind === "line_send") {
+      const payloadKind =
+        ((row.payload as { messageKind?: LineMessageLogRow["kind"] } | null)
+          ?.messageKind ?? "receipt") as LineMessageLogRow["kind"];
+      const res = await resendLineMessage(row.target_id, payloadKind);
+      setMessage(
+        res.ok
+          ? language === "th"
+            ? `ส่ง LINE ใหม่สำเร็จ (status=${res.status})`
+            : `LINE re-sent (status=${res.status})`
+          : `${language === "th" ? "ส่ง LINE ใหม่ไม่สำเร็จ" : "LINE resend failed"}: ${res.reason}`
+      );
+      if (res.ok) {
+        await resolveSyncFailure(row.id, "auto-resolved after successful resend");
+      }
+    } else {
+      setMessage(
+        language === "th"
+          ? `ยังไม่รองรับ retry อัตโนมัติสำหรับชนิด "${row.kind}" — กด "ทำเสร็จด้วยตนเอง" หลังจัดการแล้ว`
+          : `Auto-retry not yet supported for kind "${row.kind}". Mark resolved after a manual fix.`
+      );
+    }
+    setRetrying((prev) => {
+      const next = new Set(prev);
+      next.delete(row.id);
+      return next;
+    });
+    await load();
+  };
+
+  const handleResolve = async (failureId: string) => {
+    if (!canRetry) return;
+    setResolving((prev) => new Set(prev).add(failureId));
+    setMessage(null);
+    const res = await resolveSyncFailure(failureId);
+    setMessage(
+      res.ok
+        ? language === "th"
+          ? "ทำเครื่องหมายว่าจัดการเรียบร้อย"
+          : "Marked resolved"
+        : res.reason
+    );
+    setResolving((prev) => {
+      const next = new Set(prev);
+      next.delete(failureId);
+      return next;
+    });
+    if (res.ok) await load();
+  };
+
+  const handleResendLine = async (row: LineMessageLogRow) => {
+    if (!canRetry || !row.order_id) return;
+    setRetrying((prev) => new Set(prev).add(row.id));
+    setMessage(null);
+    const res = await resendLineMessage(row.order_id, row.kind);
+    setMessage(
+      res.ok
+        ? language === "th"
+          ? `ส่ง LINE ใหม่สำเร็จ (${LINE_KIND_LABELS[row.kind].th})`
+          : `LINE re-sent (${LINE_KIND_LABELS[row.kind].en})`
+        : `${language === "th" ? "ส่งใหม่ไม่สำเร็จ" : "Resend failed"}: ${res.reason}`
+    );
+    setRetrying((prev) => {
+      const next = new Set(prev);
+      next.delete(row.id);
+      return next;
+    });
+    await load();
+  };
+
+  const handleRebuildReceipt = async () => {
+    const id = rebuildOrderId.trim();
+    if (!id) return;
+    setRebuilding(true);
+    setRebuildError(null);
+    setRebuiltReceipt(null);
+    try {
+      const data = await rebuildReceiptData(id);
+      if (!data) {
+        setRebuildError(
+          language === "th"
+            ? "ไม่พบใบงาน — หรือ RLS ป้องกันการอ่าน"
+            : "Order not found — or RLS denied the read."
+        );
+      } else {
+        setRebuiltReceipt(data);
+      }
+    } catch (err) {
+      setRebuildError(err instanceof Error ? err.message : "Unknown error");
+    }
+    setRebuilding(false);
+  };
+
+  return (
+    <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-4 md:p-8 pt-20 md:pt-8">
+      <div className="mb-4 flex items-center gap-2 text-xs text-gray-500">
+        <Link href="/admin" className="hover:text-green-700">
+          {language === "th" ? "ศูนย์จัดการระบบ" : "Admin centre"}
+        </Link>
+        <span>/</span>
+        <span className="text-gray-700 font-medium">
+          {language === "th" ? "ระบบกู้คืน" : "Recovery"}
+        </span>
+      </div>
+
+      <div className="mb-5 flex flex-col gap-2 border-l-4 border-yellow-400 pl-4">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">
+          CareU OPS
+        </p>
+        <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900">
+          {language === "th" ? "ระบบกู้คืนการทำงาน" : "Operational recovery"}
+        </h1>
+        <p className="text-sm text-gray-600">
+          {language === "th"
+            ? "ดูคิวความล้มเหลว ทดลองส่งซ้ำ และสร้างใบเสร็จใหม่ — สำหรับ Owner / HQ Admin / Branch Manager"
+            : "Review failure queues, retry sends, and rebuild receipts — Owner / HQ Admin / Branch Manager."}
+        </p>
+        <p className="text-[11px] text-gray-500">
+          {seesAllBranches
+            ? language === "th"
+              ? "เห็นข้อมูลทุกสาขา"
+              : "Seeing all branches"
+            : language === "th"
+            ? `เห็นเฉพาะสาขา ${branch.shortLabel}`
+            : `Scoped to ${branch.shortLabel}`}
+        </p>
+      </div>
+
+      {/* Summary chips */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <SummaryCard
+          label={language === "th" ? "Sync รอจัดการ" : "Sync pending"}
+          value={syncSummary.pending}
+          tone="yellow"
+        />
+        <SummaryCard
+          label={language === "th" ? "Sync ตายแล้ว" : "Sync dead"}
+          value={syncSummary.dead}
+          tone="red"
+        />
+        <SummaryCard
+          label={language === "th" ? "LINE ล้มเหลว" : "LINE failed"}
+          value={lineSummary.failed}
+          tone="red"
+        />
+        <SummaryCard
+          label={language === "th" ? "LINE ข้าม" : "LINE skipped"}
+          value={lineSummary.skipped}
+          tone="gray"
+        />
+      </div>
+
+      {message && (
+        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-start justify-between gap-3">
+          <span>{message}</span>
+          <button
+            onClick={() => setMessage(null)}
+            className="text-green-700 hover:text-green-900"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {errorMessage && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="mb-4 flex gap-2 overflow-x-auto -mx-1 px-1 pb-1">
+        <TabButton active={tab === "sync"} onClick={() => setTab("sync")}>
+          {language === "th" ? "Google Sheet / sync_failures" : "Sync failures"}
+        </TabButton>
+        <TabButton active={tab === "line"} onClick={() => setTab("line")}>
+          {language === "th" ? "LINE OA delivery" : "LINE delivery"}
+        </TabButton>
+        <TabButton active={tab === "receipt"} onClick={() => setTab("receipt")}>
+          {language === "th" ? "สร้างใบเสร็จใหม่" : "Receipt rebuild"}
+        </TabButton>
+      </div>
+
+      {/* Filters bar — common to sync + line tabs */}
+      {tab !== "receipt" && (
+        <div className="grid gap-2 sm:grid-cols-4 mb-4">
+          {tab === "sync" ? (
+            <>
+              <select
+                value={syncStatusFilter}
+                onChange={(e) =>
+                  setSyncStatusFilter(e.target.value as SyncStatusFilter)
+                }
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="all">{language === "th" ? "ทุกสถานะ" : "All statuses"}</option>
+                <option value="pending">pending</option>
+                <option value="retrying">retrying</option>
+                <option value="resolved">resolved</option>
+                <option value="dead">dead</option>
+              </select>
+              <select
+                value={syncKindFilter}
+                onChange={(e) => setSyncKindFilter(e.target.value as SyncKindFilter)}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="all">{language === "th" ? "ทุกชนิด" : "All kinds"}</option>
+                {Object.entries(SYNC_KIND_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {language === "th" ? v.th : v.en}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <select
+              value={lineStatusFilter}
+              onChange={(e) =>
+                setLineStatusFilter(e.target.value as LineStatusFilter)
+              }
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 sm:col-span-2"
+            >
+              <option value="all">{language === "th" ? "ทุกสถานะ" : "All statuses"}</option>
+              <option value="failed">failed</option>
+              <option value="skipped">skipped</option>
+              <option value="sent">sent</option>
+              <option value="pending">pending</option>
+            </select>
+          )}
+          {seesAllBranches && (
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            >
+              <option value="all">{language === "th" ? "ทุกสาขา" : "All branches"}</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.shortCode ? `${b.shortCode} • ` : ""}
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded-xl border border-green-300 bg-white px-3 py-2 text-sm font-semibold text-green-800 hover:bg-green-50"
+          >
+            {language === "th" ? "รีเฟรช" : "Refresh"}
+          </button>
+        </div>
+      )}
+
+      {/* Tab content */}
+      {tab === "sync" && (
+        <SyncFailuresTable
+          rows={syncRows}
+          isLoading={isLoading}
+          canRetry={canRetry}
+          retrying={retrying}
+          resolving={resolving}
+          onRetry={handleRetrySync}
+          onResolve={handleResolve}
+          onInspect={(row) => setInspect({ kind: "sync", row })}
+          language={language}
+        />
+      )}
+      {tab === "line" && (
+        <LineLogTable
+          rows={lineRows}
+          isLoading={isLoading}
+          canRetry={canRetry}
+          retrying={retrying}
+          onResend={handleResendLine}
+          onInspect={(row) => setInspect({ kind: "line", row })}
+          language={language}
+        />
+      )}
+      {tab === "receipt" && (
+        <ReceiptRebuildPanel
+          orderId={rebuildOrderId}
+          onChange={setRebuildOrderId}
+          onRebuild={handleRebuildReceipt}
+          loading={rebuilding}
+          error={rebuildError}
+          receipt={rebuiltReceipt}
+          language={language}
+        />
+      )}
+
+      {inspect && (
+        <Modal
+          isOpen={!!inspect}
+          onClose={() => setInspect(null)}
+          size="lg"
+          hideFooter
+          title={
+            inspect.kind === "sync"
+              ? language === "th"
+                ? "รายละเอียดความล้มเหลว"
+                : "Sync failure detail"
+              : language === "th"
+              ? "รายละเอียด LINE log"
+              : "LINE log detail"
+          }
+        >
+          <pre className="text-[11px] bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words">
+            {JSON.stringify(inspect.row, null, 2)}
+          </pre>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ---------- Sub-components ------------------------------------------------
+
+function SummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "yellow" | "red" | "green" | "gray";
+}) {
+  const toneClass = {
+    yellow: "border-yellow-100 bg-yellow-50 text-yellow-900",
+    red: "border-red-100 bg-red-50 text-red-900",
+    green: "border-green-100 bg-green-50 text-green-900",
+    gray: "border-gray-100 bg-gray-50 text-gray-700",
+  }[tone];
+  return (
+    <div className={`rounded-2xl border ${toneClass} p-4 shadow-sm`}>
+      <p className="text-xs opacity-80">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`shrink-0 px-4 py-2 rounded-full text-sm font-medium border transition min-h-[40px] ${
+        active
+          ? "bg-green-700 border-green-700 text-white"
+          : "bg-white border-gray-200 text-gray-700 hover:bg-green-50"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SyncFailuresTable({
+  rows,
+  isLoading,
+  canRetry,
+  retrying,
+  resolving,
+  onRetry,
+  onResolve,
+  onInspect,
+  language,
+}: {
+  rows: SyncFailureRow[];
+  isLoading: boolean;
+  canRetry: boolean;
+  retrying: Set<string>;
+  resolving: Set<string>;
+  onRetry: (row: SyncFailureRow) => void;
+  onResolve: (failureId: string) => void;
+  onInspect: (row: SyncFailureRow) => void;
+  language: "th" | "en";
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      {isLoading ? (
+        <div className="p-8 text-center text-gray-500">
+          {language === "th" ? "กำลังโหลด..." : "Loading..."}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="p-8 text-center text-gray-500">
+          {language === "th"
+            ? "ไม่มีรายการตามตัวกรอง — ระบบยังไม่บันทึก sync failure ในช่วงนี้"
+            : "No rows match the active filters."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="text-left p-3">{language === "th" ? "ชนิด" : "Kind"}</th>
+                <th className="text-left p-3">{language === "th" ? "เป้าหมาย" : "Target"}</th>
+                <th className="text-left p-3">{language === "th" ? "สาขา" : "Branch"}</th>
+                <th className="text-left p-3">{language === "th" ? "สถานะ" : "Status"}</th>
+                <th className="text-left p-3">{language === "th" ? "เหตุผล" : "Reason"}</th>
+                <th className="text-left p-3">{language === "th" ? "บันทึก" : "Created"}</th>
+                <th className="text-right p-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const kindLabel =
+                  SYNC_KIND_LABELS[row.kind]?.[language === "th" ? "th" : "en"] ?? row.kind;
+                const isRetrying = retrying.has(row.id);
+                const isResolving = resolving.has(row.id);
+                const disabled = !canRetry || row.status === "resolved";
+                return (
+                  <tr
+                    key={row.id}
+                    className="border-t border-gray-100 hover:bg-green-50/30 align-top"
+                  >
+                    <td className="p-3 text-gray-800 font-medium">{kindLabel}</td>
+                    <td className="p-3 text-gray-700 font-mono text-[11px] break-all">
+                      {row.target_id ?? "—"}
+                    </td>
+                    <td className="p-3 text-gray-700">{row.branch_id ?? "—"}</td>
+                    <td className="p-3">
+                      <span
+                        className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                          SYNC_STATUS_TONE[row.status]
+                        }`}
+                      >
+                        {row.status}
+                      </span>
+                      <p className="mt-1 text-[10px] text-gray-500">
+                        {language === "th" ? "ลอง" : "Attempts"}: {row.attempts}
+                      </p>
+                    </td>
+                    <td className="p-3 text-[12px] text-gray-700 max-w-xs">
+                      <p className="line-clamp-3">{row.reason}</p>
+                    </td>
+                    <td className="p-3 text-[12px] text-gray-600 whitespace-nowrap">
+                      {fmtDate(row.created_at)}
+                      {row.last_attempt_at ? (
+                        <span className="block text-[10px] text-gray-400">
+                          {language === "th" ? "ล่าสุด" : "Last"}:{" "}
+                          {fmtDate(row.last_attempt_at)}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="p-3 text-right whitespace-nowrap space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => onInspect(row)}
+                        className="px-2 py-1 rounded-md border border-gray-200 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        {language === "th" ? "ดูข้อมูล" : "Inspect"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRetry(row)}
+                        disabled={disabled || isRetrying}
+                        className="px-2 py-1 rounded-md border border-green-300 bg-white text-[11px] font-semibold text-green-700 hover:bg-green-50 disabled:opacity-50"
+                      >
+                        {isRetrying
+                          ? language === "th"
+                            ? "กำลังลอง..."
+                            : "Retrying..."
+                          : language === "th"
+                          ? "ลองใหม่"
+                          : "Retry"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onResolve(row.id)}
+                        disabled={disabled || isResolving}
+                        className="px-2 py-1 rounded-md border border-gray-300 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {isResolving
+                          ? language === "th"
+                            ? "บันทึก..."
+                            : "Saving..."
+                          : language === "th"
+                          ? "ทำเสร็จ"
+                          : "Resolved"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LineLogTable({
+  rows,
+  isLoading,
+  canRetry,
+  retrying,
+  onResend,
+  onInspect,
+  language,
+}: {
+  rows: LineMessageLogRow[];
+  isLoading: boolean;
+  canRetry: boolean;
+  retrying: Set<string>;
+  onResend: (row: LineMessageLogRow) => void;
+  onInspect: (row: LineMessageLogRow) => void;
+  language: "th" | "en";
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      {isLoading ? (
+        <div className="p-8 text-center text-gray-500">
+          {language === "th" ? "กำลังโหลด..." : "Loading..."}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="p-8 text-center text-gray-500">
+          {language === "th"
+            ? "ไม่มี LINE log ในช่วงนี้ — ระบบ LINE OA อาจยังไม่ได้ตั้งค่า หรือยังไม่มีการส่งจริง"
+            : "No LINE log rows. LINE OA may not be configured, or no sends happened yet."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="text-left p-3">{language === "th" ? "ชนิด" : "Kind"}</th>
+                <th className="text-left p-3">{language === "th" ? "ใบงาน" : "Order"}</th>
+                <th className="text-left p-3">{language === "th" ? "สาขา" : "Branch"}</th>
+                <th className="text-left p-3">{language === "th" ? "สถานะ" : "Status"}</th>
+                <th className="text-left p-3">{language === "th" ? "เหตุผล" : "Reason"}</th>
+                <th className="text-left p-3">{language === "th" ? "เวลา" : "Created"}</th>
+                <th className="text-right p-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const isRetrying = retrying.has(row.id);
+                const canResend =
+                  canRetry &&
+                  !!row.order_id &&
+                  (row.status === "failed" || row.status === "skipped");
+                return (
+                  <tr
+                    key={row.id}
+                    className="border-t border-gray-100 hover:bg-green-50/30 align-top"
+                  >
+                    <td className="p-3 text-gray-800 font-medium">
+                      {LINE_KIND_LABELS[row.kind]?.[language === "th" ? "th" : "en"] ?? row.kind}
+                    </td>
+                    <td className="p-3 text-gray-700 font-mono text-[11px] break-all">
+                      {row.order_id ?? "—"}
+                    </td>
+                    <td className="p-3 text-gray-700">{row.branch_id ?? "—"}</td>
+                    <td className="p-3">
+                      <span
+                        className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                          LINE_STATUS_TONE[row.status]
+                        }`}
+                      >
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-[12px] text-gray-700 max-w-xs">
+                      <p className="line-clamp-3">{row.error_reason ?? "—"}</p>
+                    </td>
+                    <td className="p-3 text-[12px] text-gray-600 whitespace-nowrap">
+                      {fmtDate(row.created_at)}
+                      {row.sent_at ? (
+                        <span className="block text-[10px] text-gray-400">
+                          {language === "th" ? "ส่ง" : "Sent"}: {fmtDate(row.sent_at)}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="p-3 text-right whitespace-nowrap space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => onInspect(row)}
+                        className="px-2 py-1 rounded-md border border-gray-200 bg-white text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        {language === "th" ? "ดูข้อมูล" : "Inspect"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onResend(row)}
+                        disabled={!canResend || isRetrying}
+                        className="px-2 py-1 rounded-md border border-green-300 bg-white text-[11px] font-semibold text-green-700 hover:bg-green-50 disabled:opacity-50"
+                      >
+                        {isRetrying
+                          ? language === "th"
+                            ? "กำลังส่ง..."
+                            : "Sending..."
+                          : language === "th"
+                          ? "ส่งซ้ำ"
+                          : "Resend"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReceiptRebuildPanel({
+  orderId,
+  onChange,
+  onRebuild,
+  loading,
+  error,
+  receipt,
+  language,
+}: {
+  orderId: string;
+  onChange: (next: string) => void;
+  onRebuild: () => void;
+  loading: boolean;
+  error: string | null;
+  receipt: ReceiptData | null;
+  language: "th" | "en";
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-5 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-gray-900">
+          {language === "th" ? "สร้างใบเสร็จใหม่จาก order id" : "Rebuild receipt by order id"}
+        </h2>
+        <p className="text-xs text-gray-500 mt-1">
+          {language === "th"
+            ? "ใช้เมื่อใบเสร็จที่แสดงไม่อัปเดต หรือข้อมูลในใบเสร็จไม่ตรงกับ DB — ระบบจะอ่านใบงานใหม่และสร้าง ReceiptData ตามที่ควรเป็น"
+            : "Use when the printed receipt looks stale or the cached UI state drifted — re-derives ReceiptData from the live order/customer rows."}
+        </p>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          type="text"
+          value={orderId}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={
+            language === "th"
+              ? "วาง order uuid (เช่น 11111111-aaaa-...)"
+              : "Paste order uuid"
+          }
+          className="flex-1 rounded-xl border border-gray-200 px-3 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <button
+          type="button"
+          onClick={onRebuild}
+          disabled={loading || !orderId.trim()}
+          className="rounded-xl bg-green-700 hover:bg-green-800 text-white font-semibold px-5 py-3 text-sm disabled:opacity-50 min-h-[44px]"
+        >
+          {loading
+            ? language === "th"
+              ? "กำลังสร้าง..."
+              : "Rebuilding..."
+            : language === "th"
+            ? "สร้างใหม่"
+            : "Rebuild"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {receipt && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-green-800">
+            {language === "th"
+              ? `สร้างใหม่สำเร็จ — Ref ${receipt.meta.refId} • ลูกค้า ${receipt.customer.name}`
+              : `Rebuilt — ref ${receipt.meta.refId} • customer ${receipt.customer.name}`}
+          </p>
+          <pre className="text-[11px] bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[60vh] overflow-auto whitespace-pre-wrap break-words">
+            {JSON.stringify(receipt, null, 2)}
+          </pre>
+          <p className="text-[11px] text-gray-500">
+            {language === "th"
+              ? "ผลลัพธ์นี้ดึงจากข้อมูลล่าสุดใน DB — เมื่อเปิดหน้าใบเสร็จของใบงานนี้ใหม่ ระบบจะใช้ข้อมูลเดียวกัน"
+              : "Result reads from the live DB. Opening the order's document page now will show identical values."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

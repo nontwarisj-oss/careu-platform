@@ -205,7 +205,7 @@ async function runDelivery(
 
   if (!pushed.ok) {
     logSyncFailure({
-      kind: "order_to_sheet", // closest existing kind; future migration adds 'line_send'
+      kind: "line_send",
       targetId: orderId,
       branchId: order.branch_id,
       reason: `LINE ${pushed.status}: ${pushed.reason}`,

@@ -60,6 +60,9 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **Audit log (`order_audit_log`)** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
 | **Manage staff (promote / demote / disable)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`/admin` centre + `/admin/staff` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/recovery` UI (sync_failures + LINE log + receipt rebuild)** | ✅ all branches | ✅ all branches | ✅ 🏢 own branch | ❌ | ❌ |
+| **Retry sync / resend LINE** | ✅ | ✅ | ✅ 🏢 | ❌ | ❌ |
+| **Mark sync_failures resolved** | ✅ | ✅ | ✅ 🏢 (own branch only — gated via `/api/admin/recovery/resolve`) | ❌ | ❌ |
 | **Manage branches (create / disable)** | ✅ | ⚠ propose only | ❌ | ❌ | ❌ |
 | **technician_profiles — view list** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 (for assignment) | ✅ 🏢 (own row) |
 | **technician_profiles — create / edit wage / target** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -132,13 +135,15 @@ The sidebar reads `role.pages` and shows only items the role can access. Items a
 
 | Role | Operations | Finance | Management |
 |---|---|---|---|
-| `owner` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre** |
-| `hq_admin` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre** |
-| `branch_manager` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing |
+| `owner` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre**, **Recovery** |
+| `hq_admin` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Admin centre**, **Recovery** |
+| `branch_manager` | Dashboard, Walk-in intake, Orders, Customers | Invoices, Expenses, Reports | Pricing, **Recovery** (own branch) |
 | `front_staff` | Dashboard, Walk-in intake, Orders, Customers | — | — |
 | `technician` | Dashboard, Orders | — | — |
 
-`canAccessPage(role, page)` is the single source of truth — see [`lib/roles.ts`](../lib/roles.ts). The new `"admin"` page key gates the `/admin` and `/admin/staff` routes; only `owner` and `hq_admin` have it through their `["*"]` page set.
+`canAccessPage(role, page)` is the single source of truth — see [`lib/roles.ts`](../lib/roles.ts). Two management-tier page keys today:
+- `"admin"` gates `/admin` and `/admin/staff`. Only `owner` and `hq_admin` have it (via their `["*"]` set).
+- `"recovery"` gates `/admin/recovery`. Granted to `owner`, `hq_admin`, and `branch_manager`. The branch_manager view is scoped to their branch by RLS (`sync_failures_branch_read`) + `requireBranchAccess` in `/api/admin/recovery/resolve`.
 
 ---
 
@@ -214,7 +219,8 @@ This document defines the contract. Whenever a permission changes:
 |---|---|---|
 | 2026-05-13 | Initial 5-role matrix established. | 4805d3b |
 | 2026-05-14 | Added `admin` page key. `/admin` + `/admin/staff` UI surfaces owner / hq_admin staff management (role, branch, active, wage, skills). Sidebar grouped Operations / Finance / Management. | — |
+| 2026-05-14 | Added `recovery` page key. `/admin/recovery` UI gives owner / hq_admin (all branches) + branch_manager (own branch) sync_failures + LINE log visibility, with retry / resend / resolve / receipt-rebuild actions. Migration `20260528` adds branch-scoped read on `sync_failures` and extends `kind` CHECK with `'line_send'` + `'receipt_rebuild'`. | — |
 
 ---
 
-**Last updated:** 2026-05-14 (operational UI polish phase)
+**Last updated:** 2026-05-14 (operational recovery phase)

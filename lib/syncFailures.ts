@@ -18,7 +18,9 @@ export type SyncFailureKind =
   | "pricing_to_sheet"
   | "debug_to_sheet"
   | "customer_from_sheet"
-  | "expense_from_sheet";
+  | "expense_from_sheet"
+  | "line_send"
+  | "receipt_rebuild";
 
 export type SyncFailure = {
   kind: SyncFailureKind;
