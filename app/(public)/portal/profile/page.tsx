@@ -134,9 +134,17 @@ export default function PortalProfilePage() {
             disabled
             className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-base text-gray-700"
           />
-          <p className="mt-1 text-[11px] text-gray-500">
-            การเปลี่ยนเบอร์โทรจะอยู่ในเฟสถัดไป — ต้องยืนยันเบอร์ใหม่ด้วย OTP
-          </p>
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <p className="text-[11px] text-gray-500">
+              เปลี่ยนเบอร์ต้องยืนยันเบอร์ใหม่ด้วย OTP
+            </p>
+            <a
+              href="/portal/phone-change"
+              className="text-[11px] text-green-700 font-semibold hover:text-green-900"
+            >
+              เปลี่ยนเบอร์ →
+            </a>
+          </div>
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">

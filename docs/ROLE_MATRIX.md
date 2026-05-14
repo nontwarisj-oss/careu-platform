@@ -88,6 +88,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/admin/onboarding` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Create branch (`/api/admin/onboarding/create-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Activate / deactivate branch (`/api/admin/onboarding/activate-branch`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/admin/dispatch` UI (customer_notifications monitor)** | ✅ all | ✅ all | ❌ | ❌ | ❌ |
+| **Manual dispatch tick (`/api/admin/dispatch/run`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Dispatch summary (`/api/admin/dispatch/summary`)** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Cron dispatch tick (`/api/cron/dispatch-worker`)** | ⚠ machine-only (Bearer CRON_SECRET) — no role gate | same | same | same | same |
+| **Portal phone-change (`/api/portal/phone-change/{request,verify}`)** | n/a — customer cookie required | n/a | n/a | n/a | n/a |
 | **Public website (`/website`, `/branches/*`, `/services`, `/track`, `/quote`, `/about`, `/contact`)** | ⚠ anonymous — anyone can view; no PII surfaced | same | same | same | same |
 | **Public job tracking (`/api/public/track`)** | anonymous — phone+jobId is the auth factor; rate-limited; returns branch label only | same | same | same | same |
 | **Public quote submission (`/api/public/quote`)** | anonymous — rate-limited 5/hour/IP; writes to `quote_requests` (anon INSERT policy) | same | same | same | same |

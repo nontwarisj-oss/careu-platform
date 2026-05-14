@@ -22,6 +22,7 @@
 import crypto from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { normalizePhone } from "@/lib/phone";
+import { sendSms } from "@/lib/smsProvider";
 
 const TTL_SECONDS = 5 * 60;
 const MAX_ATTEMPTS = 5;
@@ -97,10 +98,21 @@ export async function issueCustomerOtp(
     .update({ code_hash: hash })
     .eq("id", rowId);
 
-  // Foundation: "send" via log. Future: plug in SMS provider here.
-  console.info(
-    `[customer-otp] issued phone=${phone} code=${code} expires=${expiresAt}`
-  );
+  // Hand off to the SMS provider. The Console impl (default) keeps the
+  // existing log-only behaviour; configured providers (Twilio, future
+  // aggregators) deliver to the actual phone. Fire-and-forget — a
+  // provider outage NEVER blocks the OTP from being issuable; the dev
+  // code path + log line is the fallback.
+  void sendSms({
+    to: phone,
+    body: `Care U OPS รหัสยืนยัน: ${code} (อายุ 5 นาที)`,
+    meta: { otpRequestId: rowId, kind: "customer-otp" },
+  }).catch((err) => {
+    console.warn(
+      "[customer-otp] sms send threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  });
 
   return {
     ok: true,

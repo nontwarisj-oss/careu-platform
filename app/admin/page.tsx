@@ -88,6 +88,18 @@ const CARDS: AdminCard[] = [
       "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
     enabled: true,
   },
+  {
+    href: "/admin/dispatch",
+    titleTh: "Dispatch monitor",
+    titleEn: "Dispatch monitor",
+    descTh:
+      "คิวข้อความลูกค้า (SMS / LINE) — ดูความล้มเหลว · รันรอบ dispatch ด้วยตนเอง — Owner / HQ",
+    descEn:
+      "Customer notification queue (SMS / LINE) — review failures, run dispatch ticks — Owner / HQ.",
+    iconPath:
+      "M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

@@ -1,6 +1,6 @@
 # CareU OPS Platform — Customer Portal
 
-> **Status:** **foundation live**. Phone+OTP sign-in, read-only order history, profile self-edit, and an upload pipeline ship in this phase. No marketing automation, no broadcast engine, no payments.
+> **Status:** **customer-communication capable**. Phone+OTP sign-in, read-only order history with audit timeline + signed-URL photo gallery, profile self-edit including a re-verifying phone-change flow. The notification queue is now drained by a real dispatch worker (SMS + LINE). No marketing automation, no broadcast engine, no payments.
 
 ---
 
@@ -24,8 +24,9 @@ The portal is **separate from the OPS auth**. Operators sign in via LINE login �
 | `/portal` | `app/(public)/portal/page.tsx` | required (redirects to `/portal/signin` otherwise) | Dashboard — stats + nav |
 | `/portal/signin` | `app/(public)/portal/signin/page.tsx` | n/a | Phone → OTP flow |
 | `/portal/orders` | `app/(public)/portal/orders/page.tsx` | required | All-orders list |
-| `/portal/orders/[id]` | `app/(public)/portal/orders/[id]/page.tsx` | required + customer_id match | Customer-safe order detail |
+| `/portal/orders/[id]` | `app/(public)/portal/orders/[id]/page.tsx` | required + customer_id match | Customer-safe order detail + timeline + photo gallery |
 | `/portal/profile` | `app/(public)/portal/profile/page.tsx` | required | Self-edit name + email |
+| `/portal/phone-change` | `app/(public)/portal/phone-change/page.tsx` | required | OTP-verified phone change |
 | `/portal/history` | `app/(public)/portal/history/page.tsx` | required | Completed / ready / cancelled orders |
 
 `/portal/*` is included in the `PUBLIC_PREFIXES` list (lib/authContext.tsx) so the OPS strict-mode redirect leaves it alone. Crawlers are blocked by `robots.ts` because the portal is a private surface.
@@ -68,9 +69,9 @@ The portal is **separate from the OPS auth**. Operators sign in via LINE login �
 
 `careu_customer_session` is HMAC-signed using the same `SESSION_SECRET` as the OPS cookie. Payload: `{ customerId, phone, name, iat, exp }`. TTL 30 days. The cookie name and payload shape are different from the OPS one so they cannot be confused server-side.
 
-### 3.2 SMS provider (deferred)
+### 3.2 SMS provider (live)
 
-`lib/customerOtp.ts::issueCustomerOtp` currently emits the code via `console.info`. In non-production it's also returned in the `devCode` response so QA flows work. **A future phase plugs in a real provider** (Twilio / Thai SMS aggregator) — the function shape stays identical; only the "send" step changes. Universal dev code `123456` ALWAYS works in non-production for testing.
+`lib/customerOtp.ts::issueCustomerOtp` hands the code off to `lib/smsProvider.ts::sendSms` — a thin adapter that picks a provider based on `SMS_PROVIDER` env (default `console` for dev, `twilio` for production). The dispatch worker (§9) uses the same `sendSms` for queued SMS rows so OTP and async notifications share one outbound surface. Universal dev code `123456` ALWAYS works in non-production for testing — see [SMS_AND_DISPATCH.md](./SMS_AND_DISPATCH.md).
 
 ### 3.3 Security limits
 
@@ -149,22 +150,65 @@ Lifecycle stages (full thresholds in `PROGRESSION_THRESHOLDS`):
 
 ## 7. Notification queue integration
 
-Foundation-phase contract: portal sign-in DOES NOT yet enqueue a "welcome back" notification. The infrastructure is in place — `lib/notificationService.ts::enqueueNotification(spec)` writes a `customer_notifications` row — but the dispatcher worker is intentionally deferred to a marketing-automation phase. Today the queue serves as the API the future engine will consume.
+`lib/notificationService.ts::enqueueNotification(spec)` writes a `customer_notifications` row; `lib/notificationDispatchWorker.ts::runDispatchTick` drains it. Per-row state machine: `queued → sending → (sent | failed-retryable | dead)`. SMS rows route through `sendSms`; LINE rows route through `pushTextMessage`; email/in-app remain manual surfaces today. See [SMS_AND_DISPATCH.md](./SMS_AND_DISPATCH.md) for the operator runbook + cron wiring. Portal sign-in still does not enqueue a "welcome back" — that's a marketing-automation phase decision, not infrastructure.
+
+## 8. Phone-change flow
+
+`/portal/phone-change` is the customer's way to change the phone number tied to their account without admin intervention.
+
+```
+[customer enters new phone] ──► POST /api/portal/phone-change/request
+                                  │
+                                  ▼  rate-limit 10/hr/IP + 3/hr/customer
+                                  ▼  conflict check vs other customers
+                                  ▼  insert phone_change_requests row
+                                  ▼  hash code with rowId as salt
+                                  ▼  sendSms via SMS provider (or console)
+                                  ▼  audit: kind='phone_change_requested'
+                                  ▼
+[customer enters 6-digit code] ──► POST /api/portal/phone-change/verify
+                                  ▼  expiry check + 5-attempt cap
+                                  ▼  RE-CHECK conflict at commit time
+                                  ▼  UPDATE customers.phone + normalized_phone
+                                  ▼  stamp phone_change_requests.verified_at
+                                  ▼  audit: kind='phone_changed'
+                                  ▼  redirect → /portal/profile (cookie unchanged)
+```
+
+The session cookie carries `customerId`, not `phone`, so the existing session stays valid through the change — no re-login. Anti-takeover is enforced two ways: a unique partial index on `phone_change_requests.new_phone WHERE verified_at IS NULL AND cancelled_at IS NULL` prevents two customers from claiming the same new number in parallel; the verify step re-checks the conflict at commit time in case a race slipped through. Both phone-change events land in `customer_activity` as audit rows.
 
 ---
 
-## 8. Known limitations
+## 9. Order timeline + photo gallery
 
-- **No SMS provider** — OTP codes are log-only. Dev code `123456` accepted in non-production. Production needs a real provider integration before launch.
-- **No phone-change flow** — `/portal/profile` doesn't expose phone editing. Changing a phone requires admin SQL + re-verification on the new number; a future "verify new phone" flow ships this safely.
+The order-detail page (`/portal/orders/[id]`) embeds two extra sections beyond the price summary:
+
+- **ประวัติงาน (timeline)** — reads a customer-safe slice of `order_audit_log` via `GET /api/portal/orders/[id]/timeline`. Only four actions surface in the portal: `created`, `status_changed`, `payment_changed`, `cancelled`. Internal-only actions (`cost_updated`, `sync_pushed`, `sync_failed`, `assigned`, `receipt_regenerated`) are filtered server-side. A synthetic "created" event is injected for legacy orders that predate the audit log.
+- **รูปประกอบงาน (photo gallery)** — reads `order_attachments` via `GET /api/portal/orders/[id]/photos`. Each row's `file_url` is a Storage path; the route mints a 5-minute signed READ URL per row (via `lib/uploadService.ts::issueReadUrl`). Only `image/*` MIME types surface; PDFs / videos are operator-only. The grid is mobile-first (3 cols < 640 px, 4 cols above) with tap-to-zoom.
+
+Both routes hard-check `orders.customer_id === session.customerId` (same 404 enumeration-resistant pattern as the detail route — wrong-owner gets the same response as a missing id).
+
+## 10. Upload client helper
+
+`lib/uploadClient.ts::uploadFile` is the browser-side upload helper. Three benefits over a raw `<input type="file">` + fetch:
+
+1. **Compression** — re-encodes large photos to JPEG capped at 1920 px (longer side) at 82 % quality. HEIC/HEIF/GIF are passed through unchanged (Canvas can't decode them in most browsers). PNG screenshots that would be larger after re-encode are kept as the original.
+2. **Progress** — XHR-based with per-byte `onProgress` callbacks. The portal can render a `<progress>` bar instead of a frozen spinner.
+3. **Retry** — exponential backoff (600 ms → 1.8 s → 5.4 s) on status 0/408/429/5xx. Non-retryable failures (400 MIME mismatch, 403 expired URL) bail immediately.
+
+Scope is one of `quote` (anonymous, anti-spam rate-limited 10/hr/IP), `customer` (portal session, branch resolved server-side), or `order` (portal session + customer_id check on the order). The wiring into a specific portal page is left for a follow-up phase — the helper exists so future "upload a photo for this job" surfaces don't reinvent retry/compression/progress.
+
+## 11. Known limitations
+
 - **No portal "pickup notification preferences" toggle** — the orchestrator in `lib/lineDelivery.ts` already respects `customer_line_links.notify_*` flags, but the portal doesn't surface the toggle yet.
-- **No avatar / photo gallery on the portal** — upload pipeline works but the portal pages don't yet render the customer's uploaded photos.
-- **No portal-side broadcast / push** — by design (deferred). Notifications queue exists; the dispatcher does not.
+- **Gallery is read-only today** — `order_attachments` has no writer in the portal; intake / admin add photos. The portal gallery degrades gracefully (empty section hidden) when no photos exist.
+- **No portal-side broadcast / push** — by design (deferred). Notifications queue + dispatcher exist for transactional sends; broadcast / campaign segmentation is a later phase.
 - **No language switcher** — Thai-only on the portal.
 - **No real-time order updates** — pages fetch on mount; a customer who has the portal open will not see status changes until they reload. WebSockets / SSE is a future enhancement.
 - **No customer-side merge UI** — duplicate customer rows (same phone in two branches) still need admin intervention.
-- **No mobile auto-fill of OTP** — the input is plain text. A future PR can add `autocomplete="one-time-code"` once we have a real SMS provider that ships the code in a sender hash format browsers / iOS recognise.
+- **No mobile auto-fill of OTP** — the input is plain text. iOS / Android auto-fill needs `autocomplete="one-time-code"` + a sender hash in the SMS body; both are a marketing concern, not infrastructure.
+- **Phone-change rate limit is per-IP + per-customer, not per-new-phone** — a malicious user could spam OTP codes at one specific target phone from many accounts. The anti-takeover unique index prevents *claim*; the spam concern is one we'll revisit with the SMS provider's own abuse signals.
 
 ---
 
-**Last updated:** 2026-05-14 (customer portal foundation + OTP + CRM progression integration)
+**Last updated:** 2026-05-14 (phase 12 — SMS provider, dispatch worker, phone-change flow, portal timeline + gallery, upload client)

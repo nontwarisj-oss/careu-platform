@@ -1,6 +1,6 @@
 # CareU OPS Platform — Upload Pipeline
 
-> **Status:** **foundation live**. Signed-URL uploads against a private Supabase Storage bucket; two routes (anonymous quote, authenticated portal); MIME + size + path validation. Image compression / re-encoding is deferred.
+> **Status:** **client-optimized**. Signed-URL uploads against a private Supabase Storage bucket; two routes (anonymous quote, authenticated portal); MIME + size + path validation. Client-side compression + retry + progress live via `lib/uploadClient.ts`. Server-side re-encoding (HEIC → JPEG) is still deferred.
 
 ---
 
@@ -110,7 +110,23 @@ Future phase: if Storage RLS becomes useful (e.g. for direct anon reads on truly
 
 ---
 
-## 7. Future enhancements (not this phase)
+## 7. Client helper — `lib/uploadClient.ts`
+
+`uploadFile({ file, scope, onProgress, signal })` is the browser-side entry point that pairs with the server's `issueUploadUrl`. It bundles three behaviours every consumer otherwise reinvents:
+
+| Step | Behaviour |
+|---|---|
+| Compress | `createImageBitmap` → `OffscreenCanvas` re-encode → JPEG @ quality 0.82 capped at 1920 px (longer side). Skipped for HEIC / HEIF / GIF (canvas can't decode) and for already-small images. Falls back to the original blob if the re-encoded version would be *larger* than the input. |
+| Signed URL | POSTs to `/api/portal/upload-url` or `/api/public/upload-url` depending on scope. |
+| PUT with retry | XHR-based, emits `onProgress({ bytesSent, bytesTotal, percent })`. Retries on status 0/408/429/5xx with exponential backoff (600 ms → 1.8 s → 5.4 s). Non-retryable failures (400 MIME, 403 expired) bail immediately. |
+
+The helper is currently *unused by any page* — it ships alongside the existing intake / quote upload flows as a drop-in upgrade. The wiring to call it from those pages is a UX-layer follow-up so the upgrade can land without re-testing every intake form. New surfaces (portal "upload a photo for this job") should consume this helper directly.
+
+`AbortController.signal` is honoured throughout — wire it to a cancel button if the upload runs on the user's slow network.
+
+---
+
+## 8. Future enhancements (not this phase)
 
 | Step | Why |
 |---|---|

@@ -1168,6 +1168,85 @@ Sibling to `customerTierService` (which produces `customer_tier`). The two answe
 
 ---
 
+## 12m. Customer communication layer (post-`20260536`)
+
+> Status: **live**. SMS provider adapter, dispatch worker, customer phone-change flow, customer-facing audit timeline + photo gallery, browser upload helper. The customer portal is no longer "we'll wire SMS later" — outbound transactional messaging works end-to-end.
+
+See [SMS_AND_DISPATCH.md](./SMS_AND_DISPATCH.md) for the operator runbook.
+
+### 12m.1 SMS adapter
+
+`lib/smsProvider.ts` — interface + console default + Twilio adapter, selected at runtime via `SMS_PROVIDER` env. `sendSms(input)` is the universal entry point used by OTP issuance, phone-change OTPs, and the dispatch worker's `dispatchSms`. Adapter cached for serverless function lifetime; `__resetSmsProviderCache()` exposed for tests.
+
+### 12m.2 Dispatch worker
+
+`lib/notificationDispatchWorker.ts::runDispatchTick(opts)` drains `customer_notifications`. Per-row state machine `queued → sending → (sent|failed-retryable|dead)`. Optimistic concurrency on the `status='queued'` flag prevents double-sends if two workers race. `MAX_ATTEMPTS=5`; exponential backoff (`60 × 3^(attempts-1)`s) capped at 3 h. Three triggers share the function:
+
+```
+/api/cron/dispatch-worker     ── Bearer CRON_SECRET                 (scheduled)
+/api/admin/dispatch/run       ── requireRole(['owner','hq_admin'])  (manual)
+/api/admin/dispatch/summary   ── requireRole(['owner','hq_admin'])  (read)
+```
+
+The admin-facing page `/admin/dispatch` consumes `summary` + `run` and surfaces queue depth, recent failures, and pending preview.
+
+### 12m.3 Phone-change flow
+
+```
+/portal/phone-change
+  ├─ request form → POST /api/portal/phone-change/request
+  │   ├─ rate-limit 10/hr/IP + 3/hr/customer
+  │   ├─ conflict check (no other customer owns new_phone)
+  │   ├─ cancel older pending requests for this customer
+  │   ├─ insert phone_change_requests row (hashed code, salt = row id)
+  │   ├─ sendSms via SMS provider
+  │   └─ audit: customer_activity {kind: 'phone_change_requested'}
+  │
+  └─ verify form → POST /api/portal/phone-change/verify
+      ├─ rate-limit 20/10min/IP, 5-attempt cap per request
+      ├─ expiry check (10 min TTL)
+      ├─ RE-CHECK conflict at commit time (anti-takeover)
+      ├─ UPDATE customers.phone + customers.normalized_phone
+      ├─ stamp phone_change_requests.verified_at
+      └─ audit: customer_activity {kind: 'phone_changed', payload: {from, to, ip}}
+```
+
+A unique partial index `phone_change_requests (new_phone) WHERE verified_at IS NULL AND cancelled_at IS NULL` enforces single-claim semantics at the DB layer. Session cookie carries `customerId`, not `phone`, so the existing portal session continues to work post-change — no re-login.
+
+### 12m.4 Portal timeline + gallery
+
+`/portal/orders/[id]` is now three sections deep:
+
+| Section | Source | Filter |
+|---|---|---|
+| Summary (existing) | `GET /api/portal/orders/[id]` | handpicked customer-safe columns |
+| Photo gallery | `GET /api/portal/orders/[id]/photos` | `order_attachments` filtered to `image/*` MIME, each row signed for 5-min read |
+| Audit timeline | `GET /api/portal/orders/[id]/timeline` | `order_audit_log` filtered to four customer-safe actions: `created`, `status_changed`, `payment_changed`, `cancelled` |
+
+All three routes hard-check `orders.customer_id === session.customerId` (same 404 enumeration-resistant pattern). Internal-only audit actions (`cost_updated`, `sync_pushed`, `sync_failed`, `assigned`, `receipt_regenerated`) are filtered server-side — the customer cannot see them even if they call the API directly.
+
+### 12m.5 Upload client
+
+`lib/uploadClient.ts::uploadFile` is the browser entry point. Compresses (canvas re-encode to JPEG @ 1920 px / 0.82 quality, HEIC/HEIF/GIF pass-through), fetches a signed URL via the existing route, PUTs with XHR-based progress events, retries transient failures (status 0/408/429/5xx) with exponential backoff. Untouched by any current page — drop-in upgrade for follow-up surfaces.
+
+### 12m.6 Schema additions (`20260536`)
+
+- `phone_change_requests` table + unique partial index for anti-takeover.
+- `customer_notifications (channel, status)` index for the worker's per-channel scan.
+- `customer_notifications (created_at DESC) WHERE status='failed'` index for the dispatch UI's recent-failures query.
+
+### 12m.7 Branch isolation reuse
+
+| Surface | Auth | Branch isolation |
+|---|---|---|
+| `/admin/dispatch` | owner / hq_admin | n/a — central admin view across branches |
+| `/api/admin/dispatch/*` | `requireRole(['owner','hq_admin'])` | n/a — same |
+| `/api/cron/dispatch-worker` | `Bearer CRON_SECRET` | n/a — machine endpoint |
+| `/api/portal/orders/[id]/{timeline,photos}` | `careu_customer_session` | `customer_id === session.customerId` hard check (enumeration-resistant 404) |
+| `/api/portal/phone-change/*` | `careu_customer_session` | per-customer rate-limit + DB-level anti-takeover |
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

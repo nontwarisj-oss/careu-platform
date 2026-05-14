@@ -25,25 +25,51 @@ type PortalOrderDetail = {
   createdAt: string;
 };
 
+type TimelineEvent = {
+  id: string;
+  action: string;
+  actionLabel: string;
+  from: string | null;
+  to: string | null;
+  changedAt: string;
+};
+
+type PortalPhoto = {
+  id: string;
+  url: string;
+  mime: string | null;
+  name: string | null;
+  createdAt: string;
+};
+
 export default function PortalOrderDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const [order, setOrder] = useState<PortalOrderDetail | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [photos, setPhotos] = useState<PortalPhoto[]>([]);
+  const [zoomPhoto, setZoomPhoto] = useState<PortalPhoto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     void (async () => {
-      const res = await fetch(`/api/portal/orders/${id}`, {
-        cache: "no-store",
-      });
-      if (res.status === 401) {
+      const [orderRes, timelineRes, photosRes] = await Promise.all([
+        fetch(`/api/portal/orders/${id}`, { cache: "no-store" }),
+        fetch(`/api/portal/orders/${id}/timeline`, { cache: "no-store" }),
+        fetch(`/api/portal/orders/${id}/photos`, { cache: "no-store" }),
+      ]);
+      if (
+        orderRes.status === 401 ||
+        timelineRes.status === 401 ||
+        photosRes.status === 401
+      ) {
         router.replace("/portal/signin");
         return;
       }
-      const json = (await res.json()) as {
+      const json = (await orderRes.json()) as {
         ok?: boolean;
         order?: PortalOrderDetail;
         reason?: string;
@@ -54,6 +80,24 @@ export default function PortalOrderDetailPage() {
         return;
       }
       setOrder(json.order);
+      if (timelineRes.ok) {
+        const tj = (await timelineRes.json()) as {
+          ok?: boolean;
+          events?: TimelineEvent[];
+        };
+        if (tj.ok && Array.isArray(tj.events)) {
+          setTimeline(tj.events);
+        }
+      }
+      if (photosRes.ok) {
+        const pj = (await photosRes.json()) as {
+          ok?: boolean;
+          photos?: PortalPhoto[];
+        };
+        if (pj.ok && Array.isArray(pj.photos)) {
+          setPhotos(pj.photos);
+        }
+      }
       setLoading(false);
     })();
   }, [id, router]);
@@ -160,9 +204,97 @@ export default function PortalOrderDetailPage() {
         )}
       </section>
 
+      {photos.length > 0 && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-gray-900">รูปประกอบงาน</h2>
+          <p className="mt-1 text-[11px] text-gray-500">
+            แตะรูปเพื่อขยาย — ลิงก์รูปมีอายุประมาณ 5 นาที
+          </p>
+          <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {photos.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setZoomPhoto(p)}
+                className="aspect-square rounded-xl overflow-hidden bg-gray-100 border border-gray-200 hover:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.url}
+                  alt={p.name ?? "รูปงาน"}
+                  loading="lazy"
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <h2 className="text-lg font-bold text-gray-900">ประวัติงาน</h2>
+        {timeline.length === 0 ? (
+          <p className="mt-3 text-sm text-gray-500">
+            ยังไม่มีประวัติการเปลี่ยนแปลง
+          </p>
+        ) : (
+          <ol className="mt-4 relative border-l-2 border-gray-200 ml-2 space-y-5">
+            {timeline.map((ev) => (
+              <li key={ev.id} className="pl-5 relative">
+                <span
+                  className={`absolute -left-[7px] top-1 h-3 w-3 rounded-full border-2 border-white ${dotColor(
+                    ev.action,
+                    ev.to
+                  )}`}
+                />
+                <div className="text-sm font-semibold text-gray-900">
+                  {ev.actionLabel}
+                  {ev.to && (
+                    <span className="ml-1.5 font-normal text-gray-600">
+                      → {ev.to}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11px] text-gray-500">
+                  {new Date(ev.changedAt).toLocaleString("th-TH", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+
       <p className="text-[11px] text-gray-500 text-center">
         ข้อมูลภายในร้าน (ค่าวัสดุ / ค่าแรงช่าง / โน้ตพนักงาน) ไม่แสดงในพอร์ทัล
       </p>
+
+      {zoomPhoto && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setZoomPhoto(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            type="button"
+            onClick={() => setZoomPhoto(null)}
+            className="absolute top-4 right-4 rounded-full bg-white/10 hover:bg-white/20 text-white px-3 py-1 text-sm"
+            aria-label="ปิด"
+          >
+            ปิด
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={zoomPhoto.url}
+            alt={zoomPhoto.name ?? "รูปงาน"}
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -184,6 +316,24 @@ function Row({
       </dd>
     </div>
   );
+}
+
+function dotColor(action: string, to: string | null): string {
+  if (action === "cancelled") return "bg-red-500";
+  if (action === "created") return "bg-green-600";
+  if (action === "payment_changed") {
+    if (to === "ชำระแล้ว") return "bg-green-600";
+    if (to === "มัดจำแล้ว") return "bg-amber-500";
+    return "bg-gray-400";
+  }
+  if (action === "status_changed") {
+    if (to === "เสร็จสิ้น") return "bg-green-600";
+    if (to === "พร้อมรับ") return "bg-purple-500";
+    if (to === "กำลังซ่อม") return "bg-blue-500";
+    if (to === "ยกเลิก") return "bg-red-500";
+    return "bg-gray-400";
+  }
+  return "bg-gray-400";
 }
 
 function Badge({ label, tone }: { label: string; tone: string }) {
