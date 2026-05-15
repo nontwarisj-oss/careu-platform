@@ -1994,6 +1994,63 @@ See [COMMUNICATIONS.md §9](./COMMUNICATIONS.md).
 
 ---
 
+## 12y. Operational observability completion (post-`20260548`)
+
+> Status: **fully observable operations platform**. Delivery is confirmed end-to-end, the LINE operator channel is live, crons are declaratively scheduled + dashboarded, branch health is surfaced, and alerts escalate on a tiered chain.
+
+See [CRON_ARCHITECTURE.md](./CRON_ARCHITECTURE.md), [WORKER_HEALTH.md](./WORKER_HEALTH.md), [INCIDENT_RESPONSE.md](./INCIDENT_RESPONSE.md), [OPERATOR_PLAYBOOK.md](./OPERATOR_PLAYBOOK.md).
+
+### 12y.1 Schema (migration `20260548`)
+
+- `alert_deliveries` += `provider_message_id` — lets the Resend webhook confirm true delivery of an operator-alert email.
+- `alert_preferences` += `line_target` — per-scope LINE user/group/room id for the operator alert channel.
+
+### 12y.2 Delivery confirmation
+
+`lib/deliveryConfirmation.ts::confirmAlertEmailDelivery` — idempotent, forward-only (`sent → delivered/failed`). The Resend webhook calls it when an event has no `notification_id` tag (= an alert email, not a customer notification). Customer-notification confirmation is unchanged (Phases 19–21).
+
+### 12y.3 LINE operator channel
+
+`lib/alertRouting.ts::routeLine` pushes for real via `lib/lineMessaging`. Target = `alert_preferences.line_target` → `ALERT_LINE_TARGET`; token = `ALERT_LINE_TOKEN` → global LINE OA. Missing config → safe `skipped`.
+
+### 12y.4 Cron manifest
+
+`lib/cronManifest.ts` — declarative source of truth (cronName / path / schedule / intervalMinutes / description) for all 11 crons. `vercel.json` mirrors it. Helpers: `nextExpectedRun`, `isOverdue`, `cronEntry`. The `stale-lock-cleaner` + `heartbeat-check` jobs from the brief live inside `worker-maintenance`, not as separate crons.
+
+### 12y.5 Cron health dashboard
+
+`/admin/system/workers` cron table adds: schedule, **next expected run** (overdue rows flagged "missed"), and a per-row **recovery hint**. Streak + silence columns unchanged from Phases 21–22.
+
+### 12y.6 Branch health
+
+`lib/branchHealth.ts::computeBranchHealth` — per-branch rollup (failed sends 24h, dead letters, stuck broadcast jobs, unresolved + critical alerts, paused campaigns). `GET /api/admin/system/branch-health` (owner/HQ all branches; branch_manager own branch only, scoped server-side). `/admin/system/branch-health` page uses the `recovery` page key so branch managers can reach it.
+
+### 12y.7 Escalation chain
+
+`lib/alertEvents.ts` — an unresolved `active` alert re-routes once per 2h cooldown on a tiered chain: `alert` → `hq` (first escalation) → `owner` (every one after). Tier drives the subject prefix; `routeAlert` accepts an `EscalationTier`.
+
+### 12y.8 Delivery audit trail
+
+`lib/deliveryTimeline.ts::getNotificationTimeline` merges `customer_notifications` + `notification_dispatch_log` + `communication_events` into one ordered trail. `GET /api/admin/system/delivery-timeline` + `<DeliveryTimeline>` component, surfaced as a **trail** toggle on each notification row of `/admin/customers/[id]`.
+
+### 12y.9 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `GET /api/admin/system/branch-health` | owner/HQ/branch_manager | branch_manager → own branch only |
+| `GET /api/admin/system/delivery-timeline` | owner/HQ/branch_manager/front_staff | inherits customer_notifications RLS |
+| `alert_preferences.line_target` | owner/HQ write | enforced |
+| `/api/cron/*` | machine-only (Bearer CRON_SECRET) | n/a |
+
+### 12y.10 Known limitations
+
+- LINE alert delivery requires a configured token + target; absent either, it safely no-ops (email + Slack still deliver).
+- `alert_deliveries.status='delivered'` for alert emails depends on Resend delivery webhooks reaching us; Slack/LINE remain at `sent` (no delivery callback).
+- The delivery timeline is surfaced on customer detail; campaign-detail / worker-detail can embed the same `<DeliveryTimeline>` component by notification id — not yet wired there.
+- Owner-tier escalation shares the HQ/global recipient list unless a dedicated owner address is added to the global `alert_preferences` row.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

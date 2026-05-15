@@ -409,6 +409,7 @@ export async function sendOperatorDigest(opts?: {
         recipient: to,
         status: res.ok ? "sent" : "failed",
         branch_id: null,
+        provider_message_id: res.ok ? res.providerMessageId : null,
         detail: {
           provider: res.provider,
           period: `${digest.periodStart}..${digest.periodEnd}`,

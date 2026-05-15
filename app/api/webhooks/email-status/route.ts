@@ -28,6 +28,7 @@ import {
   type CommEventType,
 } from "@/lib/communicationEvents";
 import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
+import { confirmAlertEmailDelivery } from "@/lib/deliveryConfirmation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -195,7 +196,32 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, handled: true, mapped: internal });
+  // Phase 24: operator-alert email confirmation. An alert email has
+  // no notification_id tag — it is matched by the Resend email_id we
+  // stored on its alert_deliveries row at send time. Idempotent +
+  // a no-op for customer notifications.
+  let alertConfirmed = 0;
+  if (providerEventId) {
+    if (internal === "delivered") {
+      alertConfirmed = await confirmAlertEmailDelivery({
+        providerMessageId: providerEventId,
+        status: "delivered",
+      });
+    } else if (internal === "bounced" || internal === "failed") {
+      alertConfirmed = await confirmAlertEmailDelivery({
+        providerMessageId: providerEventId,
+        status: "failed",
+        reason: `Resend ${event.type ?? internal}`,
+      });
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    handled: true,
+    mapped: internal,
+    alertConfirmed,
+  });
 }
 
 export async function GET() {

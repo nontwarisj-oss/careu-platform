@@ -32,7 +32,7 @@ export async function GET() {
   const res = await admin
     .from("alert_preferences")
     .select(
-      "id, branch_id, recipients, min_severity, quiet_hours_start_h, quiet_hours_end_h, enabled, digest_enabled, updated_at"
+      "id, branch_id, recipients, min_severity, quiet_hours_start_h, quiet_hours_end_h, enabled, digest_enabled, line_target, updated_at"
     )
     .order("branch_id", { ascending: true, nullsFirst: true });
   if (res.error) {
@@ -52,6 +52,7 @@ type Body = {
   quietHoursEndH?: number | null;
   enabled?: boolean;
   digestEnabled?: boolean;
+  lineTarget?: string | null;
   delete?: boolean;
 };
 
@@ -155,6 +156,11 @@ export async function POST(req: Request) {
     );
   }
 
+  const lineTarget =
+    typeof body.lineTarget === "string" && body.lineTarget.trim()
+      ? body.lineTarget.trim().slice(0, 200)
+      : null;
+
   const payload = {
     branch_id: branchId,
     recipients,
@@ -164,6 +170,7 @@ export async function POST(req: Request) {
     quiet_hours_end_h: cleanHour(body.quietHoursEndH),
     enabled: body.enabled !== false,
     digest_enabled: body.digestEnabled !== false,
+    line_target: lineTarget,
     updated_at: new Date().toISOString(),
     updated_by: actorId,
   };

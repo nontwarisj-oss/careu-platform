@@ -12,7 +12,8 @@
 // enforces branch scope so a branch_manager can't read a customer
 // outside their branch even if they URL-hop.
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import { DeliveryTimeline } from "@/components/DeliveryTimeline";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
@@ -161,6 +162,7 @@ function Inner() {
   const [data, setData] = useState<PageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trailFor, setTrailFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -409,7 +411,8 @@ function Inner() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {data.notifications.map((n) => (
-                    <tr key={n.id} className="hover:bg-gray-50">
+                    <Fragment key={n.id}>
+                    <tr className="hover:bg-gray-50">
                       <Td className="text-xs">{n.channel}</Td>
                       <Td className="font-mono text-xs">{n.kind}</Td>
                       <Td>
@@ -438,13 +441,35 @@ function Inner() {
                         {n.error_reason ?? "—"}
                       </Td>
                       <Td>
-                        <NotificationActionButton
-                          notificationId={n.id}
-                          status={n.status}
-                          onDone={load}
-                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTrailFor(trailFor === n.id ? null : n.id)
+                            }
+                            className="text-[11px] font-semibold text-green-700 hover:text-green-900 underline"
+                          >
+                            {trailFor === n.id ? "ซ่อน trail" : "trail"}
+                          </button>
+                          <NotificationActionButton
+                            notificationId={n.id}
+                            status={n.status}
+                            onDone={load}
+                          />
+                        </div>
                       </Td>
                     </tr>
+                    {trailFor === n.id && (
+                      <tr className="bg-gray-50/60">
+                        <td colSpan={7} className="px-4 py-3">
+                          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                            Delivery audit trail
+                          </p>
+                          <DeliveryTimeline notificationId={n.id} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

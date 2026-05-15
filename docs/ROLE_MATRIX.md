@@ -146,6 +146,11 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`alert_deliveries` table read** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
 | **`/api/admin/system/alerts` `send-digest` action** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`/api/cron/operator-digest`** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **`/admin/system/branch-health` UI** | ✅ all branches | ✅ all branches | ✅ 🏢 own branch | ❌ | ❌ |
+| **`GET /api/admin/system/branch-health`** | ✅ all | ✅ all | ✅ 🏢 (own branch, server-scoped) | ❌ | ❌ |
+| **`GET /api/admin/system/delivery-timeline`** | ✅ all | ✅ all | ✅ 🏢 | ✅ 🏢 | ❌ |
+| **`alert_deliveries.provider_message_id` / `alert_preferences.line_target`** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/api/cron/worker-maintenance` / `operator-digest` / all `/api/cron/*`** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
 | **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
 | **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
@@ -337,7 +342,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-14 | Phase 21 — broadcast engine maturity. Added `worker_locks` (concurrency control), `cron_failure_streaks` (×N badges in workers UI), broadcast-draft pause/resume (`/api/admin/crm/broadcasts/[id]/pause` + `/resume`), cross-draft overlap pre-flight at send-create, broadcast delivery callback wired into Resend + Twilio webhooks, `/admin/system/smoke-test` page. Migration `20260545`. | — |
 | 2026-05-15 | Phase 22 — cap enforcement + alert routing. Send-create now enforces emergency stop + daily/weekly caps + dry-run requirement (owner-only weekly override). Added `alert_events` table + `/api/admin/system/alerts` (ack/resolve/run-maintenance), `worker-maintenance` cron (lock janitor + alert sweep), broadcast URL auto-wrap. Migration `20260546`. | — |
 | 2026-05-15 | Phase 23 — alert delivery + weekly digest. Added `alert_preferences` + `alert_deliveries` tables, `/admin/system/alert-preferences` (owner/HQ), real email routing via `lib/channels/email`, escalation cooldown, `operator-digest` cron + `send-digest` action. Migration `20260547`. | — |
+| 2026-05-15 | Phase 24 — operational observability. Alert-email delivery confirmation, real LINE operator channel, declarative cron manifest (`vercel.json` + `lib/cronManifest.ts`), cron health dashboard (next-run + recovery hints), `/admin/system/branch-health` (branch_manager own-branch), tiered escalation chain, delivery audit trail (`<DeliveryTimeline>`). Migration `20260548`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 23 — alert delivery + email routing + weekly digest)
+**Last updated:** 2026-05-15 (Phase 24 — operational observability completion)

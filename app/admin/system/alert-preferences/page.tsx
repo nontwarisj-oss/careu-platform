@@ -24,6 +24,7 @@ type Row = {
   quiet_hours_end_h: number | null;
   enabled: boolean;
   digest_enabled: boolean;
+  line_target: string | null;
   updated_at: string;
 };
 
@@ -34,6 +35,7 @@ type Draft = {
   quietHoursEndH: number | null;
   enabled: boolean;
   digestEnabled: boolean;
+  lineTarget: string;
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -43,6 +45,7 @@ const EMPTY_DRAFT: Draft = {
   quietHoursEndH: null,
   enabled: true,
   digestEnabled: true,
+  lineTarget: "",
 };
 
 export default function AlertPreferencesPage() {
@@ -104,6 +107,7 @@ function Inner() {
         quietHoursEndH: currentRow.quiet_hours_end_h,
         enabled: currentRow.enabled,
         digestEnabled: currentRow.digest_enabled,
+        lineTarget: currentRow.line_target ?? "",
       });
     } else {
       setDraft(EMPTY_DRAFT);
@@ -130,6 +134,7 @@ function Inner() {
           quietHoursEndH: draft.quietHoursEndH,
           enabled: draft.enabled,
           digestEnabled: draft.digestEnabled,
+          lineTarget: draft.lineTarget.trim() || null,
         }),
       });
       const json = (await res.json()) as { ok?: boolean; reason?: string };
@@ -248,6 +253,21 @@ function Inner() {
                   }
                   rows={2}
                   placeholder="ops@careu.tech, owner@careu.tech"
+                  className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] font-semibold text-gray-700">
+                  LINE operator target (user / group / room id)
+                </span>
+                <input
+                  type="text"
+                  value={draft.lineTarget}
+                  onChange={(e) =>
+                    setDraft({ ...draft, lineTarget: e.target.value })
+                  }
+                  placeholder="Cxxxxxxxx (LINE group id) — เว้นว่าง = ใช้ ALERT_LINE_TARGET env"
                   className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
                 />
               </label>

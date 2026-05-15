@@ -26,6 +26,9 @@ export type AlertPreferences = {
   quietHoursEndH: number | null;
   enabled: boolean;
   digestEnabled: boolean;
+  /** LINE user / group / room id the operator alert channel pushes
+   *  to for this scope. null = fall back to ALERT_LINE_TARGET env. */
+  lineTarget: string | null;
 };
 
 type PrefRow = {
@@ -36,6 +39,7 @@ type PrefRow = {
   quiet_hours_end_h: number | null;
   enabled: boolean;
   digest_enabled: boolean;
+  line_target: string | null;
 };
 
 const DEFAULTS: Omit<AlertPreferences, "branchId"> = {
@@ -45,6 +49,7 @@ const DEFAULTS: Omit<AlertPreferences, "branchId"> = {
   quietHoursEndH: null,
   enabled: true,
   digestEnabled: true,
+  lineTarget: null,
 };
 
 type Cache = { loadedAt: number; rows: PrefRow[] };
@@ -59,7 +64,7 @@ async function loadAll(): Promise<PrefRow[]> {
   const res = await admin
     .from("alert_preferences")
     .select(
-      "branch_id, recipients, min_severity, quiet_hours_start_h, quiet_hours_end_h, enabled, digest_enabled"
+      "branch_id, recipients, min_severity, quiet_hours_start_h, quiet_hours_end_h, enabled, digest_enabled, line_target"
     );
   if (res.error || !res.data) return [];
   cache = { loadedAt: Date.now(), rows: res.data as PrefRow[] };
@@ -83,6 +88,10 @@ function rowToPrefs(row: PrefRow): AlertPreferences {
       typeof row.quiet_hours_end_h === "number" ? row.quiet_hours_end_h : null,
     enabled: row.enabled !== false,
     digestEnabled: row.digest_enabled !== false,
+    lineTarget:
+      typeof row.line_target === "string" && row.line_target.trim()
+        ? row.line_target.trim()
+        : null,
   };
 }
 
@@ -138,6 +147,9 @@ export async function resolveAlertPreferences(
       : (global?.quietHoursEndH ?? DEFAULTS.quietHoursEndH),
     enabled: pick("enabled"),
     digestEnabled: pick("digestEnabled"),
+    // LINE target: branch row wins, else global, else env fallback.
+    lineTarget:
+      (branch?.lineTarget ?? null) ?? (global?.lineTarget ?? null),
   };
 }
 

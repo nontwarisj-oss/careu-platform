@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
 import { usePortalRefresh } from "@/lib/usePortalRefresh";
+import { cronEntry, isOverdue, nextExpectedRun } from "@/lib/cronManifest";
 
 type CronStatus = {
   cronName: string;
@@ -97,6 +98,21 @@ const STATUS_TONE: Record<string, string> = {
   critical: "border-red-300 bg-red-100 text-red-900",
   unknown: "border-gray-200 bg-gray-50 text-gray-700",
 };
+
+/** A one-line "what to do" hint for a cron row, based on its state. */
+function recoveryHint(c: CronStatus): string {
+  if (c.status === "healthy") return "—";
+  if (c.consecutiveFailures >= 3) {
+    return "check last error · fix root cause · Run maintenance";
+  }
+  if (c.consecutiveFailures >= 1) return "transient fail · watch next tick";
+  if (c.status === "critical") {
+    return "cron silent · verify scheduler + run /api/cron route";
+  }
+  if (c.status === "warning") return "running slow · watch for escalation";
+  if (c.status === "unknown") return "no heartbeat yet · verify schedule";
+  return "—";
+}
 
 function fmt(iso: string | null): string {
   if (!iso) return "—";
@@ -438,81 +454,100 @@ function Inner() {
                 <tr>
                   <th className="px-3 py-2">Cron</th>
                   <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Schedule</th>
                   <th className="px-3 py-2">Last run</th>
+                  <th className="px-3 py-2">Next expected</th>
                   <th className="px-3 py-2">Silent</th>
                   <th className="px-3 py-2">Streak</th>
                   <th className="px-3 py-2">Success (24h)</th>
-                  <th className="px-3 py-2">Runs</th>
-                  <th className="px-3 py-2">Last error</th>
+                  <th className="px-3 py-2">Recovery</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {snapshot.crons.map((c) => (
-                  <tr key={c.cronName} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 font-mono text-xs">{c.cronName}</td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                          STATUS_TONE[c.status]
-                        }`}
-                      >
-                        {c.status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-gray-700">
-                      {fmt(c.lastRunAt)}
-                      {c.lastDurationMs != null && (
-                        <span className="ml-1 text-[10px] text-gray-500">
-                          ({c.lastDurationMs}ms)
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      {c.silentForMinutes != null
-                        ? `${c.silentForMinutes}m / ${c.expectedIntervalMinutes}m`
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      {c.consecutiveFailures > 0 ? (
+                {snapshot.crons.map((c) => {
+                  const entry = cronEntry(c.cronName);
+                  const nextRun = nextExpectedRun(
+                    c.lastRunAt,
+                    c.expectedIntervalMinutes
+                  );
+                  const overdue = isOverdue(
+                    c.lastRunAt,
+                    c.expectedIntervalMinutes
+                  );
+                  const recovery = recoveryHint(c);
+                  return (
+                    <tr key={c.cronName} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {c.cronName}
+                      </td>
+                      <td className="px-3 py-2">
                         <span
                           className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                            c.consecutiveFailures >= 3
-                              ? "border-red-300 bg-red-50 text-red-800"
-                              : "border-amber-300 bg-amber-50 text-amber-800"
+                            STATUS_TONE[c.status]
                           }`}
-                          title={c.lastFailureMessage ?? undefined}
                         >
-                          ×{c.consecutiveFailures}
+                          {c.status}
                         </span>
-                      ) : (
-                        <span className="text-[10px] text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-xs ${
-                        c.successRate24h != null && c.successRate24h < 80
-                          ? "text-red-700"
-                          : "text-gray-700"
-                      }`}
-                    >
-                      {c.successRate24h != null
-                        ? `${c.successRate24h}%`
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-gray-700">
-                      {c.totalRuns24h}
-                      {c.failedRuns24h > 0 && (
-                        <span className="text-red-700">
-                          {" "}
-                          (×{c.failedRuns24h} failed)
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-red-700 max-w-xs truncate">
-                      {c.lastError ?? "—"}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-3 py-2 text-[10px] font-mono text-gray-600">
+                        {entry?.schedule ?? "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-gray-700">
+                        {fmt(c.lastRunAt)}
+                        {c.lastDurationMs != null && (
+                          <span className="ml-1 text-[10px] text-gray-500">
+                            ({c.lastDurationMs}ms)
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-xs ${
+                          overdue ? "text-red-700 font-semibold" : "text-gray-700"
+                        }`}
+                      >
+                        {nextRun ? fmt(nextRun) : "—"}
+                        {overdue && (
+                          <span className="ml-1 text-[10px]">missed</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {c.silentForMinutes != null
+                          ? `${c.silentForMinutes}m / ${c.expectedIntervalMinutes}m`
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {c.consecutiveFailures > 0 ? (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                              c.consecutiveFailures >= 3
+                                ? "border-red-300 bg-red-50 text-red-800"
+                                : "border-amber-300 bg-amber-50 text-amber-800"
+                            }`}
+                            title={c.lastFailureMessage ?? undefined}
+                          >
+                            ×{c.consecutiveFailures}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-xs ${
+                          c.successRate24h != null && c.successRate24h < 80
+                            ? "text-red-700"
+                            : "text-gray-700"
+                        }`}
+                      >
+                        {c.successRate24h != null
+                          ? `${c.successRate24h}%`
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-[10px] text-gray-600 max-w-[22ch]">
+                        {recovery}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

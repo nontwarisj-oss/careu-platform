@@ -25,6 +25,7 @@ import { computeWorkerHealth, type AlertHit } from "@/lib/workerHealth";
 import {
   routeAlert,
   type AlertRouteOutcome,
+  type EscalationTier,
   type RoutableAlert,
 } from "@/lib/alertRouting";
 import { resolveAlertPreferences, shouldDeliver } from "@/lib/alertPreferences";
@@ -103,7 +104,8 @@ async function deliverAndRecord(
   admin: Admin,
   eventId: string,
   routable: RoutableAlert,
-  kind: "alert" | "escalation"
+  kind: "alert" | "escalation",
+  tier: EscalationTier
 ): Promise<AlertRouteOutcome[]> {
   const prefs = await resolveAlertPreferences(routable.branchId);
   const decision = shouldDeliver(prefs, routable.severity);
@@ -126,7 +128,8 @@ async function deliverAndRecord(
   try {
     outcomes = await routeAlert(routable, {
       recipients: prefs.recipients,
-      isEscalation: kind === "escalation",
+      lineTarget: prefs.lineTarget,
+      tier,
     });
   } catch (err) {
     outcomes = [
@@ -159,6 +162,7 @@ async function insertDeliveries(
         recipient: o.recipient,
         status: o.status,
         branch_id: branchId,
+        provider_message_id: o.providerMessageId ?? null,
         detail: { reason: o.reason },
       }))
     );
@@ -258,7 +262,8 @@ export async function recordAlertHits(opts: {
       result.repeated += 1;
 
       // Escalate when STILL active (not acknowledged) and the last
-      // route is older than the cooldown.
+      // route is older than the cooldown. Tier climbs the chain:
+      // first escalation → HQ, every one after → owner.
       const lastRoutedMs = row.last_routed_at
         ? new Date(row.last_routed_at).getTime()
         : 0;
@@ -266,7 +271,9 @@ export async function recordAlertHits(opts: {
         row.status === "active" &&
         nowMs - lastRoutedMs > ESCALATION_COOLDOWN_MS
       ) {
-        await deliverAndRecord(admin, row.id, routable, "escalation");
+        const tier: EscalationTier =
+          (row.escalation_count ?? 0) === 0 ? "hq" : "owner";
+        await deliverAndRecord(admin, row.id, routable, "escalation", tier);
         await admin
           .from("alert_events")
           .update({
@@ -306,7 +313,13 @@ export async function recordAlertHits(opts: {
       continue;
     }
     const eventId = (ins.data as { id: string }).id;
-    const outcomes = await deliverAndRecord(admin, eventId, routable, "alert");
+    const outcomes = await deliverAndRecord(
+      admin,
+      eventId,
+      routable,
+      "alert",
+      "alert"
+    );
     await admin
       .from("alert_events")
       .update({ detail: { routing: outcomes } })

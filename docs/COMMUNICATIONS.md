@@ -225,4 +225,43 @@ Resolution: per-branch row → global row → hard-coded defaults. 60s cache.
 
 ---
 
-**Last updated:** 2026-05-15 (phase 23 — alert delivery + email routing + weekly digest)
+## 10. Delivery confirmation + escalation chain (Phase 24)
+
+### 10.1 Delivery confirmation
+
+Customer-notification delivery already flowed through the webhooks (Phases 19–21). Phase 24 closes the loop for **operator-alert emails**:
+
+- Each alert email's provider message id (`alert_deliveries.provider_message_id`) is captured at send time.
+- The Resend webhook, when its event carries no `notification_id` tag, matches `alert_deliveries` by that id and advances the row `sent → delivered / failed` ([`lib/deliveryConfirmation.ts`](../lib/deliveryConfirmation.ts)).
+- Forward-only + terminal — a duplicate or out-of-order webhook is a no-op.
+
+### 10.2 LINE operator channel
+
+`routeLine` ([`lib/alertRouting.ts`](../lib/alertRouting.ts)) now **pushes for real** via the LINE Messaging API. Target precedence: `alert_preferences.line_target` (per-branch) → `ALERT_LINE_TARGET` env. Token: `ALERT_LINE_TOKEN` → the global LINE OA token. A LINE user / group / room id all work as the push target. No token or target → safe no-op (`skipped`), workers never crash.
+
+### 10.3 Escalation chain
+
+An unresolved `active` alert re-routes once per 2h cooldown on a tiered chain:
+
+| Tier | Trigger | Subject prefix |
+|---|---|---|
+| `alert` | first fire | ⚠️ Alert / 🚨 CRITICAL |
+| `hq` | 1st escalation (≈ 2h unresolved) | ⏫ HQ ESCALATION |
+| `owner` | every escalation after (≈ 4h+) | ⏫⏫ OWNER ESCALATION |
+
+Acknowledging the alert stops escalation. Dedup + branch-awareness are unchanged from Phase 22.
+
+### 10.4 Delivery audit trail
+
+[`lib/deliveryTimeline.ts`](../lib/deliveryTimeline.ts)`::getNotificationTimeline` merges `customer_notifications` milestones + `notification_dispatch_log` attempts + `communication_events` engagement into one ordered trail: queued → dispatched → provider accepted → delivered → opened / clicked → failed / bounced → retried → cancelled. Surfaced via the `<DeliveryTimeline>` component (a **trail** toggle on each notification row of `/admin/customers/[id]`) and `GET /api/admin/system/delivery-timeline`.
+
+### 10.5 Env reference (additions)
+
+| Env | Purpose |
+|---|---|
+| `ALERT_LINE_TOKEN` | LINE channel token for operator alerts (else global LINE OA). |
+| `ALERT_LINE_TARGET` | Default LINE user/group/room id (else per-branch `line_target`). |
+
+---
+
+**Last updated:** 2026-05-15 (phase 24 — delivery confirmation + LINE operator channel)

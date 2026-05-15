@@ -231,6 +231,18 @@ const CARDS: AdminCard[] = [
       "M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
     enabled: true,
   },
+  {
+    href: "/admin/system/branch-health",
+    titleTh: "Branch health",
+    titleEn: "Branch health",
+    descTh:
+      "สุขภาพการดำเนินงานต่อสาขา — failed sends · dead letters · alerts",
+    descEn:
+      "Per-branch operational health: failed sends, dead letters, stuck jobs, alerts.",
+    iconPath:
+      "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v7H7zm4-3h2v10h-2zm4 6h2v4h-2z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

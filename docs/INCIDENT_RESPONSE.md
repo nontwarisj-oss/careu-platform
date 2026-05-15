@@ -1,0 +1,61 @@
+# CareU OPS Platform — Incident Response
+
+> **Status:** operator runbook. When an alert fires or a dashboard goes red, start here.
+
+---
+
+## 1. Triage order
+
+1. **Open `/admin/system/workers`** — overall banner: healthy / warning / critical.
+2. **Read the Active alerts section** — severity, source worker, occurrence + escalation count.
+3. **Acknowledge** the alert you are taking — this stops escalation re-routes while you work.
+4. **Open `/admin/system/branch-health`** — is the impact one branch or platform-wide?
+5. Fix → the alert auto-resolves on the next `worker-maintenance` sweep, or **Resolve** it manually.
+
+---
+
+## 2. Alert playbook
+
+| Alert metric | Likely cause | First action |
+|---|---|---|
+| `cron_silence_minutes` | A cron stopped ticking | `/admin/system/workers` → check the cron's last run; verify the Vercel scheduler; hit `/api/cron/<name>` manually. |
+| `dead_letter_count` | Provider rejecting messages | Check provider config (Twilio / Resend / LINE env); inspect `customer_notifications` dead-letter rows + `error_reason`. |
+| `queue_age_minutes` | Dispatch worker not draining | **Self-heal** on the workers page; check `dispatch-worker` cron health. |
+| `delivery_success_pct` low | Provider outage or bad numbers | Check `notification_dispatch_log` failure reasons; verify provider status page. |
+| `failure_count` | Transient provider/network errors | Watch one or two more ticks; retry-worker should recover them. |
+
+---
+
+## 3. Common recoveries
+
+| Situation | Recovery |
+|---|---|
+| Rows stuck in `sending` | Workers page → **Self-heal** (resets to `queued`). |
+| Stale `worker_locks` (crashed tick) | Workers page → **Run maintenance**, or wait for the 15-min sweep. |
+| Broadcast job stuck `processing` | `/admin/crm/broadcasts/[id]` → pause the draft, investigate, resume. |
+| Campaign over a send cap | `/admin/system/guardrails` — raise the cap or wait for the window to roll. |
+| Everything must stop NOW | `/admin/system/guardrails` → **emergency stop** (halts dispatch + retention + broadcast within ~60s). |
+
+---
+
+## 4. Delivery investigation
+
+For "did customer X get message Y?": open `/admin/customers/[id]`, find the notification, click **trail** → the [delivery audit trail](./COMMUNICATIONS.md) shows queued → dispatched → provider accepted → delivered → opened / clicked / failed, merged from `customer_notifications` + `notification_dispatch_log` + `communication_events`.
+
+For operator-alert emails: `/admin/system/workers` → **Alert delivery history** shows sent / delivered / failed / skipped per channel.
+
+---
+
+## 5. Escalation contacts
+
+The escalation chain is configured in `/admin/system/alert-preferences`:
+
+- **Branch tier** — branch-row recipients (branch manager).
+- **HQ tier** — global-row recipients; reached after one unresolved 2h cooldown.
+- **Owner tier** — every cooldown after that.
+
+If an alert reaches owner tier it has been unresolved for 4+ hours — treat as a real incident.
+
+---
+
+**Last updated:** 2026-05-15 (phase 24 — operational observability completion)

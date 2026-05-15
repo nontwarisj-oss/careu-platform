@@ -1,26 +1,28 @@
 // Alert Routing — delivers a fired alert to operator-facing channels.
 //
-// Phase 22 shipped this as a SHELL (email/LINE were intent-logged
-// stubs). Phase 23 activates real email delivery:
+// Phase 22 shipped this as a shell. Phase 23 activated real email.
+// Phase 24 activates the LINE operator channel and a tiered
+// escalation chain:
 //
-//   • Email — sent for real via lib/channels/email (Resend when
-//     EMAIL_PROVIDER=resend + EMAIL_API_KEY/EMAIL_FROM; otherwise the
-//     console provider logs it — never crashes). One delivery per
-//     recipient address.
-//   • Slack — ALERT_SLACK_WEBHOOK_URL. Plain HTTPS POST, no SDK.
-//   • LINE — internal-notification PLACEHOLDER. Phase 23 logs the
-//     intent; a real LINE-to-operator push is a later phase.
+//   • Email — sent via lib/channels/email; one delivery per
+//     recipient. Returns the provider message id so the Resend
+//     webhook can later confirm true delivery.
+//   • Slack — ALERT_SLACK_WEBHOOK_URL, plain HTTPS POST.
+//   • LINE  — real push to an operator user / group / room id via the
+//     Messaging API (lib/lineMessaging). Token from ALERT_LINE_TOKEN
+//     or the global LINE OA. Safe no-op when nothing is configured.
 //
-// Recipients come from lib/alertPreferences (operator-managed). The
-// caller (lib/alertEvents) resolves preferences + quiet-hours gating
-// BEFORE calling here — this module just sends.
+// Escalation tier (branch → hq → owner) affects only the subject /
+// message prefix here — WHO receives it is decided by the caller
+// (lib/alertEvents) when it resolves recipients per tier.
 //
-// Everything is best-effort. Routing failures never propagate — the
-// alert is already persisted; routing is the courtesy layer.
+// Best-effort: routing failures never propagate.
 //
 // Server-only.
 
 import { sendEmail } from "@/lib/channels/email";
+import { resolveLineChannelConfig } from "@/lib/lineConfig";
+import { pushTextMessage } from "@/lib/lineMessaging";
 
 export type RoutableAlert = {
   ruleName: string;
@@ -33,20 +35,27 @@ export type RoutableAlert = {
   comparison: "gt" | "lt" | null;
 };
 
+export type EscalationTier = "alert" | "hq" | "owner";
+
 export type AlertRouteOutcome = {
   channel: "email" | "slack" | "line";
   recipient: string | null;
   /** Mirrors alert_deliveries.status. */
   status: "sent" | "delivered" | "failed" | "skipped";
   reason: string;
+  /** Provider message id when the channel returned one (email). Lets
+   *  the delivery webhook confirm true delivery later. */
+  providerMessageId?: string | null;
 };
 
 export type RouteOptions = {
-  /** Email recipient addresses, resolved from alert_preferences. */
+  /** Email recipient addresses, resolved per escalation tier. */
   recipients: string[];
-  /** True when this is a re-route of an unresolved alert (escalation
-   *  cooldown elapsed) rather than the first fire. Affects subject. */
-  isEscalation?: boolean;
+  /** LINE user / group / room id to push the alert to. */
+  lineTarget?: string | null;
+  /** Escalation tier — drives the subject prefix. 'alert' = first
+   *  fire; 'hq' / 'owner' = re-routes after the escalation cooldown. */
+  tier?: EscalationTier;
 };
 
 function summarise(a: RoutableAlert): string {
@@ -57,20 +66,26 @@ function summarise(a: RoutableAlert): string {
   return `[${a.severity.toUpperCase()}] ${a.ruleName}${branch} — ${a.metric} = ${obs} ${cmp} ${thr} (source: ${a.source})`;
 }
 
-function subjectFor(a: RoutableAlert, isEscalation: boolean): string {
-  const prefix = isEscalation
-    ? "⏫ ESCALATION"
-    : a.severity === "critical"
-      ? "🚨 CRITICAL"
-      : "⚠️ Alert";
-  return `${prefix} — ${a.ruleName}${a.branchId ? ` (${a.branchId})` : ""}`;
+function tierPrefix(tier: EscalationTier, severity: string): string {
+  switch (tier) {
+    case "owner":
+      return "⏫⏫ OWNER ESCALATION";
+    case "hq":
+      return "⏫ HQ ESCALATION";
+    default:
+      return severity === "critical" ? "🚨 CRITICAL" : "⚠️ Alert";
+  }
 }
 
-function bodyFor(a: RoutableAlert, isEscalation: boolean): string {
+function subjectFor(a: RoutableAlert, tier: EscalationTier): string {
+  return `${tierPrefix(tier, a.severity)} — ${a.ruleName}${a.branchId ? ` (${a.branchId})` : ""}`;
+}
+
+function bodyFor(a: RoutableAlert, tier: EscalationTier): string {
   const lines = [
-    isEscalation
-      ? "An open alert is still unresolved — escalation re-route."
-      : "A worker-health alert just fired on the CareU OPS platform.",
+    tier === "alert"
+      ? "A worker-health alert just fired on the CareU OPS platform."
+      : `An open alert is still unresolved — ${tier} escalation re-route.`,
     "",
     summarise(a),
     "",
@@ -105,8 +120,9 @@ async function routeEmail(
       },
     ];
   }
-  const subject = subjectFor(a, opts.isEscalation === true);
-  const body = bodyFor(a, opts.isEscalation === true);
+  const tier = opts.tier ?? "alert";
+  const subject = subjectFor(a, tier);
+  const body = bodyFor(a, tier);
   const outcomes: AlertRouteOutcome[] = [];
   for (const to of recipients) {
     try {
@@ -114,7 +130,7 @@ async function routeEmail(
         to,
         subject,
         body,
-        meta: { kind: "alert", metric: a.metric, severity: a.severity },
+        meta: { kind: "alert", metric: a.metric, severity: a.severity, tier },
       });
       outcomes.push({
         channel: "email",
@@ -123,6 +139,7 @@ async function routeEmail(
         reason: res.ok
           ? `provider=${res.provider}`
           : `provider=${res.provider}: ${res.reason}`,
+        providerMessageId: res.ok ? res.providerMessageId : null,
       });
     } catch (err) {
       outcomes.push({
@@ -140,7 +157,7 @@ async function routeEmail(
 
 async function routeSlack(
   a: RoutableAlert,
-  isEscalation: boolean
+  tier: EscalationTier
 ): Promise<AlertRouteOutcome> {
   const url = (process.env.ALERT_SLACK_WEBHOOK_URL ?? "").trim();
   const text = summarise(a);
@@ -153,9 +170,10 @@ async function routeSlack(
     };
   }
   try {
-    const prefix = isEscalation
-      ? ":arrow_double_up: CareU OPS escalation"
-      : ":rotating_light: CareU OPS alert";
+    const prefix =
+      tier === "alert"
+        ? ":rotating_light: CareU OPS alert"
+        : `:arrow_double_up: CareU OPS ${tier} escalation`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -177,34 +195,90 @@ async function routeSlack(
   }
 }
 
-// ---------- LINE (placeholder) ------------------------------------------
+// ---------- LINE operator channel ---------------------------------------
 
-function routeLine(a: RoutableAlert): AlertRouteOutcome {
-  const target = (process.env.ALERT_LINE_TARGET ?? "").trim();
-  const text = summarise(a);
-  console.info(
-    `[alert-routing] line internal-notification placeholder${
-      target ? ` -> ${target}` : " (no target)"
-    }: ${text}`
-  );
-  return {
-    channel: "line",
-    recipient: target || null,
-    status: "skipped",
-    reason: "LINE internal notification placeholder — provider send deferred",
-  };
+async function routeLine(
+  a: RoutableAlert,
+  opts: RouteOptions
+): Promise<AlertRouteOutcome> {
+  // Target precedence: per-scope alert_preferences.line_target →
+  // ALERT_LINE_TARGET env. A LINE user / group / room id all work as
+  // the push `to` field.
+  const target =
+    (opts.lineTarget ?? "").trim() ||
+    (process.env.ALERT_LINE_TARGET ?? "").trim();
+  if (!target) {
+    return {
+      channel: "line",
+      recipient: null,
+      status: "skipped",
+      reason: "no LINE target (alert_preferences.line_target / ALERT_LINE_TARGET)",
+    };
+  }
+
+  // Token: dedicated ALERT_LINE_TOKEN, else the global LINE OA token.
+  const alertToken = (process.env.ALERT_LINE_TOKEN ?? "").trim();
+  let token = alertToken;
+  if (!token) {
+    try {
+      const cfg = await resolveLineChannelConfig(null);
+      token = cfg?.channelAccessToken ?? "";
+    } catch {
+      token = "";
+    }
+  }
+  if (!token) {
+    return {
+      channel: "line",
+      recipient: target,
+      status: "skipped",
+      reason: "no LINE channel token (ALERT_LINE_TOKEN / LINE OA)",
+    };
+  }
+
+  const tier = opts.tier ?? "alert";
+  const text = `${tierPrefix(tier, a.severity)}\n${summarise(a)}\n→ /admin/system/workers`;
+  try {
+    const res = await pushTextMessage(
+      {
+        origin: "branch",
+        channelAccessToken: token,
+        channelSecret: null,
+        oaBasicId: null,
+        oaDisplayName: null,
+        branchId: null,
+      },
+      target,
+      text
+    );
+    return {
+      channel: "line",
+      recipient: target,
+      status: res.ok ? "sent" : "failed",
+      reason: res.ok
+        ? `requestId=${res.requestId ?? "?"}`
+        : `LINE ${res.status}: ${res.reason}`,
+    };
+  } catch (err) {
+    return {
+      channel: "line",
+      recipient: target,
+      status: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**
- * Route an alert to every channel. The caller has already decided
- * (via lib/alertPreferences) that this alert SHOULD be delivered —
- * routeAlert just sends and reports per-channel outcomes so the
- * caller can persist them into alert_deliveries.
+ * Route an alert to every channel. The caller (lib/alertEvents) has
+ * already gated on preferences + quiet hours and resolved the
+ * recipient set + LINE target for the escalation tier.
  */
 export async function routeAlert(
   a: RoutableAlert,
   opts: RouteOptions
 ): Promise<AlertRouteOutcome[]> {
+  const tier = opts.tier ?? "alert";
   const outcomes: AlertRouteOutcome[] = [];
   try {
     outcomes.push(...(await routeEmail(a, opts)));
@@ -216,7 +290,16 @@ export async function routeAlert(
       reason: err instanceof Error ? err.message : String(err),
     });
   }
-  outcomes.push(await routeSlack(a, opts.isEscalation === true));
-  outcomes.push(routeLine(a));
+  outcomes.push(await routeSlack(a, tier));
+  try {
+    outcomes.push(await routeLine(a, opts));
+  } catch (err) {
+    outcomes.push({
+      channel: "line",
+      recipient: null,
+      status: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
   return outcomes;
 }
