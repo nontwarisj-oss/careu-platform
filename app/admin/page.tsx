@@ -219,6 +219,18 @@ const CARDS: AdminCard[] = [
       "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
     enabled: true,
   },
+  {
+    href: "/admin/system/alert-preferences",
+    titleTh: "Alert preferences",
+    titleEn: "Alert preferences",
+    descTh:
+      "ผู้รับ alert · ระดับความรุนแรง · quiet hours · weekly digest — Owner / HQ",
+    descEn:
+      "Alert email recipients, severity floor, quiet hours, weekly digest opt-in.",
+    iconPath:
+      "M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

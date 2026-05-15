@@ -149,4 +149,80 @@ Bearer `CRON_SECRET` auth, wrapped with `withCronHeartbeat` + a `worker_locks` l
 
 ---
 
-**Last updated:** 2026-05-15 (phase 22 — cap enforcement + alert routing + link wrap + lock janitor)
+## 9. Alert delivery (Phase 23)
+
+Phase 22 made alerts *visible*. Phase 23 makes them *delivered* — operators no longer have to open a dashboard to learn something broke.
+
+### 9.1 Routing pipeline
+
+```
+recordAlertHits()              (lib/alertEvents.ts)
+   │  new breach
+   ▼
+resolveAlertPreferences(branch)   (lib/alertPreferences.ts — branch → global → default)
+   │
+   ▼
+shouldDeliver(prefs, severity)    severity floor + quiet-hours gate
+   ├── deliver=false → write ONE alert_deliveries row (status='skipped', reason)
+   └── deliver=true
+        ▼
+   routeAlert(alert, { recipients })   (lib/alertRouting.ts)
+        ├── email  → real send via lib/channels/email (one delivery per recipient)
+        ├── slack  → ALERT_SLACK_WEBHOOK_URL POST
+        └── line   → internal-notification placeholder (intent logged)
+        ▼
+   one alert_deliveries row per channel outcome (sent / failed / skipped)
+```
+
+### 9.2 Email provider activation
+
+`lib/channels/email` already supported `EMAIL_PROVIDER` + `EMAIL_FROM`. Phase 23 adds `EMAIL_API_KEY` as the generic key name (`RESEND_API_KEY` still accepted as the legacy fallback).
+
+| `EMAIL_PROVIDER` | Behaviour |
+|---|---|
+| `resend` | Real send via Resend — needs `EMAIL_API_KEY` (or `RESEND_API_KEY`) + `EMAIL_FROM`. |
+| `console` / unset | Logs to console — **never crashes**. The default. |
+
+### 9.3 Operator alert preferences
+
+`/admin/system/alert-preferences` (owner/HQ) — `alert_preferences` table, one global row + per-branch overrides:
+
+| Field | Effect |
+|---|---|
+| `recipients` | Email addresses. Branch + global recipients are **merged**. |
+| `min_severity` | `warning` routes everything; `critical` suppresses warnings (still persisted/visible). |
+| `quiet_hours_start_h` / `_end_h` | Bangkok window during which **non-critical** alerts are held back. Critical always routes. |
+| `enabled` | Master switch — off = alerts persist but never push. |
+| `digest_enabled` | Opt-in for the weekly operator digest. |
+
+Resolution: per-branch row → global row → hard-coded defaults. 60s cache.
+
+### 9.4 Dedup + escalation cooldown
+
+- A repeat breach bumps `occurrence_count` — it does **not** re-route (no spam).
+- A still-`active` (un-acknowledged) alert re-routes once per **2-hour escalation cooldown** (`ESCALATION_COOLDOWN_MS`), bumping `escalation_count`. Acknowledged alerts never escalate — the operator is already on it.
+- When a rule stops breaching, its open event auto-resolves (`resolved_via='auto'`).
+
+### 9.5 Weekly operator digest
+
+`lib/operatorDigest.ts` builds a 6-section plain-text summary: weekly sales, failed jobs, broadcast performance, CRM engagement, payroll warnings, branch comparison. Each section is best-effort — a failed query degrades to `(unavailable)`, the digest still sends.
+
+`/api/cron/operator-digest` (weekly cron) emails it to every recipient across `alert_preferences` rows with `digest_enabled`. Owner/HQ can also trigger it on demand via **Send digest** on `/admin/system/workers`. Every send writes an `alert_deliveries` row (`kind='digest'`).
+
+### 9.6 Alert history
+
+`alert_deliveries` records one row per delivery attempt: `kind` (alert/escalation/digest), `channel`, `recipient`, `status` (sent/delivered/failed/skipped). Surfaced on `/admin/system/workers` → **Alert delivery history**.
+
+### 9.7 Env reference
+
+| Env | Purpose |
+|---|---|
+| `EMAIL_PROVIDER` | `resend` or `console` (default). |
+| `EMAIL_API_KEY` / `RESEND_API_KEY` | Resend API key. |
+| `EMAIL_FROM` | Sender address. |
+| `ALERT_SLACK_WEBHOOK_URL` | Slack incoming webhook (optional). |
+| `ALERT_LINE_TARGET` | LINE placeholder target (optional; not yet delivered). |
+
+---
+
+**Last updated:** 2026-05-15 (phase 23 — alert delivery + email routing + weekly digest)

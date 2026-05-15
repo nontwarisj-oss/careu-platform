@@ -66,14 +66,18 @@ class ResendEmailProvider implements EmailProvider {
   readonly name = "resend";
 
   async send(input: EmailSendInput): Promise<EmailSendResult> {
-    const apiKey = process.env.RESEND_API_KEY ?? "";
+    // EMAIL_API_KEY is the Phase 23 generic name; RESEND_API_KEY is
+    // accepted as the legacy fallback so existing deployments keep
+    // working without a config change.
+    const apiKey =
+      process.env.EMAIL_API_KEY ?? process.env.RESEND_API_KEY ?? "";
     const from = process.env.EMAIL_FROM ?? "";
     if (!apiKey || !from) {
       return {
         ok: false,
         provider: this.name,
         reason:
-          "Resend not configured — ตั้ง RESEND_API_KEY + EMAIL_FROM",
+          "Resend not configured — ตั้ง EMAIL_API_KEY (หรือ RESEND_API_KEY) + EMAIL_FROM",
         retryable: false,
       };
     }

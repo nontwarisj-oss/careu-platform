@@ -74,9 +74,21 @@ type AlertEvent = {
   comparison: "gt" | "lt" | null;
   status: "active" | "acknowledged" | "resolved";
   occurrence_count: number;
+  escalation_count: number;
   first_seen_at: string;
   last_seen_at: string;
   resolved_via: "auto" | "operator" | null;
+};
+
+type AlertDelivery = {
+  id: string;
+  alert_event_id: string | null;
+  kind: "alert" | "escalation" | "digest";
+  channel: "email" | "slack" | "line" | "console";
+  recipient: string | null;
+  status: "sent" | "delivered" | "failed" | "skipped";
+  detail: Record<string, unknown>;
+  created_at: string;
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -112,6 +124,7 @@ function Inner() {
   const [error, setError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [alertEvents, setAlertEvents] = useState<AlertEvent[]>([]);
+  const [deliveries, setDeliveries] = useState<AlertDelivery[]>([]);
   const [alertBusy, setAlertBusy] = useState(false);
 
   const loadAlerts = useCallback(async () => {
@@ -127,6 +140,18 @@ function Inner() {
       if (json.ok) setAlertEvents(json.events ?? []);
     } catch {
       // best-effort — the worker snapshot is the primary surface
+    }
+    try {
+      const res = await fetch("/api/admin/system/alerts?view=deliveries", {
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        deliveries?: AlertDelivery[];
+      };
+      if (json.ok) setDeliveries(json.deliveries ?? []);
+    } catch {
+      // best-effort
     }
   }, []);
 
@@ -205,6 +230,40 @@ function Inner() {
         );
       }
       await load();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setAlertBusy(false);
+    }
+  };
+
+  const handleSendDigest = async () => {
+    if (
+      !window.confirm(
+        "ส่ง operator digest ตอนนี้? จะส่ง email ไปยัง recipients ที่เปิด digest"
+      )
+    )
+      return;
+    setAlertBusy(true);
+    try {
+      const res = await fetch("/api/admin/system/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send-digest" }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        digest?: { recipients?: number; sent?: number; failed?: number };
+      };
+      if (!json.ok) {
+        window.alert(json.reason ?? "digest ล้มเหลว");
+      } else {
+        window.alert(
+          `Digest — recipients ${json.digest?.recipients ?? 0} · sent ${json.digest?.sent ?? 0} · failed ${json.digest?.failed ?? 0}`
+        );
+      }
+      await loadAlerts();
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Network error");
     } finally {
@@ -294,6 +353,20 @@ function Inner() {
             >
               รีเฟรช
             </button>
+            <Link
+              href="/admin/system/alert-preferences"
+              className="rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700"
+            >
+              Alert prefs
+            </Link>
+            <button
+              type="button"
+              onClick={() => void handleSendDigest()}
+              disabled={alertBusy}
+              className="rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700 disabled:opacity-50"
+            >
+              Send digest
+            </button>
             <button
               type="button"
               onClick={() => void handleRunMaintenance()}
@@ -318,6 +391,8 @@ function Inner() {
           busy={alertBusy}
           onAction={handleAlertAction}
         />
+
+        <AlertHistorySection deliveries={deliveries} />
 
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">Queue health</h2>
@@ -510,6 +585,8 @@ function AlertEventsSection({
                     source: {e.source}
                     {e.branch_id && ` · @${e.branch_id}`}
                     {e.occurrence_count > 1 && ` · ×${e.occurrence_count}`}
+                    {e.escalation_count > 0 &&
+                      ` · escalated ×${e.escalation_count}`}
                   </span>
                 </div>
                 <div className="mt-0.5 text-[10px] text-gray-500">
@@ -540,6 +617,109 @@ function AlertEventsSection({
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+const DELIVERY_TONE: Record<string, string> = {
+  sent: "border-green-300 bg-green-50 text-green-800",
+  delivered: "border-green-300 bg-green-50 text-green-800",
+  failed: "border-red-300 bg-red-50 text-red-800",
+  skipped: "border-gray-300 bg-gray-50 text-gray-600",
+};
+
+function AlertHistorySection({ deliveries }: { deliveries: AlertDelivery[] }) {
+  const counts = deliveries.reduce(
+    (acc, d) => {
+      acc[d.status] = (acc[d.status] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white">
+      <div className="p-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">
+            Alert delivery history
+          </h2>
+          <p className="text-[10px] text-gray-500">
+            อีเมล / Slack / digest ที่ routing layer ส่งออก — ล่าสุด 120 รายการ
+          </p>
+        </div>
+        <div className="flex gap-1 text-[10px]">
+          {(["sent", "delivered", "failed", "skipped"] as const).map((s) => (
+            <span
+              key={s}
+              className={`rounded-full border px-2 py-0.5 font-semibold ${DELIVERY_TONE[s]}`}
+            >
+              {s} {counts[s] ?? 0}
+            </span>
+          ))}
+        </div>
+      </div>
+      {deliveries.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-gray-500 text-center">
+          ยังไม่มีประวัติการส่ง
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wider text-gray-600">
+              <tr>
+                <th className="px-3 py-2">When</th>
+                <th className="px-3 py-2">Kind</th>
+                <th className="px-3 py-2">Channel</th>
+                <th className="px-3 py-2">Recipient</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {deliveries.slice(0, 60).map((d) => (
+                <tr key={d.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
+                    {fmt(d.created_at)}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                        d.kind === "escalation"
+                          ? "border-amber-300 bg-amber-50 text-amber-800"
+                          : d.kind === "digest"
+                            ? "border-blue-300 bg-blue-50 text-blue-800"
+                            : "border-gray-200 bg-gray-50 text-gray-700"
+                      }`}
+                    >
+                      {d.kind}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {d.channel}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700 max-w-[16ch] truncate">
+                    {d.recipient ?? "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                        DELIVERY_TONE[d.status] ?? DELIVERY_TONE.skipped
+                      }`}
+                    >
+                      {d.status}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-[10px] text-gray-500 max-w-xs truncate">
+                    {typeof d.detail?.reason === "string"
+                      ? d.detail.reason
+                      : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }

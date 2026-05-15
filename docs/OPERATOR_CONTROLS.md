@@ -249,4 +249,38 @@ Broadcast bodies have their bare URLs auto-wrapped with signed click-tracking + 
 
 ---
 
-**Last updated:** 2026-05-15 (phase 22 — cap enforcement + alert routing + link wrap + lock janitor)
+## 16. Phase 23 — alert delivery + weekly digest
+
+Phase 22 surfaced alerts in the dashboard. Phase 23 delivers them. Full reference: [COMMUNICATIONS.md §9](./COMMUNICATIONS.md).
+
+### 16.1 Alert preferences
+
+`/admin/system/alert-preferences` (owner/HQ) — set per branch (with a global default):
+
+- **recipients** — alert email addresses (branch + global merged);
+- **min severity** — `warning` (all) or `critical` only;
+- **quiet hours** — Bangkok window holding back non-critical pushes (critical always routes);
+- **enabled** — master delivery switch;
+- **digest_enabled** — weekly digest opt-in.
+
+### 16.2 Email activation
+
+Set `EMAIL_PROVIDER=resend` + `EMAIL_API_KEY` + `EMAIL_FROM` to deliver for real. Unset = console-log mode (never crashes). `ALERT_SLACK_WEBHOOK_URL` adds Slack.
+
+### 16.3 Escalation
+
+An un-acknowledged `active` alert re-routes every 2 hours (`escalation_count` bumps). **Acknowledge** an alert on `/admin/system/workers` to stop escalation while you investigate; **Resolve** when fixed.
+
+### 16.4 Weekly operator digest
+
+`operator-digest` cron (weekly) emails a 6-section summary — sales, failed jobs, broadcast, CRM engagement, payroll warnings, branch comparison — to digest recipients. Owner/HQ may trigger early via **Send digest**.
+
+### 16.5 Cron schedule addition
+
+| Cron | Endpoint | Cadence |
+|---|---|---|
+| `operator-digest` | `GET/POST /api/cron/operator-digest` | weekly |
+
+---
+
+**Last updated:** 2026-05-15 (phase 23 — alert delivery + email routing + weekly digest)

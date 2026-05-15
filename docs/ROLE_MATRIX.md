@@ -140,6 +140,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`POST /api/admin/system/alerts` run-maintenance** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Weekly campaign cap override (`overrideWeeklyCap`)** | ✅ owner only | ❌ | ❌ | ❌ | ❌ |
 | **`/api/cron/worker-maintenance`** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
+| **`/admin/system/alert-preferences` UI** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`GET/POST /api/admin/system/alert-preferences`** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`alert_preferences` table** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`alert_deliveries` table read** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
+| **`/api/admin/system/alerts` `send-digest` action** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/api/cron/operator-digest`** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
 | **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
 | **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
@@ -330,7 +336,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-14 | Phase 20 — operator controls. Added `/admin/settings/triggers` (branch_manager own-branch write), `/admin/system/guardrails` (owner/HQ + emergency stop), `engagement_guardrails` + `campaign_funnel_metrics` tables, and `/api/internal/attribute-order` for server-side campaign attribution. Migration `20260544`. | — |
 | 2026-05-14 | Phase 21 — broadcast engine maturity. Added `worker_locks` (concurrency control), `cron_failure_streaks` (×N badges in workers UI), broadcast-draft pause/resume (`/api/admin/crm/broadcasts/[id]/pause` + `/resume`), cross-draft overlap pre-flight at send-create, broadcast delivery callback wired into Resend + Twilio webhooks, `/admin/system/smoke-test` page. Migration `20260545`. | — |
 | 2026-05-15 | Phase 22 — cap enforcement + alert routing. Send-create now enforces emergency stop + daily/weekly caps + dry-run requirement (owner-only weekly override). Added `alert_events` table + `/api/admin/system/alerts` (ack/resolve/run-maintenance), `worker-maintenance` cron (lock janitor + alert sweep), broadcast URL auto-wrap. Migration `20260546`. | — |
+| 2026-05-15 | Phase 23 — alert delivery + weekly digest. Added `alert_preferences` + `alert_deliveries` tables, `/admin/system/alert-preferences` (owner/HQ), real email routing via `lib/channels/email`, escalation cooldown, `operator-digest` cron + `send-digest` action. Migration `20260547`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 22 — cap enforcement + alert routing + link wrap)
+**Last updated:** 2026-05-15 (Phase 23 — alert delivery + email routing + weekly digest)

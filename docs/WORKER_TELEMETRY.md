@@ -194,6 +194,16 @@ If a cron's interval changes, update `CRON_EXPECTED_INTERVAL_MIN` in `lib/worker
 - **`/admin/system/workers`** — adds the persisted-alert surface (acknowledge / resolve buttons) + a **Run maintenance** button (owner/HQ) for an on-demand sweep.
 - **Alert routing** — new breaches route to Slack (real, when `ALERT_SLACK_WEBHOOK_URL` is set) + email/LINE (intent-logged, provider send deferred). See [COMMUNICATIONS.md §5](./COMMUNICATIONS.md).
 
+## Phase 23 — alert delivery + weekly digest
+
+- **`alert_preferences`** — operator-managed routing config (recipients, severity floor, quiet hours, digest opt-in), one global row + per-branch overrides. Edited at `/admin/system/alert-preferences`.
+- **`alert_deliveries`** — one row per delivery attempt (`kind` alert/escalation/digest, `channel`, `recipient`, `status`). Surfaced on `/admin/system/workers` → **Alert delivery history**.
+- **`alert_events` += `last_routed_at` + `escalation_count`** — drives the 2-hour escalation cooldown: an un-acknowledged alert re-routes once per window instead of going silent.
+- **Email is live** — alerts route through `lib/channels/email` for real when `EMAIL_PROVIDER=resend`; console fallback otherwise (never crashes).
+- **`operator-digest` cron** — `GET/POST /api/cron/operator-digest`, weekly. Emails the 6-section operator digest to every `digest_enabled` recipient. Manual trigger: **Send digest** button on `/admin/system/workers`.
+
+Full reference: [COMMUNICATIONS.md §9](./COMMUNICATIONS.md).
+
 ---
 
-**Last updated:** 2026-05-15 (phase 22 — alert events + worker-maintenance cron)
+**Last updated:** 2026-05-15 (phase 23 — alert delivery + weekly digest)

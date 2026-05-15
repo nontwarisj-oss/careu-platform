@@ -34,7 +34,8 @@ export type CronName =
   | "engagement-aggregate"
   | "retention-triggers"
   | "comm-performance-aggregate"
-  | "worker-maintenance";
+  | "worker-maintenance"
+  | "operator-digest";
 
 export type HeartbeatPayload = {
   rowsProcessed?: number;

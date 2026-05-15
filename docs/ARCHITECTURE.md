@@ -1941,6 +1941,59 @@ See [COMMUNICATIONS.md](./COMMUNICATIONS.md).
 
 ---
 
+## 12x. Alert delivery + weekly digest (post-`20260547`)
+
+> Status: **alerts reach operators**. Phase 22 persisted + surfaced alerts; Phase 23 delivers them by email (real provider) with operator-managed routing, escalation, and a weekly business digest.
+
+See [COMMUNICATIONS.md §9](./COMMUNICATIONS.md).
+
+### 12x.1 New tables (migration `20260547`)
+
+- `alert_preferences` — operator alert routing config: recipients, severity floor, quiet hours, master switch, digest opt-in. One global row + per-branch overrides (partial unique indexes, mirrors `engagement_guardrails`).
+- `alert_deliveries` — one row per delivery attempt: `kind` (alert/escalation/digest), `channel`, `recipient`, `status` (sent/delivered/failed/skipped). Powers the admin alert-history view.
+- `alert_events` += `last_routed_at` + `escalation_count` — escalation-cooldown bookkeeping.
+
+### 12x.2 Routing pipeline
+
+`lib/alertEvents.ts::recordAlertHits` on a new breach: `resolveAlertPreferences(branch)` → `shouldDeliver(prefs, severity)` (severity floor + quiet hours) → `routeAlert` → one `alert_deliveries` row per channel outcome. On a repeat breach still `active`, re-routes once per 2h `ESCALATION_COOLDOWN_MS` as an escalation.
+
+- `lib/alertPreferences.ts` — 60s-cached resolver; branch row → global row → defaults. `shouldDeliver` + `inQuietHours`.
+- `lib/alertRouting.ts` — `routeAlert(alert, { recipients, isEscalation })`: email (real, via `lib/channels/email`, one send per recipient), Slack (`ALERT_SLACK_WEBHOOK_URL`), LINE (placeholder).
+
+### 12x.3 Email provider
+
+`lib/channels/email` accepts `EMAIL_API_KEY` (new generic name) with `RESEND_API_KEY` as legacy fallback. `EMAIL_PROVIDER=resend` delivers; `console`/unset logs without crashing.
+
+### 12x.4 Weekly operator digest
+
+`lib/operatorDigest.ts` — `generateOperatorDigest` builds a 6-section plain-text summary (sales, failed jobs, broadcast, CRM engagement, payroll, branch comparison), each section best-effort. `sendOperatorDigest` emails it to all `digest_enabled` recipients + records `alert_deliveries` rows (`kind='digest'`). `/api/cron/operator-digest` (10th cron, weekly).
+
+### 12x.5 APIs + UI
+
+- `/api/admin/system/alert-preferences` (GET list, POST upsert/delete) — owner/HQ.
+- `/api/admin/system/alerts` extended: `?view=deliveries` feed + POST `send-digest` action.
+- `/admin/system/alert-preferences` — preferences editor.
+- `/admin/system/workers` — adds **Alert delivery history** table + **Send digest** / **Alert prefs** buttons; alert rows show `escalation_count`.
+
+### 12x.6 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `alert_preferences` RLS | owner/HQ read+write | enforced |
+| `alert_deliveries` RLS | owner/HQ all; branch_manager own branch | enforced |
+| `/api/admin/system/alert-preferences` | owner / HQ | enforced |
+| `send-digest` action | owner / HQ | enforced |
+| `/api/cron/operator-digest` | machine-only (Bearer CRON_SECRET) | n/a |
+
+### 12x.7 Known limitations
+
+- LINE alert delivery is still a placeholder (intent-logged) — email + Slack deliver for real.
+- Digest sections read aggregates (`dashboard_daily_snapshot` etc.); a stale matview yields a slightly stale digest.
+- No per-recipient digest preferences — all `digest_enabled` recipients get the same whole-business digest.
+- Escalation cooldown is global (2h); not yet per-severity or per-rule.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

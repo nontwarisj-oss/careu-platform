@@ -14,10 +14,12 @@ import { callerIp, rateLimit } from "@/lib/rateLimit";
 import {
   acknowledgeAlert,
   evaluateAndRecordAlerts,
+  listAlertDeliveries,
   listAlertEvents,
   resolveAlert,
 } from "@/lib/alertEvents";
 import { runLockJanitorTick } from "@/lib/workerLockJanitor";
+import { sendOperatorDigest } from "@/lib/operatorDigest";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,6 +38,17 @@ export async function GET(req: Request) {
       : (guarded.profile.branchCode ?? null);
 
   const url = new URL(req.url);
+
+  // ?view=deliveries — Phase 23 alert-history feed (sent / delivered /
+  // failed / skipped, including weekly-digest sends).
+  if (url.searchParams.get("view") === "deliveries") {
+    const deliveries = await listAlertDeliveries({
+      branchId: branchCode,
+      limit: 120,
+    });
+    return NextResponse.json({ ok: true, deliveries });
+  }
+
   const statusParam = url.searchParams.get("status");
   const statuses =
     statusParam === "all"
@@ -57,7 +70,7 @@ export async function GET(req: Request) {
 }
 
 type Body = {
-  action?: "acknowledge" | "resolve" | "run-maintenance";
+  action?: "acknowledge" | "resolve" | "run-maintenance" | "send-digest";
   id?: string;
 };
 
@@ -106,6 +119,18 @@ export async function POST(req: Request) {
     const janitor = await runLockJanitorTick();
     const alerts = await evaluateAndRecordAlerts("manual");
     return NextResponse.json({ ok: true, janitor, alerts });
+  }
+
+  if (body.action === "send-digest") {
+    // Owner / HQ only — manual trigger of the weekly operator digest.
+    if (role !== "owner" && role !== "hq_admin") {
+      return NextResponse.json(
+        { ok: false, reason: "owner / hq_admin only" },
+        { status: 403 }
+      );
+    }
+    const digest = await sendOperatorDigest();
+    return NextResponse.json({ ok: true, digest });
   }
 
   if (!body.id) {
