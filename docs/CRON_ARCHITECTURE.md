@@ -62,4 +62,27 @@ Every cron route:
 
 ---
 
-**Last updated:** 2026-05-15 (phase 24 — operational observability completion)
+---
+
+## 6. Manifest drift guard (Phase 25)
+
+[`lib/manifestDriftCheck.ts`](../lib/manifestDriftCheck.ts)`::checkManifestDrift` proves the three cron sources of truth agree:
+
+| Source | Compared |
+|---|---|
+| `lib/cronManifest.ts` | the declared manifest |
+| `vercel.json` | what the scheduler actually fires |
+| `cron_heartbeat_logs` | what has actually run |
+
+Findings:
+
+- **missing** — in the manifest but absent from `vercel.json` → never fires.
+- **orphan** — scheduled in `vercel.json` but absent from the manifest → unaccounted-for.
+- **endpoint_mismatch** — same path, different schedule between manifest and `vercel.json`.
+- **stale** — declared but no heartbeat within 3× its interval (or never).
+
+Surfaced on `/admin/system/workers` (Cron manifest drift section) and as a `cron_manifest_drift` check in the smoke test. A `missing` or `orphan` finding is treated as critical.
+
+---
+
+**Last updated:** 2026-05-15 (phase 25 — manifest drift guard)

@@ -55,12 +55,67 @@ type AlertHit = {
   branchId: string | null;
 };
 
+type DriftFinding = {
+  kind: "missing" | "orphan" | "stale" | "endpoint_mismatch";
+  cronName: string;
+  detail: string;
+};
+
+type ManifestDrift = {
+  ok: boolean;
+  manifestCount: number;
+  vercelCount: number;
+  findings: DriftFinding[];
+};
+
+type WebhookMetrics = {
+  windowHours: number;
+  total: number;
+  accepted: number;
+  invalidSignature: number;
+  replay: number;
+  malformed: number;
+  error: number;
+  acceptedPct: number | null;
+};
+
+type ProviderMetric = {
+  provider: string;
+  sends: number;
+  failed: number;
+  delivered: number;
+  bounced: number;
+  clicked: number;
+  successPct: number | null;
+  retryRatePct: number | null;
+  bounceRatePct: number | null;
+  clickRatePct: number | null;
+  avgCallbackLatencyMs: number | null;
+  uptimeEstimatePct: number | null;
+};
+
+type ProviderMetrics = {
+  windowHours: number;
+  byProvider: ProviderMetric[];
+  byBranch: Array<{
+    branchId: string;
+    branchLabel: string;
+    sends: number;
+    delivered: number;
+    failed: number;
+    successPct: number | null;
+  }>;
+};
+
 type Snapshot = {
   generatedAt: string;
   overall: "healthy" | "warning" | "critical";
   crons: CronStatus[];
   queue: QueueHealth;
   alerts: AlertHit[];
+  manifestDrift?: ManifestDrift;
+  webhooks?: WebhookMetrics;
+  providers?: ProviderMetrics;
 };
 
 type AlertEvent = {
@@ -552,8 +607,209 @@ function Inner() {
             </table>
           </div>
         </section>
+
+        {snapshot.manifestDrift && (
+          <ManifestDriftSection drift={snapshot.manifestDrift} />
+        )}
+        {snapshot.providers && (
+          <ProviderMetricsSection providers={snapshot.providers} />
+        )}
+        {snapshot.webhooks && (
+          <WebhookTrustSection webhooks={snapshot.webhooks} />
+        )}
       </div>
     </div>
+  );
+}
+
+function ManifestDriftSection({ drift }: { drift: ManifestDrift }) {
+  return (
+    <section
+      className={`rounded-2xl border p-4 ${
+        drift.ok
+          ? "border-green-200 bg-green-50"
+          : "border-red-300 bg-red-50"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-bold text-gray-900">
+          Cron manifest drift
+        </h2>
+        <span className="text-[10px] text-gray-500">
+          manifest {drift.manifestCount} · vercel.json {drift.vercelCount}
+        </span>
+      </div>
+      {drift.ok ? (
+        <p className="mt-1 text-xs text-green-800">
+          ✓ manifest, vercel.json และ heartbeat ตรงกันทั้งหมด
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-1">
+          {drift.findings.map((f, i) => (
+            <li key={`${f.cronName}-${i}`} className="text-xs text-red-900">
+              <span className="rounded-full border border-red-300 bg-red-100 px-1.5 py-0.5 text-[9px] font-bold uppercase">
+                {f.kind}
+              </span>{" "}
+              <code className="font-mono">{f.cronName}</code> — {f.detail}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ProviderMetricsSection({
+  providers,
+}: {
+  providers: ProviderMetrics;
+}) {
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white">
+      <div className="p-4 border-b border-gray-100">
+        <h2 className="text-base font-bold text-gray-900">
+          Provider reliability ({providers.windowHours}h)
+        </h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left text-[10px] uppercase tracking-wider text-gray-600">
+            <tr>
+              <th className="px-3 py-2">Provider</th>
+              <th className="px-3 py-2">Sends</th>
+              <th className="px-3 py-2">Success</th>
+              <th className="px-3 py-2">Retry</th>
+              <th className="px-3 py-2">Bounce</th>
+              <th className="px-3 py-2">Click</th>
+              <th className="px-3 py-2">Callback latency</th>
+              <th className="px-3 py-2">Uptime est.</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {providers.byProvider.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-3 py-4 text-xs text-gray-500">
+                  ยังไม่มีกิจกรรมในช่วงนี้
+                </td>
+              </tr>
+            ) : (
+              providers.byProvider.map((p) => (
+                <tr key={p.provider} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 font-mono text-xs">{p.provider}</td>
+                  <td className="px-3 py-2 text-xs text-gray-700">{p.sends}</td>
+                  <td
+                    className={`px-3 py-2 text-xs ${
+                      p.successPct != null && p.successPct < 90
+                        ? "text-red-700 font-semibold"
+                        : "text-gray-700"
+                    }`}
+                  >
+                    {p.successPct != null ? `${p.successPct}%` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {p.retryRatePct != null ? `${p.retryRatePct}%` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {p.bounceRatePct != null ? `${p.bounceRatePct}%` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {p.clickRatePct != null ? `${p.clickRatePct}%` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {p.avgCallbackLatencyMs != null
+                      ? `${p.avgCallbackLatencyMs}ms`
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-gray-700">
+                    {p.uptimeEstimatePct != null
+                      ? `${p.uptimeEstimatePct}%`
+                      : "—"}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {providers.byBranch.length > 0 && (
+        <div className="border-t border-gray-100 p-3">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+            By branch
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {providers.byBranch.map((b) => (
+              <span
+                key={b.branchId}
+                className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700"
+              >
+                {b.branchLabel}: {b.sends} sends ·{" "}
+                {b.successPct != null ? `${b.successPct}%` : "—"} ok
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WebhookTrustSection({
+  webhooks,
+}: {
+  webhooks: WebhookMetrics;
+}) {
+  const bad = webhooks.invalidSignature + webhooks.malformed + webhooks.error;
+  return (
+    <section
+      className={`rounded-2xl border p-4 ${
+        bad > 0 ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"
+      }`}
+    >
+      <h2 className="text-sm font-bold text-gray-900">
+        Webhook trust ({webhooks.windowHours}h)
+      </h2>
+      <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+        <Chip label="accepted" value={webhooks.accepted} tone="green" />
+        <Chip label="replay (benign)" value={webhooks.replay} tone="gray" />
+        <Chip
+          label="invalid signature"
+          value={webhooks.invalidSignature}
+          tone={webhooks.invalidSignature > 0 ? "red" : "gray"}
+        />
+        <Chip
+          label="malformed"
+          value={webhooks.malformed}
+          tone={webhooks.malformed > 0 ? "red" : "gray"}
+        />
+        <Chip
+          label="handler error"
+          value={webhooks.error}
+          tone={webhooks.error > 0 ? "red" : "gray"}
+        />
+      </div>
+    </section>
+  );
+}
+
+function Chip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "green" | "red" | "gray";
+}) {
+  const cls =
+    tone === "green"
+      ? "border-green-300 bg-green-50 text-green-800"
+      : tone === "red"
+        ? "border-red-300 bg-red-50 text-red-800"
+        : "border-gray-300 bg-gray-50 text-gray-600";
+  return (
+    <span className={`rounded-full border px-2 py-0.5 font-semibold ${cls}`}>
+      {label} {value}
+    </span>
   );
 }
 
@@ -639,6 +895,13 @@ function AlertEventsSection({
                     Acknowledge
                   </button>
                 )}
+                <a
+                  href={`/api/admin/system/incident-export?alertEventId=${e.id}&format=md`}
+                  className="rounded-md border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700 px-2 py-1 text-[11px] font-semibold"
+                  title="ดาวน์โหลด incident snapshot (markdown)"
+                >
+                  Export
+                </a>
                 <button
                   type="button"
                   disabled={busy}

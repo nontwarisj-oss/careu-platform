@@ -28,6 +28,7 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
+import { isWebhookReplay, recordWebhookReceipt } from "@/lib/webhookAudit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -164,6 +165,13 @@ export async function POST(req: Request) {
 
   const payload = await parseBody(req);
   if (!payload) {
+    // Phase 25: malformed body — audit + reject.
+    await recordWebhookReceipt({
+      provider: "twilio",
+      eventId: null,
+      signatureValid: false,
+      outcome: "malformed",
+    });
     return NextResponse.json(
       { ok: false, reason: "expected form-encoded Twilio callback" },
       { status: 400 }
@@ -177,11 +185,33 @@ export async function POST(req: Request) {
     params: payload.raw,
     signature,
   });
+  // Event id = SID + status: a SID gets one callback per status, so
+  // this pair is the natural idempotency key.
+  const eventId = `${payload.messageSid}:${payload.messageStatus}`;
   if (!ok) {
+    await recordWebhookReceipt({
+      provider: "twilio",
+      eventId,
+      signatureValid: false,
+      outcome: "invalid_signature",
+      detail: { messageStatus: payload.messageStatus },
+    });
     return NextResponse.json(
       { ok: false, reason: "invalid Twilio signature" },
       { status: 403 }
     );
+  }
+
+  // Replay protection: a re-delivered callback we already accepted
+  // is acknowledged 200 but NOT reprocessed.
+  if (await isWebhookReplay("twilio", eventId)) {
+    await recordWebhookReceipt({
+      provider: "twilio",
+      eventId,
+      signatureValid: true,
+      outcome: "replay",
+    });
+    return NextResponse.json({ ok: true, handled: false, reason: "replay" });
   }
 
   const admin = getSupabaseAdmin();
@@ -191,6 +221,18 @@ export async function POST(req: Request) {
       { status: 503 }
     );
   }
+
+  // Audit the accepted callback. The status handler below is fully
+  // idempotent (monotonic rank), so recording 'accepted' here — then
+  // letting the replay guard short-circuit any re-delivery — is the
+  // right trust boundary.
+  await recordWebhookReceipt({
+    provider: "twilio",
+    eventId,
+    signatureValid: true,
+    outcome: "accepted",
+    detail: { messageStatus: payload.messageStatus, sid: payload.messageSid },
+  });
 
   const mapped = TWILIO_TO_INTERNAL[payload.messageStatus];
   if (!mapped) {

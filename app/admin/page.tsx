@@ -243,6 +243,30 @@ const CARDS: AdminCard[] = [
       "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h2v7H7zm4-3h2v10h-2zm4 6h2v4h-2z",
     enabled: true,
   },
+  {
+    href: "/admin/system/delivery-trace",
+    titleTh: "Delivery trace",
+    titleEn: "Delivery trace explorer",
+    descTh:
+      "ค้นหาข้อความตาม provider id / เบอร์ / campaign + ดู timeline ฉบับเต็ม",
+    descEn:
+      "Search any notification by provider id, phone, campaign — full audit trail.",
+    iconPath:
+      "M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z",
+    enabled: true,
+  },
+  {
+    href: "/admin/system/escalation-recipients",
+    titleTh: "Escalation recipients",
+    titleEn: "Escalation recipients",
+    descTh:
+      "รายชื่อผู้รับ alert ตามลำดับชั้น — owner / HQ / ผจก. / หัวหน้าช่าง",
+    descEn:
+      "Role-tiered alert contacts with severity routing + temporary mute — Owner / HQ.",
+    iconPath:
+      "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

@@ -34,6 +34,7 @@ const STAGE_TONE: Record<string, string> = {
   opened: "bg-emerald-500",
   clicked: "bg-emerald-600",
   retried: "bg-amber-400",
+  escalated: "bg-orange-500",
   failed: "bg-red-500",
   bounced: "bg-red-500",
   cancelled: "bg-gray-400",

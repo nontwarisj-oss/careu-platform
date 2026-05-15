@@ -27,6 +27,7 @@ export type TimelineStage =
   | "failed"
   | "bounced"
   | "retried"
+  | "escalated"
   | "cancelled"
   | "skipped";
 

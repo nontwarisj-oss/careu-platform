@@ -60,4 +60,19 @@ A branch manager does the same on `/admin/system/branch-health` — scoped to th
 
 ---
 
-**Last updated:** 2026-05-15 (phase 24 — operational observability completion)
+## 6. Phase 25 surfaces
+
+| Need | Where |
+|---|---|
+| "What happened to message X?" | `/admin/system/delivery-trace` — search by provider id / phone / campaign. |
+| Manage who gets paged | `/admin/system/escalation-recipients` — role tiers, severity, mute. |
+| Mute a contact during maintenance | escalation-recipients → **mute 24h**. |
+| Provider acting up? | `/admin/system/workers` → Provider reliability + Webhook trust. |
+| Cron config drifted? | `/admin/system/workers` → Cron manifest drift. |
+| Hand an incident to support | alert row → **Export** (markdown snapshot). |
+
+Add to the **daily check**: glance at Webhook trust (0 bad) + Cron manifest drift (in sync) on the workers page.
+
+---
+
+**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)

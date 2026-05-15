@@ -29,6 +29,7 @@ import {
 } from "@/lib/communicationEvents";
 import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
 import { confirmAlertEmailDelivery } from "@/lib/deliveryConfirmation";
+import { isWebhookReplay, recordWebhookReceipt } from "@/lib/webhookAudit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -100,7 +101,16 @@ export async function POST(req: Request) {
   }
   const rawBody = await req.text();
   const sig = req.headers.get("svix-signature");
+  // Svix stamps a unique 'svix-id' on every delivery — the canonical
+  // idempotency key for replay protection.
+  const svixId = req.headers.get("svix-id");
   if (!isSignatureValid(rawBody, sig, secret)) {
+    await recordWebhookReceipt({
+      provider: "resend",
+      eventId: svixId,
+      signatureValid: false,
+      outcome: "invalid_signature",
+    });
     return NextResponse.json(
       { ok: false, reason: "invalid signature" },
       { status: 403 }
@@ -111,18 +121,53 @@ export async function POST(req: Request) {
   try {
     event = JSON.parse(rawBody) as ResendEvent;
   } catch {
+    await recordWebhookReceipt({
+      provider: "resend",
+      eventId: svixId,
+      signatureValid: true,
+      outcome: "malformed",
+    });
     return NextResponse.json(
       { ok: false, reason: "invalid JSON" },
       { status: 400 }
     );
   }
 
+  // Replay protection — a re-delivered Svix message is acknowledged
+  // 200 but not reprocessed.
+  if (svixId && (await isWebhookReplay("resend", svixId))) {
+    await recordWebhookReceipt({
+      provider: "resend",
+      eventId: svixId,
+      signatureValid: true,
+      outcome: "replay",
+    });
+    return NextResponse.json({ ok: true, handled: false, reason: "replay" });
+  }
+
   const internal = event.type ? EVENT_TO_INTERNAL[event.type] ?? null : null;
   if (!internal) {
     // Acknowledge unknown events with 200 — Resend / Svix penalises
     // sustained non-2xx by pausing the webhook.
+    await recordWebhookReceipt({
+      provider: "resend",
+      eventId: svixId,
+      signatureValid: true,
+      outcome: "accepted",
+      detail: { type: event.type ?? null, handled: false },
+    });
     return NextResponse.json({ ok: true, handled: false });
   }
+
+  // Audit the accepted event. The handlers below are idempotent
+  // (communication_events unique index + monotonic queue status).
+  await recordWebhookReceipt({
+    provider: "resend",
+    eventId: svixId,
+    signatureValid: true,
+    outcome: "accepted",
+    detail: { type: event.type ?? null, mapped: internal },
+  });
 
   const tags = event.data?.tags ?? [];
   const notificationTag = tags.find((t) => t.name === "notification_id");

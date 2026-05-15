@@ -16,6 +16,8 @@
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabaseAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { checkManifestDrift } from "@/lib/manifestDriftCheck";
+import { webhookMetrics } from "@/lib/webhookAudit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -280,6 +282,58 @@ export async function GET() {
       );
     } catch (err) {
       checks.push(errorRes("active_alerts", err instanceof Error ? err.message : String(err), "workers"));
+    }
+
+    // Phase 25: cron manifest drift — manifest vs vercel.json vs
+    // heartbeat history must agree.
+    try {
+      const drift = await checkManifestDrift();
+      if (drift.ok) {
+        checks.push(
+          ok(
+            "cron_manifest_drift",
+            `manifest (${drift.manifestCount}) + vercel.json (${drift.vercelCount}) in sync`,
+            "workers"
+          )
+        );
+      } else {
+        const worst = drift.findings.some(
+          (f) => f.kind === "missing" || f.kind === "orphan"
+        );
+        const msg = drift.findings
+          .slice(0, 4)
+          .map((f) => `${f.kind}:${f.cronName}`)
+          .join(" · ");
+        checks.push(
+          worst
+            ? errorRes("cron_manifest_drift", msg, "workers")
+            : warn("cron_manifest_drift", msg, "workers")
+        );
+      }
+    } catch (err) {
+      checks.push(errorRes("cron_manifest_drift", err instanceof Error ? err.message : String(err), "workers"));
+    }
+
+    // Phase 25: webhook trust — invalid signatures / malformed bodies
+    // in the last 24h.
+    try {
+      const wm = await webhookMetrics(24);
+      const bad = wm.invalidSignature + wm.malformed + wm.error;
+      checks.push(
+        bad === 0
+          ? ok(
+              "webhook_trust",
+              `${wm.accepted} accepted · ${wm.replay} replays caught · 0 bad`,
+              "security"
+            )
+          : warn(
+              "webhook_trust",
+              `${bad} bad webhook call(s) — invalid-sig ${wm.invalidSignature}, malformed ${wm.malformed}, error ${wm.error}`,
+              "security"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("webhook_trust", err instanceof Error ? err.message : String(err), "security"));
     }
 
     // ----- Broadcast pipeline -----

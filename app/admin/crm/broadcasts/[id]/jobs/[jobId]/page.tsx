@@ -267,6 +267,12 @@ function Inner() {
                 {" · "}
                 {job.mode === "dry_run" ? "dry-run (ไม่ส่งจริง)" : "live"}
               </p>
+              <Link
+                href={`/admin/system/delivery-trace?broadcastJobId=${job.id}`}
+                className="mt-1 inline-block text-[11px] font-semibold text-green-700 hover:text-green-900 underline"
+              >
+                ดู delivery trace ของ campaign นี้ →
+              </Link>
             </div>
             <span
               className={`rounded-full border px-3 py-1 text-xs font-semibold ${

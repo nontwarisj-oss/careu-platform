@@ -5,14 +5,17 @@
 //   • queue health (totals, oldest queued, stuck sending)
 //   • alert hits (rules that breached their threshold)
 //   • overall: healthy | warning | critical
+//   • Phase 25: manifestDrift, webhookMetrics, providerMetrics
 //
 // Read-only; no side effects. The dashboard polls this on a slow
-// schedule (30 s default) — every read does one cron_heartbeat scan
-// + small counted queries against customer_notifications.
+// schedule (30 s default).
 
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabaseAuth";
 import { computeWorkerHealth } from "@/lib/workerHealth";
+import { checkManifestDrift } from "@/lib/manifestDriftCheck";
+import { webhookMetrics } from "@/lib/webhookAudit";
+import { computeProviderMetrics } from "@/lib/providerMetrics";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,6 +23,19 @@ export const runtime = "nodejs";
 export async function GET() {
   const guarded = await requireRole(["owner", "hq_admin"]);
   if (guarded instanceof NextResponse) return guarded;
-  const snapshot = await computeWorkerHealth();
-  return NextResponse.json({ ok: true, ...snapshot });
+
+  const [snapshot, manifestDrift, webhooks, providers] = await Promise.all([
+    computeWorkerHealth(),
+    checkManifestDrift(),
+    webhookMetrics(24),
+    computeProviderMetrics({ windowHours: 24 }),
+  ]);
+
+  return NextResponse.json({
+    ok: true,
+    ...snapshot,
+    manifestDrift,
+    webhooks,
+    providers,
+  });
 }

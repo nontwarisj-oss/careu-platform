@@ -264,4 +264,14 @@ Acknowledging the alert stops escalation. Dedup + branch-awareness are unchanged
 
 ---
 
-**Last updated:** 2026-05-15 (phase 24 — delivery confirmation + LINE operator channel)
+## 11. Trustworthiness hardening (Phase 25)
+
+- **Webhook trust** — every Twilio / Resend / LINE callback is signature-verified, replay-protected (`webhook_audit_log`), and audited. See [DELIVERY_PIPELINE.md §2](./DELIVERY_PIPELINE.md).
+- **Escalation recipients** — `/admin/system/escalation-recipients` adds role-tiered contacts (owner / hq_admin / branch_manager / technician_lead) with severity routing, branch scope, fallback to `alert_preferences`, and temporary mute. The escalation chain (`lib/alertEvents.ts`) widens the audience per tier: `alert` → branch + technician lead; `hq` → + HQ; `owner` → + owner.
+- **Delivery trace explorer** — `/admin/system/delivery-trace` searches any notification and shows its full timeline.
+- **Provider reliability metrics** — success % / retry / bounce / click / callback latency / uptime, per provider + per branch, on `/admin/system/workers`.
+- **Incident export** — `GET /api/admin/system/incident-export` bundles an incident as JSON or markdown.
+
+---
+
+**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)

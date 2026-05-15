@@ -17,7 +17,26 @@
       "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:lib/supabase.ts)",
       "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:package.json)",
       "Bash(git -C c:/Users/tnpba/careu-platform show origin/main:app/customers/page.tsx)",
-      "Bash(git -c core.editor=true -C c:/Users/tnpba/careu-platform rebase --continue)"
+      "Bash(git -c core.editor=true -C c:/Users/tnpba/careu-platform rebase --continue)",
+      "Bash(git -C c:/Users/tnpba/careu-platform show f3877fa:app/customers/page.tsx)",
+      "Bash(git -C c:/Users/tnpba/careu-platform add app/customers/page.tsx app/invoices/page.tsx app/orders/page.tsx app/page.tsx lib/mockData.ts supabase/migrations/20260512_orders.sql)",
+      "Bash(git -C c:/Users/tnpba/careu-platform status -s)",
+      "Bash(git -C c:/Users/tnpba/careu-platform diff supabase/migrations/20260512_orders.sql)",
+      "Bash(git commit -m ' *)",
+      "Bash(Find-Item -Path \"c:\\\\Users\\\\tnpba\\\\careu-platform\\\\supabase\\\\migrations\" -Filter \"*.sql\")",
+      "Bash(Select-Object -ExpandProperty Name)",
+      "Bash(xargs grep -l \"SUPABASE_JWT_SECRET\")",
+      "Bash(grep -n \"key.*name\\\\|customers\\\\\\\\.name\\\\|render: \\(\\\\b\\\\|\\\\\"name\\\\\":\" \"app/customers/page.tsx\")",
+      "Bash(NODE_OPTIONS=\"--max-old-space-size=4096\" pnpm build)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(xargs grep -l \"smoke.*test\\\\|health.*check\")",
+      "Bash(xargs grep -l \"cron\\\\|vercel\")",
+      "Bash(grep -v \"trackingLinks.ts\\\\|//\")",
+      "Bash(grep -E \"\\\\.md$\")",
+      "Bash(dir \"C:\\\\Users\\\\tnpba\\\\careu-platform\\\\app\\\\api\\\\webhooks\")",
+      "Bash(grep -E \"\\\\.md$|README\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tnpba\\\\careu-platform\\\\app\\\\admin\\\\system\\\\\" -ErrorAction SilentlyContinue | Select-Object Name)"
     ]
   }
 }

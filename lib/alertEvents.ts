@@ -29,6 +29,7 @@ import {
   type RoutableAlert,
 } from "@/lib/alertRouting";
 import { resolveAlertPreferences, shouldDeliver } from "@/lib/alertPreferences";
+import { resolveEscalationContacts } from "@/lib/escalationRecipients";
 
 /** A still-'active' alert re-routes at most once per this window. */
 export const ESCALATION_COOLDOWN_MS = 2 * 60 * 60 * 1000;
@@ -124,11 +125,25 @@ async function deliverAndRecord(
     return [];
   }
 
+  // Phase 25: role-tiered escalation recipients widen the audience
+  // as the alert climbs the chain. Merge them with the flat
+  // alert_preferences.recipients[]; fall back to prefs alone when no
+  // escalation_recipients row resolves.
+  const esc = await resolveEscalationContacts({
+    branchId: routable.branchId,
+    severity: routable.severity,
+    tier,
+  });
+  const recipients = Array.from(
+    new Set([...esc.emails, ...prefs.recipients])
+  );
+  const lineTarget = esc.lineTargets[0] ?? prefs.lineTarget;
+
   let outcomes: AlertRouteOutcome[] = [];
   try {
     outcomes = await routeAlert(routable, {
-      recipients: prefs.recipients,
-      lineTarget: prefs.lineTarget,
+      recipients,
+      lineTarget,
       tier,
     });
   } catch (err) {

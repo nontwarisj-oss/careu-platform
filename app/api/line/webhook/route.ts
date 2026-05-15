@@ -26,11 +26,13 @@
 //   • Verify the test push from the console works (returns 200).
 
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import {
   processLineWebhookBody,
   verifyLineSignature,
   type LineWebhookBody,
 } from "@/lib/lineWebhook";
+import { recordWebhookReceipt } from "@/lib/webhookAudit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,6 +43,18 @@ export async function POST(req: Request) {
   const signature = req.headers.get("x-line-signature");
 
   const signatureVerified = verifyLineSignature(rawBody, signature);
+  // Phase 25: a stable event id for the audit log — the LINE
+  // webhookEventId of the first event, else a hash of the body.
+  const eventId = lineEventId(rawBody);
+
+  if (!signatureVerified) {
+    await recordWebhookReceipt({
+      provider: "line",
+      eventId,
+      signatureValid: false,
+      outcome: "invalid_signature",
+    });
+  }
 
   // Parse — accept malformed JSON gracefully (LINE shouldn't send it, but
   // a misconfigured upstream might).
@@ -48,6 +62,12 @@ export async function POST(req: Request) {
   try {
     parsed = rawBody.length > 0 ? (JSON.parse(rawBody) as LineWebhookBody) : {};
   } catch {
+    await recordWebhookReceipt({
+      provider: "line",
+      eventId,
+      signatureValid: signatureVerified,
+      outcome: "malformed",
+    });
     // 200 to keep LINE happy even when the body is bad — record nothing.
     return NextResponse.json({
       ok: false,
@@ -58,11 +78,36 @@ export async function POST(req: Request) {
 
   const result = await processLineWebhookBody(parsed, signatureVerified);
 
+  // Phase 25: audit the verified, processed call.
+  if (signatureVerified) {
+    await recordWebhookReceipt({
+      provider: "line",
+      eventId,
+      signatureValid: true,
+      outcome: "accepted",
+      detail: { events: Array.isArray(parsed.events) ? parsed.events.length : 0 },
+    });
+  }
+
   // Always 200 — LINE's webhook contract penalises repeated non-2xx by
   // disabling the channel. Unverified / unprocessable events are visible
   // in the response body and in public.line_follow_events for admin
   // postmortem.
   return NextResponse.json(result);
+}
+
+/** Derive a stable idempotency key for a LINE webhook delivery. */
+function lineEventId(rawBody: string): string {
+  try {
+    const body = JSON.parse(rawBody) as {
+      events?: Array<{ webhookEventId?: string }>;
+    };
+    const first = body.events?.[0]?.webhookEventId;
+    if (first) return first;
+  } catch {
+    // fall through to body hash
+  }
+  return crypto.createHash("sha256").update(rawBody).digest("hex").slice(0, 32);
 }
 
 // LINE's console "verify" button issues a GET to confirm the URL is alive.

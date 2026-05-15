@@ -2051,6 +2051,60 @@ See [CRON_ARCHITECTURE.md](./CRON_ARCHITECTURE.md), [WORKER_HEALTH.md](./WORKER_
 
 ---
 
+## 12z. Trustworthiness hardening (post-`20260549`)
+
+> Status: **provably reliable communication operations**. Provider webhooks are signature-verified + replay-protected + audited; the cron manifest is drift-checked; escalation routing is role-tiered; delivery is searchable and exportable.
+
+See [DELIVERY_PIPELINE.md](./DELIVERY_PIPELINE.md), [INCIDENT_RESPONSE.md](./INCIDENT_RESPONSE.md), [CRON_ARCHITECTURE.md](./CRON_ARCHITECTURE.md).
+
+### 12z.1 Schema (migration `20260549`)
+
+- `webhook_audit_log` — one row per inbound provider callback: provider, event_id, signature verdict, outcome (accepted / invalid_signature / replay / malformed / error). Unique index on `(provider, event_id)` for accepted rows = replay protection.
+- `escalation_recipients` — role-tiered alert contacts (owner / hq_admin / branch_manager / technician_lead), per-recipient severity floor, branch scope, `muted_until`.
+
+### 12z.2 Webhook hardening
+
+`lib/webhookAudit.ts` — `recordWebhookReceipt`, `isWebhookReplay`, `webhookMetrics`. Wired into all three webhooks (`twilio-status`, `email-status`, `line/webhook`): signature → replay → malformed → audit. Event-id keys: Twilio `<sid>:<status>`, Resend `svix-id`, LINE `webhookEventId`.
+
+### 12z.3 Manifest drift guard
+
+`lib/manifestDriftCheck.ts::checkManifestDrift` — compares `cronManifest` ↔ `vercel.json` ↔ `cron_heartbeat_logs`; detects missing / orphan / stale / endpoint_mismatch. Surfaced on the workers dashboard + smoke test.
+
+### 12z.4 Escalation recipient management
+
+`lib/escalationRecipients.ts::resolveEscalationContacts` — tier-cumulative role routing, severity floor, branch scope + null-branch fallback, temporary mute. `lib/alertEvents.ts` merges escalation contacts with `alert_preferences.recipients[]`. Admin: `/api/admin/system/escalation-recipients` + `/admin/system/escalation-recipients`.
+
+### 12z.5 Delivery trace explorer
+
+`/api/admin/system/delivery-trace` + `/admin/system/delivery-trace` — search `customer_notifications` by provider message id / customer / phone / status / campaign; expand to `<DeliveryTimeline>`.
+
+### 12z.6 Provider reliability metrics
+
+`lib/providerMetrics.ts::computeProviderMetrics` — per-provider success % / retry / bounce / click / callback latency / uptime estimate + per-branch delivery; on the workers route + dashboard.
+
+### 12z.7 Incident export
+
+`lib/incidentExport.ts::buildIncidentPackage` + `incidentToMarkdown` — bundles a notification- or alert-centric incident (timeline + dispatch log + provider payloads + retry history / escalation chain + cron heartbeats). `GET /api/admin/system/incident-export?{notificationId|alertEventId}=…&format=json|md`.
+
+### 12z.8 Branch isolation
+
+| Surface | Auth |
+|---|---|
+| `webhook_audit_log` / `escalation_recipients` | owner / HQ |
+| `/api/admin/system/delivery-trace` | owner/HQ all; branch_manager own branch |
+| `/api/admin/system/incident-export` | owner / HQ |
+| `/api/admin/system/escalation-recipients` | owner / HQ |
+| webhook routes | machine-only (provider HMAC) |
+
+### 12z.9 Known limitations
+
+- LINE has no delivery receipt — "delivered" stays inferred at send.
+- Replay protection records `accepted` optimistically; a handler that throws after that point relies on the provider's own retry + the handler's idempotency.
+- `escalation_recipients` LINE routing uses the first resolved target (single push); multi-target LINE fan-out is a follow-up.
+- The delivery timeline is reachable via customer detail + trace explorer + incident export; it is not inline-embedded in the order receipt page (a receipt is customer-facing).
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

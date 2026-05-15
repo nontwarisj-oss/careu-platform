@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(git rebase *)",
+      "Bash(git check-ignore *)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm build *)",
+      "Bash(node -e \"const fs=require\\('fs'\\);const t=fs.readFileSync\\('c:/Users/tnpba/careu-platform/.env.local','utf8'\\);const lines=t.split\\(/\\\\r?\\\\n/\\).filter\\(l=>l.trim\\(\\)&&!l.startsWith\\('#'\\)\\);for\\(const line of lines\\){const i=line.indexOf\\('='\\);if\\(i<0\\)continue;const k=line.slice\\(0,i\\).trim\\(\\);const v=line.slice\\(i+1\\).trim\\(\\);const looksQuoted=v.startsWith\\('\\\\\"'\\)&&v.endsWith\\('\\\\\"'\\);const inner=looksQuoted?v.slice\\(1,-1\\):v;console.log\\(k.padEnd\\(34\\),'present='+Boolean\\(inner\\),'len='+inner.length,'quoted='+looksQuoted,'hasBackslashN='+inner.includes\\('\\\\\\\\\\\\\\\\n'\\),'hasRealNewline='+inner.includes\\('\\\\n'\\)\\);}\")",
+      "Bash(pnpm dev *)",
+      "Bash(curl -sS http://localhost:3000/api/debug-sheet)",
+      "Bash(curl -sS -X POST http://localhost:3000/api/sync-order-to-sheet -H \"Content-Type: application/json\" -d '{\"orderId\":\"00000000-0000-0000-0000-000000000000\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(stat -c '%y %s' c:/Users/tnpba/careu-platform/.env.local 2>&1)",
+      "Read(//c/Users/tnpba/careu-platform/**)"
+    ]
+  }
+}

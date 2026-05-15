@@ -58,4 +58,22 @@ If an alert reaches owner tier it has been unresolved for 4+ hours — treat as 
 
 ---
 
-**Last updated:** 2026-05-15 (phase 24 — operational observability completion)
+## 6. Delivery trace explorer (Phase 25)
+
+`/admin/system/delivery-trace` — search any notification by provider message id, customer id, phone, status, or campaign (`broadcastJobId`). Each result expands to the full delivery audit trail. This is the first stop for "what happened to message X".
+
+## 7. Incident snapshot export (Phase 25)
+
+Every alert on `/admin/system/workers` has an **Export** button → downloads an incident snapshot (markdown) bundling the timeline, escalation chain, cron heartbeats, and provider payloads. `GET /api/admin/system/incident-export?alertEventId=…&format=json|md` (or `?notificationId=…`). Attach the export to a support ticket or postmortem.
+
+## 8. Webhook trust failures (Phase 25)
+
+`/admin/system/workers` → **Webhook trust** shows invalid-signature / malformed / handler-error counts over 24h. A spike in `invalid_signature` means either a misconfigured provider secret or probe traffic — verify `TWILIO_AUTH_TOKEN` / `RESEND_WEBHOOK_SECRET` / `LINE_CHANNEL_SECRET`. Replays are benign (caught + ignored).
+
+## 9. Escalation recipient management (Phase 25)
+
+`/admin/system/escalation-recipients` — role-tiered contacts (owner / hq_admin / branch_manager / technician_lead) with per-recipient severity floors, branch scope, and a **temporary mute** (e.g. mute a recipient 24h during planned maintenance). The escalation chain widens the audience per tier; muted recipients are skipped + counted.
+
+---
+
+**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)
