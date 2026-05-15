@@ -48,6 +48,11 @@ import {
   type SegmentDefinition,
 } from "@/lib/crmSegmentationService";
 import { fetchCustomerIdsForSegment } from "@/lib/broadcastSegmentCustomers";
+import { wrapCampaignLinks } from "@/lib/campaignLinkWrapper";
+
+/** Public base URL used to build signed tracking links. Empty when
+ *  unset — link wrapping is then skipped (campaigns still send). */
+const BROADCAST_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL ?? "").trim();
 import { evaluatePolicy } from "@/lib/communicationPolicyService";
 import {
   checkQuietHours,
@@ -380,17 +385,25 @@ async function processJobTick(
       continue;
     }
 
+    const basePayload: Record<string, unknown> = {
+      broadcastJobId: job.id,
+      body,
+      ...(target.channel === "sms" ? { phone: recipient } : {}),
+      ...(target.channel === "line" ? { lineUserId: recipient } : {}),
+    };
+
+    // Phase 22: enqueue with a 20s send_after buffer so the link
+    // wrapper can patch the body in BEFORE the dispatch worker picks
+    // up the row. The signed click token needs the notification id,
+    // which only exists after the insert — hence enqueue → wrap →
+    // patch, not wrap → enqueue.
     const enq = await enqueueNotification({
       customerId: target.customer_id,
       branchId: job.branch_id,
       channel: target.channel,
       kind: "broadcast",
-      payload: {
-        broadcastJobId: job.id,
-        body,
-        ...(target.channel === "sms" ? { phone: recipient } : {}),
-        ...(target.channel === "line" ? { lineUserId: recipient } : {}),
-      },
+      payload: basePayload,
+      sendAfter: new Date(Date.now() + 20_000),
       actorId,
     });
     if (!enq.ok) {
@@ -398,6 +411,31 @@ async function processJobTick(
       attempt.skipped += 1;
       continue;
     }
+
+    // Auto-wrap any bare URLs in the body with signed + UTM-tagged
+    // tracking links. Best-effort — a missing TRACKING_LINK_SECRET or
+    // base URL leaves the body unchanged.
+    if (BROADCAST_BASE_URL) {
+      const wrapped = wrapCampaignLinks({
+        body,
+        notificationId: enq.notificationId,
+        baseUrl: BROADCAST_BASE_URL,
+        utm: {
+          utm_source: "broadcast",
+          utm_medium: target.channel,
+          utm_campaign: job.draft_id,
+          ...(job.branch_id ? { utm_branch: job.branch_id } : {}),
+          utm_channel: target.channel,
+        },
+      });
+      if (wrapped.wrappedCount > 0) {
+        await admin
+          .from("customer_notifications")
+          .update({ payload: { ...basePayload, body: wrapped.body } })
+          .eq("id", enq.notificationId);
+      }
+    }
+
     await admin
       .from("broadcast_send_targets")
       .update({

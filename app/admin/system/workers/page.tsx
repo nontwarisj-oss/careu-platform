@@ -62,6 +62,23 @@ type Snapshot = {
   alerts: AlertHit[];
 };
 
+type AlertEvent = {
+  id: string;
+  rule_name: string;
+  metric: string;
+  severity: "warning" | "critical";
+  source: string;
+  branch_id: string | null;
+  observed: number | null;
+  threshold: number | null;
+  comparison: "gt" | "lt" | null;
+  status: "active" | "acknowledged" | "resolved";
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_via: "auto" | "operator" | null;
+};
+
 const STATUS_TONE: Record<string, string> = {
   healthy: "border-green-200 bg-green-50 text-green-800",
   warning: "border-amber-300 bg-amber-50 text-amber-900",
@@ -94,6 +111,24 @@ function Inner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
+  const [alertEvents, setAlertEvents] = useState<AlertEvent[]>([]);
+  const [alertBusy, setAlertBusy] = useState(false);
+
+  const loadAlerts = useCallback(async () => {
+    try {
+      const res = await fetch(
+        "/api/admin/system/alerts?status=active,acknowledged",
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as {
+        ok?: boolean;
+        events?: AlertEvent[];
+      };
+      if (json.ok) setAlertEvents(json.events ?? []);
+    } catch {
+      // best-effort — the worker snapshot is the primary surface
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -115,12 +150,67 @@ function Inner() {
     } finally {
       setLoading(false);
     }
-  }, []);
+    void loadAlerts();
+  }, [loadAlerts]);
 
   useEffect(() => {
     void load();
   }, [load]);
   usePortalRefresh(load, { intervalMs: 30_000, fireOnMount: false });
+
+  const handleAlertAction = async (
+    id: string,
+    action: "acknowledge" | "resolve"
+  ) => {
+    setAlertBusy(true);
+    try {
+      const res = await fetch("/api/admin/system/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, id }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!json.ok) {
+        window.alert(json.reason ?? `${action} ล้มเหลว`);
+      }
+      await loadAlerts();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setAlertBusy(false);
+    }
+  };
+
+  const handleRunMaintenance = async () => {
+    if (!window.confirm("Run maintenance sweep? ล้าง stale locks + ประเมิน alert rules"))
+      return;
+    setAlertBusy(true);
+    try {
+      const res = await fetch("/api/admin/system/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run-maintenance" }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        janitor?: { released?: number };
+        alerts?: { fired?: number; autoResolved?: number };
+      };
+      if (!json.ok) {
+        window.alert(json.reason ?? "maintenance ล้มเหลว");
+      } else {
+        window.alert(
+          `Maintenance เสร็จ — locks ปลด ${json.janitor?.released ?? 0} · alerts ใหม่ ${json.alerts?.fired ?? 0} · auto-resolved ${json.alerts?.autoResolved ?? 0}`
+        );
+      }
+      await load();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setAlertBusy(false);
+    }
+  };
 
   const handleRecover = async () => {
     if (!window.confirm("Run self-heal? จะปลดล็อก stuck rows + log audit row")) {
@@ -206,6 +296,14 @@ function Inner() {
             </button>
             <button
               type="button"
+              onClick={() => void handleRunMaintenance()}
+              disabled={alertBusy}
+              className="rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-700 disabled:opacity-50"
+            >
+              Run maintenance
+            </button>
+            <button
+              type="button"
               onClick={() => void handleRecover()}
               disabled={recovering}
               className="rounded-xl bg-red-700 hover:bg-red-800 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50"
@@ -215,47 +313,11 @@ function Inner() {
           </div>
         </div>
 
-        {snapshot.alerts.length > 0 && (
-          <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-            <h2 className="text-sm font-bold text-amber-900">
-              Active alerts ({snapshot.alerts.length})
-            </h2>
-            <ul className="mt-2 space-y-1 text-xs">
-              {snapshot.alerts.map((a) => (
-                <li
-                  key={a.ruleId}
-                  className={`flex items-center justify-between gap-2 ${
-                    a.severity === "critical"
-                      ? "text-red-900"
-                      : "text-amber-900"
-                  }`}
-                >
-                  <span>
-                    <strong>{a.ruleName}</strong> · {a.metric}{" "}
-                    <code>
-                      {a.observed} {a.comparison === "gt" ? ">" : "<"}{" "}
-                      {a.threshold}
-                    </code>
-                    {a.branchId && (
-                      <span className="ml-1 text-gray-700">
-                        @{a.branchId}
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                      a.severity === "critical"
-                        ? "border-red-300 bg-red-100 text-red-900"
-                        : "border-amber-300 bg-amber-100 text-amber-900"
-                    }`}
-                  >
-                    {a.severity}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+        <AlertEventsSection
+          events={alertEvents}
+          busy={alertBusy}
+          onAction={handleAlertAction}
+        />
 
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-base font-bold text-gray-900">Queue health</h2>
@@ -382,6 +444,103 @@ function Inner() {
         </section>
       </div>
     </div>
+  );
+}
+
+function AlertEventsSection({
+  events,
+  busy,
+  onAction,
+}: {
+  events: AlertEvent[];
+  busy: boolean;
+  onAction: (id: string, action: "acknowledge" | "resolve") => void;
+}) {
+  if (events.length === 0) {
+    return (
+      <section className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3">
+        <p className="text-xs font-semibold text-green-800">
+          ✓ ไม่มี alert ที่ยัง active — worker health ปกติ
+        </p>
+      </section>
+    );
+  }
+  const activeCount = events.filter((e) => e.status === "active").length;
+  return (
+    <section className="rounded-2xl border border-amber-300 bg-amber-50">
+      <div className="p-4 border-b border-amber-200">
+        <h2 className="text-sm font-bold text-amber-900">
+          Active alerts ({events.length}) · {activeCount} unacknowledged
+        </h2>
+        <p className="text-[10px] text-amber-800">
+          ประเมินทุก ~15 นาทีโดย worker-maintenance cron · auto-resolve เมื่อ rule
+          หายจาก breach
+        </p>
+      </div>
+      <ul className="divide-y divide-amber-200">
+        {events.map((e) => (
+          <li key={e.id} className="px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                      e.severity === "critical"
+                        ? "border-red-300 bg-red-100 text-red-900"
+                        : "border-amber-300 bg-amber-100 text-amber-900"
+                    }`}
+                  >
+                    {e.severity}
+                  </span>
+                  <span className="text-sm font-semibold text-gray-900 truncate">
+                    {e.rule_name}
+                  </span>
+                  {e.status === "acknowledged" && (
+                    <span className="rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
+                      acknowledged
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-gray-700">
+                  <code>
+                    {e.metric} = {e.observed ?? "?"}{" "}
+                    {e.comparison === "gt" ? ">" : "<"} {e.threshold ?? "?"}
+                  </code>
+                  <span className="ml-2 text-gray-500">
+                    source: {e.source}
+                    {e.branch_id && ` · @${e.branch_id}`}
+                    {e.occurrence_count > 1 && ` · ×${e.occurrence_count}`}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[10px] text-gray-500">
+                  first {fmt(e.first_seen_at)} · last {fmt(e.last_seen_at)}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {e.status === "active" && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onAction(e.id, "acknowledge")}
+                    className="rounded-md border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                  >
+                    Acknowledge
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onAction(e.id, "resolve")}
+                  className="rounded-md border border-green-200 bg-green-50 hover:bg-green-100 text-green-800 px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                >
+                  Resolve
+                </button>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

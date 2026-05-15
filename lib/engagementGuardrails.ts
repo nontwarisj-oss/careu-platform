@@ -179,13 +179,22 @@ export async function checkWeeklyCampaignCap(
   return { ok: true };
 }
 
+/** A completed dry-run older than this is treated as stale — the
+ *  audience + provider state may have drifted. Operator must re-run. */
+export const DRY_RUN_FRESH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
 /**
- * "Has a dry-run been required + completed for this draft?" Set the
- * guardrail to true and the broadcast API refuses live sends unless
- * a successful dry-run send_job exists for the same draft_id.
+ * "Has a fresh dry-run been completed for the CURRENT version of this
+ * draft?" Set the `dry_run_required` guardrail to true and the
+ * broadcast API refuses live sends unless ALL hold:
  *
- * Returns ok=true when the requirement is disabled OR a prior
- * dry-run exists.
+ *   1. A completed `mode='dry_run'` send_job exists for the draft.
+ *   2. That dry-run is younger than DRY_RUN_FRESH_WINDOW_MS (14d).
+ *   3. The draft has NOT been edited since the dry-run ran — i.e.
+ *      `broadcast_drafts.updated_at <= dry_run.created_at`. Editing
+ *      the segment or templates after a dry-run invalidates it.
+ *
+ * Returns ok=true when the requirement is disabled OR all 3 hold.
  */
 export async function checkDryRunRequirement(opts: {
   draftId: string;
@@ -197,13 +206,19 @@ export async function checkDryRunRequirement(opts: {
   if (!required) return { ok: true };
   const admin = getSupabaseAdmin();
   if (!admin) return { ok: true };
+
+  // Most-recent completed dry-run for this draft.
   const r = await admin
     .from("broadcast_send_jobs")
-    .select("id", { count: "exact", head: true })
+    .select("id, created_at")
     .eq("draft_id", opts.draftId)
     .eq("mode", "dry_run")
-    .eq("status", "completed");
-  if ((r.count ?? 0) === 0) {
+    .eq("status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const dryRun = r.data as { id: string; created_at: string } | null;
+  if (!dryRun) {
     return {
       ok: false,
       bucket: "dry_run_required",
@@ -211,6 +226,39 @@ export async function checkDryRunRequirement(opts: {
         "dry-run completion required before live send (per branch / global guardrail)",
     };
   }
+
+  const dryRunMs = new Date(dryRun.created_at).getTime();
+  if (Number.isFinite(dryRunMs) && Date.now() - dryRunMs > DRY_RUN_FRESH_WINDOW_MS) {
+    return {
+      ok: false,
+      bucket: "dry_run_required",
+      reason: `last dry-run is older than 14 days — run a fresh dry-run before sending`,
+    };
+  }
+
+  // Draft edited since the dry-run? Compare updated_at to the
+  // dry-run's created_at (the moment its snapshot was frozen).
+  const draftRes = await admin
+    .from("broadcast_drafts")
+    .select("updated_at")
+    .eq("id", opts.draftId)
+    .maybeSingle();
+  const draftUpdatedAt = (draftRes.data as { updated_at: string } | null)
+    ?.updated_at;
+  if (draftUpdatedAt) {
+    const draftMs = new Date(draftUpdatedAt).getTime();
+    // Small clock-skew tolerance (2s) so a dry-run queued in the same
+    // request as a draft save isn't falsely flagged.
+    if (Number.isFinite(draftMs) && draftMs > dryRunMs + 2000) {
+      return {
+        ok: false,
+        bucket: "dry_run_required",
+        reason:
+          "draft was edited after the last dry-run — run a new dry-run to validate the current version",
+      };
+    }
+  }
+
   return { ok: true };
 }
 

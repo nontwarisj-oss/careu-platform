@@ -182,4 +182,18 @@ If a cron's interval changes, update `CRON_EXPECTED_INTERVAL_MIN` in `lib/worker
 
 ---
 
-**Last updated:** 2026-05-14 (phase 17 — worker telemetry + per-branch settings + email foundation)
+## Phase 21 — concurrency control + failure streaks
+
+- **`worker_locks`** — a distributed advisory lock table. `withCronHeartbeat(cron, handler, { lockName })` acquires a row before the handler runs; a second concurrent tick short-circuits with a `skipped` heartbeat. Wired into `dispatch-worker`, `broadcast-send`, `retry-worker`, `retention-triggers`, `worker-maintenance`.
+- **`cron_failure_streaks`** — per-cron consecutive-failure counter, reset on every success. `/admin/system/workers` shows a `×N` badge; warning at ≥1, critical at ≥3.
+
+## Phase 22 — alert events + worker-maintenance cron
+
+- **`alert_events`** — persisted alert breaches. `communication_alert_rules` breaches no longer evaporate between dashboard loads; they land a row with an `active → acknowledged → resolved` lifecycle. Dedup: one open row per `(rule_id, branch_id, metric)`. Auto-resolved when the rule stops breaching.
+- **`worker-maintenance` cron** — `GET/POST /api/cron/worker-maintenance`, every ~15 min. Runs the lock janitor ([`lib/workerLockJanitor.ts`](../lib/workerLockJanitor.ts)) + the alert evaluation/routing sweep ([`lib/alertEvents.ts`](../lib/alertEvents.ts)). Add it to `CRON_EXPECTED_INTERVAL_MIN`.
+- **`/admin/system/workers`** — adds the persisted-alert surface (acknowledge / resolve buttons) + a **Run maintenance** button (owner/HQ) for an on-demand sweep.
+- **Alert routing** — new breaches route to Slack (real, when `ALERT_SLACK_WEBHOOK_URL` is set) + email/LINE (intent-logged, provider send deferred). See [COMMUNICATIONS.md §5](./COMMUNICATIONS.md).
+
+---
+
+**Last updated:** 2026-05-15 (phase 22 — alert events + worker-maintenance cron)

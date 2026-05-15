@@ -212,6 +212,41 @@ No new cron paths. Existing 8 from Phases 12-19:
 | heic-transcode / engagement-aggregate / retention-triggers | unchanged |
 | comm-performance-aggregate | unchanged |
 
+Phase 22 adds **one** cron: `worker-maintenance` (every ~15 min) — lock janitor + alert sweep.
+
 ---
 
-**Last updated:** 2026-05-14 (phase 20 — operator-configurable engagement controls)
+## 15. Phase 22 — cap enforcement, alerts, link wrap, lock janitor
+
+The Phase 20 known-limitations list said the daily/weekly cap helpers existed but weren't wired. Phase 22 wires them and adds the alert + janitor layer. Full reference: [COMMUNICATIONS.md](./COMMUNICATIONS.md).
+
+### 15.1 Caps now ENFORCED at send-create
+
+`POST /api/admin/crm/broadcasts/[id]/send` blocks a campaign before the `send_job` insert when:
+
+- the **global emergency stop** is on (dry-run included);
+- the **global or per-branch daily send cap** is reached (live sends);
+- the **weekly campaigns-per-branch cap** is reached (live sends) — *owner* may override with `{overrideWeeklyCap:true}`, audited;
+- the **dry-run requirement** is unmet — needs a completed dry-run <14 days old AND newer than the draft's last edit.
+
+Each block + each override writes a `broadcast_audit_log` row.
+
+### 15.2 Alert events
+
+`communication_alert_rules` breaches are now persisted to `alert_events` and surfaced on `/admin/system/workers` with acknowledge / resolve actions. New breaches route to Slack (real) + email/LINE (prepared). The `worker-maintenance` cron evaluates every ~15 min and auto-resolves cleared alerts.
+
+### 15.3 URL auto-wrap
+
+Broadcast bodies have their bare URLs auto-wrapped with signed click-tracking + UTM at fan-out. Operators stop hand-pasting tracking links.
+
+### 15.4 Worker lock janitor
+
+`worker-maintenance` deletes expired `worker_locks` rows every ~15 min; owner/HQ can force a sweep via **Run maintenance** on `/admin/system/workers`.
+
+### 15.5 Smoke-test hardening
+
+`/admin/system/smoke-test` adds checks for: send caps, alert-rule health, open alert count, `worker-maintenance` freshness, stale locks, `alert_events` table, and `NEXT_PUBLIC_BASE_URL` (link-wrap readiness).
+
+---
+
+**Last updated:** 2026-05-15 (phase 22 — cap enforcement + alert routing + link wrap + lock janitor)

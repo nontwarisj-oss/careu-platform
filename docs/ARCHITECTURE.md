@@ -1883,6 +1883,64 @@ The broadcast send worker re-checks draft status at the top of every per-job tic
 
 ---
 
+## 12w. Cap enforcement + alert routing (post-`20260546`)
+
+> Status: **operationally safe at franchise scale**. Campaign sending is capped at creation, worker breaches persist as alert events, broadcast URLs auto-wrap with signed tracking, and stale worker locks are swept on a schedule.
+
+See [COMMUNICATIONS.md](./COMMUNICATIONS.md).
+
+### 12w.1 New table (migration `20260546`)
+
+- `alert_events` — persisted alert-rule breaches with an `active → acknowledged → resolved` lifecycle. A partial unique index `(rule_id, coalesce(branch_id,''), metric) where status in ('active','acknowledged')` enforces one open row per logical alert. Carries `occurrence_count`, `first/last_seen_at`, `resolved_via` (`auto`|`operator`).
+
+### 12w.2 Cap enforcement at send-create
+
+`POST /api/admin/crm/broadcasts/[id]/send` runs the Phase 20 guardrail helpers (previously unwired) before the `broadcast_send_jobs` insert: `isEmergencyStopped` → `checkGlobalDailySendCap` → `checkWeeklyCampaignCap` → `checkDryRunRequirement`. Dry-run mode skips caps 2–4 but not the emergency stop. Owner-only `overrideWeeklyCap`. Every block + override writes a `broadcast_audit_log` row.
+
+`checkDryRunRequirement` (in `lib/engagementGuardrails.ts`) hardened: a passing dry-run must exist, be <14 days old, and be newer than `broadcast_drafts.updated_at` (draft not edited since).
+
+### 12w.3 URL auto-wrap
+
+`lib/campaignLinkWrapper.ts::wrapCampaignLinks` scans a broadcast body for bare `http(s)` URLs, attaches UTM (`lib/utm.ts`), wraps in a signed click redirect (`lib/trackingLinks.ts`), and skips already-tracked URLs (idempotent). The broadcast send worker enqueues with a 20s `send_after` buffer, wraps using the new `notification_id`, then patches `customer_notifications.payload.body` before the dispatch worker can pick the row up.
+
+### 12w.4 Alert events + routing
+
+- `lib/alertEvents.ts` — `recordAlertHits` (dedup-upsert + auto-resolve), `evaluateAndRecordAlerts` (compute health → persist), `listAlertEvents`, `acknowledgeAlert`, `resolveAlert`.
+- `lib/alertRouting.ts` — `routeAlert` fans a new breach to Slack (real POST when `ALERT_SLACK_WEBHOOK_URL` set), email + LINE (intent-logged, provider send deferred). Only NEW breaches route — no incident spam.
+
+### 12w.5 Worker lock janitor + maintenance cron
+
+- `lib/workerLockJanitor.ts::runLockJanitorTick` — deletes expired `worker_locks` rows; reports (not deletes) locks held >1h.
+- `/api/cron/worker-maintenance` (new, 9th cron, every ~15 min) — runs the janitor + the alert sweep under a `worker_locks` lock + heartbeat.
+- `/api/admin/system/alerts` (new) — list events; POST `acknowledge`/`resolve`/`run-maintenance` (owner/HQ).
+
+### 12w.6 Admin alert surface
+
+`/admin/system/workers` replaces the in-memory alert banner with the persisted `alert_events` surface: severity, source worker, occurrence count, first/last seen, acknowledge + resolve buttons, plus a **Run maintenance** button.
+
+### 12w.7 Smoke-test hardening
+
+`/api/admin/system/smoke-test` adds: `NEXT_PUBLIC_BASE_URL` (link-wrap), `alert_events` table, `worker-maintenance` cron freshness, enabled alert-rule count, open-alert count, send-cap configuration.
+
+### 12w.8 Branch isolation
+
+| Surface | Auth | Scope |
+|---|---|---|
+| `alert_events` RLS | owner/HQ read all; branch_manager own branch | enforced |
+| `GET/POST /api/admin/system/alerts` | owner/HQ/branch_manager (own-branch read) | enforced |
+| `run-maintenance` action | owner / HQ only | enforced |
+| send-create cap gates | role + `requireBranchAccess` | enforced |
+| `/api/cron/worker-maintenance` | machine-only (Bearer CRON_SECRET) | n/a |
+
+### 12w.9 Known limitations (carried forward)
+
+- Email + LINE alert routing is intent-logged only — real provider send deferred.
+- Per-customer caps are enforced at fan-out (`evaluatePolicy`), not pre-checked at send-create (would be N queries).
+- Emergency stop remains global-only for dispatch.
+- `birthday_trigger_enabled` per-branch still consulted at policy layer only.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

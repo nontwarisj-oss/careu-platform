@@ -31,6 +31,12 @@ import {
 } from "@/lib/broadcastPolicyService";
 import { getBoolFlag, FLAG_KEYS } from "@/lib/featureFlags";
 import { fetchCustomerIdsForSegment } from "@/lib/broadcastSegmentCustomers";
+import {
+  checkDryRunRequirement,
+  checkGlobalDailySendCap,
+  checkWeeklyCampaignCap,
+  isEmergencyStopped,
+} from "@/lib/engagementGuardrails";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -38,7 +44,33 @@ export const runtime = "nodejs";
 type Body = {
   mode?: "live" | "dry_run";
   scheduledFor?: string | null;
+  /** Owner-only: bypass the weekly campaign cap. Every override is
+   *  audited. branch_manager / hq_admin cannot set this. */
+  overrideWeeklyCap?: boolean;
 };
+
+/** Write a broadcast_audit_log row for a blocked / overridden send so
+ *  every cap decision is traceable. Best-effort. */
+async function auditGuardrail(
+  admin: NonNullable<ReturnType<typeof getSupabaseAdmin>>,
+  draftId: string,
+  actorId: string,
+  ip: string,
+  outcome: "blocked" | "override",
+  detail: Record<string, unknown>
+): Promise<void> {
+  try {
+    await admin.from("broadcast_audit_log").insert({
+      draft_id: draftId,
+      action: "update",
+      actor_id: actorId,
+      after_value: { guardrail: outcome, ...detail },
+      request_ip: ip === "unknown" ? null : ip,
+    });
+  } catch {
+    // best-effort
+  }
+}
 
 export async function POST(
   req: Request,
@@ -125,6 +157,92 @@ export async function POST(
   if (draft.branch_id) {
     const guard = await requireBranchAccess(draft.branch_id);
     if (guard instanceof NextResponse) return guard;
+  }
+
+  // 1b. Phase 22: engagement guardrails. Caps are enforced at
+  //     send-CREATE so an over-budget campaign is refused with a
+  //     clear reason instead of dead-lettering mid-flight. Dry-run
+  //     sends are exempt from the daily/weekly caps + dry-run
+  //     requirement (a dry-run IS how you satisfy the requirement)
+  //     but NOT from the emergency stop.
+  if (await isEmergencyStopped()) {
+    await auditGuardrail(admin, draft.id, actorId, ip, "blocked", {
+      bucket: "global_emergency_stop",
+      mode,
+    });
+    return NextResponse.json(
+      {
+        ok: false,
+        reason:
+          "global emergency stop is ON — all sends halted. Clear it in /admin/system/guardrails.",
+        bucket: "global_emergency_stop",
+      },
+      { status: 409 }
+    );
+  }
+
+  if (mode === "live") {
+    // Global + per-branch daily send cap.
+    const dailyCap = await checkGlobalDailySendCap(draft.branch_id);
+    if (!dailyCap.ok) {
+      await auditGuardrail(admin, draft.id, actorId, ip, "blocked", {
+        bucket: dailyCap.bucket,
+        reason: dailyCap.reason,
+      });
+      return NextResponse.json(
+        { ok: false, reason: dailyCap.reason, bucket: dailyCap.bucket },
+        { status: 409 }
+      );
+    }
+
+    // Weekly campaigns-per-branch cap. Owner may override; every
+    // override is audited.
+    const weeklyCap = await checkWeeklyCampaignCap(draft.branch_id);
+    if (!weeklyCap.ok) {
+      const wantsOverride = body.overrideWeeklyCap === true;
+      if (wantsOverride && role === "owner") {
+        await auditGuardrail(admin, draft.id, actorId, ip, "override", {
+          bucket: weeklyCap.bucket,
+          reason: weeklyCap.reason,
+          overriddenBy: actorId,
+        });
+        // fall through — owner override accepted + audited.
+      } else {
+        await auditGuardrail(admin, draft.id, actorId, ip, "blocked", {
+          bucket: weeklyCap.bucket,
+          reason: weeklyCap.reason,
+          overrideAttempted: wantsOverride,
+        });
+        return NextResponse.json(
+          {
+            ok: false,
+            reason: wantsOverride
+              ? `${weeklyCap.reason} — เฉพาะ owner เท่านั้นที่ override ได้`
+              : weeklyCap.reason,
+            bucket: weeklyCap.bucket,
+            overridable: true,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    // Dry-run requirement — needs a fresh dry-run matching the
+    // current draft version (see checkDryRunRequirement).
+    const dryRunReq = await checkDryRunRequirement({
+      draftId: draft.id,
+      branchId: draft.branch_id,
+    });
+    if (!dryRunReq.ok) {
+      await auditGuardrail(admin, draft.id, actorId, ip, "blocked", {
+        bucket: dryRunReq.bucket,
+        reason: dryRunReq.reason,
+      });
+      return NextResponse.json(
+        { ok: false, reason: dryRunReq.reason, bucket: dryRunReq.bucket },
+        { status: 409 }
+      );
+    }
   }
 
   // 2. Channels valid?

@@ -78,6 +78,17 @@ export async function GET() {
       ? ok("tracking_secret", "TRACKING_LINK_SECRET set", "config")
       : missing("tracking_secret", "TRACKING_LINK_SECRET ยังไม่ตั้ง — UTM + click tracking ไม่ทำงาน", "config")
   );
+  // Phase 22: link auto-wrap needs a public base URL to build
+  // tracking redirects. Without it, broadcast URLs send un-tracked.
+  checks.push(
+    envSet("NEXT_PUBLIC_BASE_URL")
+      ? ok("base_url", "NEXT_PUBLIC_BASE_URL set — broadcast links auto-wrap", "config")
+      : warn(
+          "base_url",
+          "NEXT_PUBLIC_BASE_URL ยังไม่ตั้ง — broadcast URLs จะส่งแบบไม่ track",
+          "config"
+        )
+  );
 
   // Provider env (warn rather than missing — the system runs without them).
   checks.push(
@@ -113,10 +124,11 @@ export async function GET() {
       checks.push(errorRes("db_connect", err instanceof Error ? err.message : String(err), "db"));
     }
 
-    // Phase 21 tables.
+    // Phase 20–22 tables.
     for (const tbl of [
       "worker_locks",
       "cron_failure_streaks",
+      "alert_events",
       "engagement_guardrails",
       "campaign_funnel_metrics",
       "broadcast_send_jobs",
@@ -179,12 +191,95 @@ export async function GET() {
           ? ok("worker_locks_stale", "no stale locks", "workers")
           : warn(
               "worker_locks_stale",
-              `${cnt} stale lock(s) — opportunistically cleared on next acquire`,
+              `${cnt} stale lock(s) — worker-maintenance cron sweeps these every 15min`,
               "workers"
             )
       );
     } catch (err) {
       checks.push(errorRes("worker_locks_stale", err instanceof Error ? err.message : String(err), "workers"));
+    }
+
+    // Phase 22: worker-maintenance cron heartbeat — the janitor +
+    // alert sweep. Stale heartbeat means stale locks + un-evaluated
+    // alert rules.
+    try {
+      const r = await admin
+        .from("cron_heartbeat_logs")
+        .select("started_at")
+        .eq("cron_name", "worker-maintenance")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const last = (r.data as { started_at: string } | null)?.started_at;
+      if (!last) {
+        checks.push(
+          warn(
+            "worker_maintenance_cron",
+            "worker-maintenance has never run — schedule /api/cron/worker-maintenance every ~15min",
+            "workers"
+          )
+        );
+      } else {
+        const ageMin = Math.round(
+          (Date.now() - new Date(last).getTime()) / 60000
+        );
+        checks.push(
+          ageMin <= 45
+            ? ok("worker_maintenance_cron", `last ran ${ageMin}m ago`, "workers")
+            : errorRes(
+                "worker_maintenance_cron",
+                `worker-maintenance silent for ${ageMin}m — locks + alerts not being swept`,
+                "workers"
+              )
+        );
+      }
+    } catch (err) {
+      checks.push(errorRes("worker_maintenance_cron", err instanceof Error ? err.message : String(err), "workers"));
+    }
+
+    // Phase 22: alert rule health — at least one enabled rule means
+    // breaches get caught.
+    try {
+      const r = await admin
+        .from("communication_alert_rules")
+        .select("id", { count: "exact", head: true })
+        .eq("enabled", true);
+      const cnt = r.count ?? 0;
+      checks.push(
+        cnt > 0
+          ? ok("alert_rules", `${cnt} enabled alert rule(s)`, "workers")
+          : warn(
+              "alert_rules",
+              "no enabled alert rules — worker breaches will not raise alerts",
+              "workers"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("alert_rules", err instanceof Error ? err.message : String(err), "workers"));
+    }
+
+    // Phase 22: active (unresolved) alert events.
+    try {
+      const r = await admin
+        .from("alert_events")
+        .select("severity", { count: "exact" })
+        .in("status", ["active", "acknowledged"]);
+      const rows = (r.data ?? []) as Array<{ severity: string }>;
+      const cnt = r.count ?? rows.length;
+      const critical = rows.filter((x) => x.severity === "critical").length;
+      checks.push(
+        cnt === 0
+          ? ok("active_alerts", "no open alert events", "workers")
+          : critical > 0
+            ? errorRes(
+                "active_alerts",
+                `${cnt} open alert(s), ${critical} critical — see workers dashboard`,
+                "workers"
+              )
+            : warn("active_alerts", `${cnt} open alert(s)`, "workers")
+      );
+    } catch (err) {
+      checks.push(errorRes("active_alerts", err instanceof Error ? err.message : String(err), "workers"));
     }
 
     // ----- Broadcast pipeline -----
@@ -247,6 +342,34 @@ export async function GET() {
       );
     } catch (err) {
       checks.push(errorRes("emergency_stop", err instanceof Error ? err.message : String(err), "security"));
+    }
+
+    // Phase 22: send caps configured. Default caps apply even with no
+    // rows, so this is informational — a row means the operator has
+    // explicitly tuned a ceiling.
+    try {
+      const r = await admin
+        .from("engagement_guardrails")
+        .select("key")
+        .in("key", [
+          "max_sends_per_day_global",
+          "max_sends_per_day_branch",
+          "max_campaigns_per_week_branch",
+          "dry_run_required",
+        ]);
+      const cnt = (r.data ?? []).length;
+      checks.push(
+        ok(
+          "send_caps",
+          cnt > 0
+            ? `${cnt} explicit cap row(s) — defaults apply to the rest`
+            : "using default caps (global 5000/day, branch 1000/day, 5 campaigns/week)",
+          "security",
+          { explicitRows: cnt }
+        )
+      );
+    } catch (err) {
+      checks.push(errorRes("send_caps", err instanceof Error ? err.message : String(err), "security"));
     }
   } else {
     checks.push(

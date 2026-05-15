@@ -312,4 +312,21 @@ The broadcast-send cron is the most frequent — a 1-minute cadence on a `CHUNK_
 
 ---
 
-**Last updated:** 2026-05-14 (phase 16 — broadcast send pipeline + scheduling + dedup + monitoring)
+## Phase 22 — send-create cap gates + URL auto-wrap
+
+`POST /api/admin/crm/broadcasts/[id]/send` now refuses over-budget campaigns **before** inserting the `send_job`:
+
+1. **Emergency stop** — `isEmergencyStopped()` → 409 (applies to dry-run too).
+2. **Daily send cap** (live only) — `checkGlobalDailySendCap(branch)` → 409 on global or per-branch ceiling.
+3. **Weekly campaign cap** (live only) — `checkWeeklyCampaignCap(branch)` → 409. Owner may retry with `{overrideWeeklyCap:true}`; the override is audited.
+4. **Dry-run requirement** (live only) — `checkDryRunRequirement(...)` requires a completed dry-run that is <14 days old AND newer than the draft's last edit.
+
+Every blocked send + every override writes a `broadcast_audit_log` row (`after_value.guardrail ∈ {blocked, override}`).
+
+**URL auto-wrap:** the send worker now wraps every bare `http(s)` URL in the SMS / LINE body with a signed click-tracking redirect + UTM params ([`lib/campaignLinkWrapper.ts`](../lib/campaignLinkWrapper.ts)). Already-wrapped URLs are skipped (idempotent). Operators no longer hand-paste tracking links. See [COMMUNICATIONS.md §4](./COMMUNICATIONS.md).
+
+Full operator playbook: [COMMUNICATIONS.md](./COMMUNICATIONS.md).
+
+---
+
+**Last updated:** 2026-05-15 (phase 22 — cap enforcement + URL auto-wrap)
