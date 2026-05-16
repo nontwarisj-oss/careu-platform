@@ -8,6 +8,7 @@ import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
 import { CustomerHistoryModal } from "@/components/CustomerHistoryModal";
 import { UnmatchedOrdersModal } from "@/components/UnmatchedOrdersModal";
+import { CustomerMergeModal } from "@/components/CustomerMergeModal";
 import { Customer } from "@/types";
 import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import {
@@ -114,6 +115,7 @@ export default function CustomersPage() {
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
   const [resolverOpen, setResolverOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [statsByCustomer, setStatsByCustomer] = useState<
@@ -657,6 +659,19 @@ export default function CustomersPage() {
                 : "Refresh tiers"}
             </button>
           )}
+          {(role === "owner" || role === "hq_admin") && (
+            <button
+              onClick={() => setMergeOpen(true)}
+              className="border border-amber-500 text-amber-700 hover:bg-amber-50 px-5 py-2 rounded-lg transition font-medium"
+              title={
+                language === "th"
+                  ? "รวมลูกค้าซ้ำเป็นรายเดียว"
+                  : "Merge duplicate customers"
+              }
+            >
+              {language === "th" ? "รวมลูกค้าซ้ำ" : "Merge duplicates"}
+            </button>
+          )}
           <button
             onClick={() => {
               setImportPreview([]);
@@ -966,6 +981,17 @@ export default function CustomersPage() {
         }))}
         onClose={() => setResolverOpen(false)}
         onResolved={() => void fetchCustomerStats(customers)}
+      />
+
+      <CustomerMergeModal
+        isOpen={mergeOpen}
+        customers={customers.map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+        }))}
+        onClose={() => setMergeOpen(false)}
+        onMerged={() => void fetchCustomers()}
       />
     </div>
   );
