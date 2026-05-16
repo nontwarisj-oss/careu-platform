@@ -14,8 +14,10 @@ import { formatCurrency } from "@/lib/utils";
 import { type BranchConfig, getBranchById } from "@/lib/brandConfig";
 import {
   getCustomerTypeByCode,
+  SERVICE_CATEGORIES,
   type Promotion,
 } from "@/lib/pricing";
+import type { OrderItemRow } from "@/lib/orderItems";
 import {
   categoryLabelFor,
   formatPaymentStatus,
@@ -163,6 +165,10 @@ export type BuildReceiptInput = {
   dueDate?: string | null;
   /** Free-form technician label (from orders.tech or assigned tech). */
   technicianLabel?: string | null;
+  /** Multi-item rows (public.order_items). When present + non-empty the
+   *  receipt renders one line per item; otherwise it falls back to the
+   *  order header's own single-item columns (legacy orders). */
+  orderItems?: OrderItemRow[];
 };
 
 /**
@@ -173,8 +179,8 @@ export type BuildReceiptInput = {
 export function buildReceiptData(input: BuildReceiptInput): ReceiptData {
   const { order } = input;
   const branch = getBranchById(input.branchId ?? null);
-  const items = buildReceiptItems(order);
-  const totals = buildReceiptTotals(order);
+  const items = buildReceiptItems(order, input.orderItems);
+  const totals = buildReceiptTotals(order, input.orderItems);
   const payment = buildPaymentSummary(order, branch);
 
   return {
@@ -207,9 +213,35 @@ export function buildReceiptData(input: BuildReceiptInput): ReceiptData {
 }
 
 /**
- * One item per order today. Multi-line orders would extend this loop.
+ * Receipt line items. When the order carries public.order_items rows
+ * (multi-item intake, Phase A) one ReceiptItem is produced per row.
+ * Legacy single-item orders fall back to the order header's columns.
  */
-export function buildReceiptItems(order: DocumentOrder): ReceiptItem[] {
+export function buildReceiptItems(
+  order: DocumentOrder,
+  orderItems?: OrderItemRow[]
+): ReceiptItem[] {
+  if (orderItems && orderItems.length > 0) {
+    return orderItems.map((it) => {
+      const quantity = Math.max(1, Number(it.quantity ?? 1));
+      const unitPrice = Math.max(0, Number(it.unit_price ?? 0));
+      const categoryLabel =
+        SERVICE_CATEGORIES.find((c) => c.code === it.category)?.labelTh ??
+        null;
+      return {
+        id: it.id,
+        serviceCode: it.service_code,
+        serviceLabel: it.service_name || "บริการ",
+        categoryLabel,
+        description: it.detail,
+        quantity,
+        unitPrice,
+        subtotal: quantity * unitPrice,
+        urgent: !!it.urgent,
+      };
+    });
+  }
+
   const subtotal =
     order.subtotal !== null && order.subtotal !== undefined
       ? Number(order.subtotal)
@@ -240,8 +272,11 @@ export function buildReceiptItems(order: DocumentOrder): ReceiptItem[] {
  * Total math. Mirrors what /pricing's calculateFinalPrice produces but
  * works off the persisted order (post-save) rather than the live form.
  */
-export function buildReceiptTotals(order: DocumentOrder): ReceiptTotals {
-  const items = buildReceiptItems(order);
+export function buildReceiptTotals(
+  order: DocumentOrder,
+  orderItems?: OrderItemRow[]
+): ReceiptTotals {
+  const items = buildReceiptItems(order, orderItems);
   const subtotal = items.reduce((s, item) => s + item.subtotal, 0);
   const urgentFee = Math.max(0, Number(order.urgent_fee ?? 0));
   const discount = Math.max(0, Number(order.discount ?? 0));

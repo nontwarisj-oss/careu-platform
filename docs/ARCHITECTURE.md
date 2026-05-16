@@ -2260,6 +2260,56 @@ See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
 
 ---
 
+## 12ff. Multi-item repair intake — Store Ops Hardening Phase A (post-`20260554`)
+
+> Status: **multi-item tickets**. One drop-off can carry several garments
+> under one order. Additive — legacy single-item orders are unaffected.
+
+### 12ff.1 Schema (migration `20260554`)
+
+`public.order_items` — child of `public.orders` (FK `order_id`, cascade
+delete). One row per garment: `category`, `service_code`, `service_name`,
+`detail`, `quantity`, `unit_price`, `urgent` + `urgent_fee`, `line_total`,
+`due_date`, `assigned_technician_id`, `technician_note`, `customer_note`,
+`image_paths` (jsonb), `line_no`, `branch_id`. RLS disabled — mirrors
+`public.orders` (branch isolation is app-layer).
+
+`public.orders` is unchanged: it stays the ticket HEADER (customer,
+branch, job_id, status, grand total in `price`).
+
+### 12ff.2 Pieces
+
+- [`lib/orderItems.ts`](../lib/orderItems.ts) — `OrderItemInput` / `OrderItemRow`
+  types, `insertOrderItems` (best-effort; swallows a missing table so
+  un-migrated DBs still create legacy orders), `fetchOrderItems` /
+  `fetchOrderItemsForOrders`, `computeLineTotal` / `sumItemsTotal`.
+- [`components/IntakeOrderForm.tsx`](../components/IntakeOrderForm.tsx) — the
+  multi-item intake UI: order header (business type / branch / customer /
+  job id) + an items list. Each item card has category, service (full
+  `service_prices` catalog + "Other / อื่นๆ" custom entry), detail, price,
+  quantity, urgent toggle (`คิวงานด่วน +30`, shown separately in the
+  total), per-item due date, technician assignment, technician note, and
+  customer note. `/intake` now renders this instead of `SmartOrderForm`.
+- Order creation: the form calls `createSmartOrder` for the header
+  (grand total + representative service) then `insertOrderItems` for the
+  children. `createSmartOrder` itself is untouched.
+- Receipt: [`lib/receiptData.ts`](../lib/receiptData.ts) `buildReceiptData`
+  takes an optional `orderItems` — one receipt line per item when present,
+  legacy single-item fallback otherwise. `/orders/[id]/document` fetches
+  the items and passes them through; the receipt templates already map
+  over `items[]`.
+
+### 12ff.3 Known limitations / follow-on
+
+- Per-item **image upload** — the `image_paths` column ships but the
+  uploader UI is not wired into intake yet (follow-on; the public
+  `PublicQuoteUploader` pipeline can be adapted for OPS).
+- `OrderDetailModal` + `/orders` still show the header only — the
+  operations board (Phase B) reworks that surface.
+- `SmartOrderForm.tsx` is now unused (kept in-tree, not deleted).
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

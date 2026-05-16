@@ -14,6 +14,7 @@ import { sendToLineOA } from "@/lib/lineOA";
 import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { useAuth } from "@/lib/authContext";
 import { buildReceiptData, type ReceiptData } from "@/lib/receiptData";
+import { fetchOrderItems, type OrderItemRow } from "@/lib/orderItems";
 import {
   printReceipt,
   saveReceiptAsImage,
@@ -64,6 +65,7 @@ export default function OrderDocumentPage({
   };
 
   const [order, setOrder] = useState<DocumentOrder | null>(null);
+  const [orderItems, setOrderItems] = useState<OrderItemRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [orderBranchId, setOrderBranchId] = useState<string | null>(null);
@@ -182,6 +184,10 @@ export default function OrderDocumentPage({
         created_at: (raw.created_at as string) ?? new Date().toISOString(),
       });
 
+      // Multi-item rows (Phase A). Empty for legacy single-item orders —
+      // the receipt then falls back to the header's own columns.
+      setOrderItems(await fetchOrderItems(supabase, orderId));
+
       setIsLoading(false);
     })();
   }, [orderId]);
@@ -199,8 +205,9 @@ export default function OrderDocumentPage({
       jobId: orderJobId,
       dueDate: orderDueDate,
       technicianLabel: orderTech,
+      orderItems,
     });
-  }, [order, orderBranchId, orderJobId, orderDueDate, orderTech]);
+  }, [order, orderBranchId, orderJobId, orderDueDate, orderTech, orderItems]);
 
   // ---- Action handlers ---------------------------------------------------
 

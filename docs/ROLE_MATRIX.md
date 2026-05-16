@@ -362,7 +362,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 27D — franchise-safe public layer. `/admin/settings/branches` + `/api/admin/settings/branch-public` (owner/HQ) operator UI for branch public settings; dynamic open/closed status; public smoke-test category. Migration `20260553`. | — |
 | 2026-05-16 | Phase 27C — SEO & performance deep pass. Canonical URLs + `metadataBase`, `Organization`/`WebSite`/`BreadcrumbList` + enriched `LocalBusiness` JSON-LD, dynamic `next/og` OG images, `loading.tsx` skeletons, public `not-found.tsx`, skip-link + global focus ring. Public/customer surface only — no operator-role change. No migration. | — |
 | 2026-05-16 | Bug-fix phase — storefront workflow stabilization. Hourly `sync-customers` cron (auto customer import + visit/spend recalc); phone leading-zero normalization on display + insert; robust visit/spend recalc (`lib/customerRecalc.ts`, cancelled orders excluded, paginated); intake service dropdown shows all `service_prices` + "Other" custom-service path; intake `due_date` wired; Orders page create-form removed (creation lives at `/intake`). No migration. No role-matrix change. | — |
+| 2026-05-16 | Store Ops Hardening Phase A — multi-item repair intake. Migration `20260554` adds `public.order_items` (child of `orders`). New `IntakeOrderForm` at `/intake`: many garments per ticket, each with service/custom-service/detail/price/qty/urgent-fee/due-date/technician/notes; receipt renders one line per item. Operational surface only — same intake roles, no role-matrix change. | — |
 
 ---
 
-**Last updated:** 2026-05-16 (bug-fix phase — storefront workflow stabilization)
+**Last updated:** 2026-05-16 (Store Ops Hardening Phase A — multi-item intake)

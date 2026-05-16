@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useBranch } from "@/lib/branchContext";
 import { BrandLogo } from "@/components/BrandLogo";
-import { SmartOrderForm } from "@/components/SmartOrderForm";
+import { IntakeOrderForm } from "@/components/IntakeOrderForm";
 
 export default function IntakePage() {
   const { branch } = useBranch();
@@ -37,8 +37,7 @@ export default function IntakePage() {
           </div>
         </div>
 
-        <SmartOrderForm
-          variant="intake"
+        <IntakeOrderForm
           onCreated={(summary) => {
             // After save, jump straight to the combined document — that's the
             // single receipt the shop now operates from.
@@ -47,7 +46,7 @@ export default function IntakePage() {
         />
 
         <p className="mt-3 text-[11px] text-gray-500 text-center">
-          ภาพ/วิดีโอ/ใบรับงานจะอัปโหลดได้เมื่อระบบ Storage พร้อมใช้งาน
+          รับซ่อมได้หลายชิ้นในใบงานเดียว — เพิ่มรายการได้ตามต้องการ
         </p>
       </div>
     </div>

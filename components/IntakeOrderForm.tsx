@@ -1,0 +1,942 @@
+"use client";
+
+// Multi-item repair intake — Store Ops Hardening Phase A.
+//
+// One ticket = one public.orders header + N public.order_items rows.
+// The header carries the customer / branch / job_id / grand total; each
+// item carries its own service, price, urgent flag, due date, notes, and
+// (optional) technician.
+//
+// Reuses the proven order libs: createSmartOrder (4-tier header insert
+// with job_id handling) + insertOrderItems (child rows). Legacy single-
+// item orders are unaffected — this only changes how NEW orders are
+// captured.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import supabase from "@/lib/supabase";
+import { formatCurrency } from "@/lib/utils";
+import { useBranch } from "@/lib/branchContext";
+import {
+  SERVICE_CATEGORIES,
+  CUSTOMER_TYPES,
+  type ServiceCategoryKey,
+  type ServiceItem,
+} from "@/lib/pricing";
+import { fetchPricingCatalog } from "@/lib/pricingDb";
+import { createSmartOrder, type BusinessType } from "@/lib/orderCreate";
+import {
+  insertOrderItems,
+  computeLineTotal,
+  type OrderItemInput,
+} from "@/lib/orderItems";
+import {
+  fetchActiveTechnicians,
+  type TechnicianProfile,
+} from "@/lib/technicianService";
+import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
+import { normalizePhone } from "@/lib/phone";
+import { normalizeJobId } from "@/lib/jobId";
+import { useAuth } from "@/lib/authContext";
+import { useRole } from "@/lib/roleContext";
+import { canChooseAnotherBranch } from "@/lib/permissions";
+import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
+
+type Customer = { id: string; name: string; phone: string };
+
+const OTHER_CODE = "__OTHER__";
+const DEFAULT_URGENT_FEE = 30;
+
+export type IntakeCreatedSummary = {
+  orderId: string;
+  itemCount: number;
+  total: number;
+  customerName: string;
+};
+
+/** One garment/item being captured (pre-persistence form state). */
+type DraftItem = {
+  localId: string;
+  category: ServiceCategoryKey | "";
+  serviceCode: string;
+  customName: string;
+  detail: string;
+  unitPrice: string;
+  quantity: string;
+  urgent: boolean;
+  urgentFee: string;
+  dueDate: string;
+  technicianId: string;
+  technicianNote: string;
+  customerNote: string;
+};
+
+function makeEmptyItem(): DraftItem {
+  return {
+    localId:
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `item-${Math.random().toString(36).slice(2)}`,
+    category: "",
+    serviceCode: "",
+    customName: "",
+    detail: "",
+    unitPrice: "",
+    quantity: "1",
+    urgent: false,
+    urgentFee: String(DEFAULT_URGENT_FEE),
+    dueDate: "",
+    technicianId: "",
+    technicianNote: "",
+    customerNote: "",
+  };
+}
+
+/** Resolve a draft item's effective service name/category/code. */
+function resolveService(
+  draft: DraftItem,
+  catalog: ServiceItem[]
+): { name: string; category: string; code: string | null } {
+  if (draft.serviceCode === OTHER_CODE) {
+    return {
+      name: draft.customName.trim(),
+      category: draft.category || "special",
+      code: OTHER_CODE,
+    };
+  }
+  const svc = catalog.find((s) => s.code === draft.serviceCode);
+  return {
+    name: svc?.nameTh ?? "",
+    category: (svc?.category ?? draft.category) || "",
+    code: svc?.code ?? null,
+  };
+}
+
+function draftLineTotal(draft: DraftItem): number {
+  return computeLineTotal({
+    quantity: Math.max(1, Math.floor(Number(draft.quantity) || 1)),
+    unitPrice: Math.max(0, Number(draft.unitPrice) || 0),
+    urgent: draft.urgent,
+    urgentFee: Math.max(0, Number(draft.urgentFee) || 0),
+  });
+}
+
+export function IntakeOrderForm({
+  onCreated,
+}: {
+  onCreated?: (summary: IntakeCreatedSummary) => void;
+}) {
+  const { branch, setBranchId } = useBranch();
+  const { user } = useAuth();
+  const { role } = useRole();
+  const canOverrideBranch = canChooseAnotherBranch(role);
+
+  // ---- Customer ----------------------------------------------------------
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerId, setCustomerId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [isCreatingNewCustomer, setIsCreatingNewCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [customerType, setCustomerType] = useState("general");
+
+  // ---- Business type + job id -------------------------------------------
+  const [businessType, setBusinessTypeState] = useState<BusinessType>(
+    branch.brand === "ezy" ? "ezy_repair" : "care_u"
+  );
+  const [businessTypeTouched, setBusinessTypeTouched] = useState(false);
+  const [careUJobId, setCareUJobId] = useState("");
+  useEffect(() => {
+    if (businessTypeTouched) return;
+    setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
+  }, [branch.brand, businessTypeTouched]);
+
+  // ---- Items -------------------------------------------------------------
+  const [items, setItems] = useState<DraftItem[]>([makeEmptyItem()]);
+  const [orderNote, setOrderNote] = useState("");
+  const [discountInput, setDiscountInput] = useState("");
+
+  // ---- Catalog + technicians --------------------------------------------
+  const [catalog, setCatalog] = useState<ServiceItem[]>([]);
+  const [technicians, setTechnicians] = useState<TechnicianProfile[]>([]);
+
+  // ---- UI ----------------------------------------------------------------
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ----- Data fetch -------------------------------------------------------
+  const fetchCustomers = useCallback(async () => {
+    const { data } = await supabase
+      .from("customers")
+      .select("id, name, phone")
+      .order("name", { ascending: true });
+    setCustomers((data ?? []) as Customer[]);
+  }, []);
+
+  useEffect(() => {
+    void fetchCustomers();
+  }, [fetchCustomers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await fetchPricingCatalog({ branchId: branch.id });
+      if (!cancelled) setCatalog(res.services);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branch.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const techs = await fetchActiveTechnicians({ branchId: branch.id });
+      if (!cancelled) setTechnicians(techs);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branch.id]);
+
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === customerId) ?? null,
+    [customers, customerId]
+  );
+
+  const customerMatches = useMemo(() => {
+    const raw = customerSearch.trim();
+    if (!raw || selectedCustomer || isCreatingNewCustomer) return [];
+    const lower = raw.toLowerCase();
+    const phoneDigits = normalizePhone(raw);
+    return customers
+      .filter((c) => {
+        if (
+          phoneDigits.length >= 3 &&
+          normalizePhone(c.phone).includes(phoneDigits)
+        )
+          return true;
+        return c.name.toLowerCase().includes(lower);
+      })
+      .slice(0, 6);
+  }, [customers, customerSearch, selectedCustomer, isCreatingNewCustomer]);
+
+  // ----- Item helpers -----------------------------------------------------
+  const patchItem = useCallback((localId: string, patch: Partial<DraftItem>) => {
+    setItems((curr) =>
+      curr.map((it) => (it.localId === localId ? { ...it, ...patch } : it))
+    );
+  }, []);
+
+  const addItem = () => setItems((curr) => [...curr, makeEmptyItem()]);
+  const removeItem = (localId: string) =>
+    setItems((curr) =>
+      curr.length <= 1 ? curr : curr.filter((it) => it.localId !== localId)
+    );
+
+  // ----- Totals -----------------------------------------------------------
+  const subtotal = useMemo(
+    () =>
+      items.reduce(
+        (s, it) =>
+          s +
+          Math.max(1, Math.floor(Number(it.quantity) || 1)) *
+            Math.max(0, Number(it.unitPrice) || 0),
+        0
+      ),
+    [items]
+  );
+  const urgentTotal = useMemo(
+    () =>
+      items.reduce(
+        (s, it) => s + (it.urgent ? Math.max(0, Number(it.urgentFee) || 0) : 0),
+        0
+      ),
+    [items]
+  );
+  const discount = Math.min(
+    Math.max(0, Number(discountInput) || 0),
+    subtotal + urgentTotal
+  );
+  const grandTotal = Math.max(0, subtotal + urgentTotal - discount);
+
+  // ----- Submit -----------------------------------------------------------
+  const handleSubmit = async () => {
+    setErrorMessage(null);
+
+    // Resolve / create the customer.
+    let resolved = selectedCustomer;
+    if (!resolved && isCreatingNewCustomer) {
+      if (!newCustomerName.trim() || !newCustomerPhone.trim()) {
+        setErrorMessage("กรอกชื่อและเบอร์ลูกค้าใหม่");
+        return;
+      }
+      const dup = customers.find(
+        (c) => normalizePhone(c.phone) === normalizePhone(newCustomerPhone)
+      );
+      if (dup) {
+        resolved = dup;
+      }
+    }
+    if (!resolved && !isCreatingNewCustomer) {
+      setErrorMessage("เลือกหรือเพิ่มลูกค้าก่อนบันทึก");
+      return;
+    }
+
+    // Validate items.
+    if (items.length === 0) {
+      setErrorMessage("เพิ่มอย่างน้อย 1 รายการ");
+      return;
+    }
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const svc = resolveService(it, catalog);
+      if (!svc.name) {
+        setErrorMessage(`รายการที่ ${i + 1}: เลือกบริการ หรือพิมพ์ชื่อบริการ`);
+        return;
+      }
+      if (Math.max(0, Number(it.unitPrice) || 0) <= 0) {
+        setErrorMessage(`รายการที่ ${i + 1}: กรอกราคา`);
+        return;
+      }
+    }
+    if (businessType === "care_u" && !normalizeJobId(careUJobId)) {
+      setErrorMessage("Care U ต้องกรอก Job ID เอง");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    // Create the customer row if needed.
+    if (!resolved && isCreatingNewCustomer) {
+      const { data: branchRows } = await supabase
+        .from("branches")
+        .select("id")
+        .limit(1);
+      const firstBranch = branchRows?.[0] as { id: string } | undefined;
+      if (!firstBranch) {
+        setErrorMessage("ยังไม่มีสาขาในระบบ");
+        setIsSubmitting(false);
+        return;
+      }
+      const insert = await supabase
+        .from("customers")
+        .insert({
+          branch_id: firstBranch.id,
+          name: newCustomerName.trim(),
+          phone: newCustomerPhone.trim(),
+          normalized_phone: normalizePhone(newCustomerPhone),
+          email: "N/A",
+          address: "N/A",
+          notes: null,
+        })
+        .select("id, name, phone")
+        .single();
+      if (insert.error || !insert.data) {
+        setErrorMessage(insert.error?.message ?? "บันทึกลูกค้าใหม่ไม่สำเร็จ");
+        setIsSubmitting(false);
+        return;
+      }
+      resolved = insert.data as Customer;
+    }
+    if (!resolved) {
+      setErrorMessage("ไม่พบลูกค้า");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Build the order_items payload.
+    const itemInputs: OrderItemInput[] = items.map((it) => {
+      const svc = resolveService(it, catalog);
+      return {
+        category: svc.category || null,
+        serviceCode: svc.code,
+        serviceName: svc.name,
+        detail: it.detail.trim() || null,
+        quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
+        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+        urgent: it.urgent,
+        urgentFee: it.urgent ? Math.max(0, Number(it.urgentFee) || 0) : 0,
+        dueDate: it.dueDate || null,
+        assignedTechnicianId: it.technicianId || null,
+        technicianNote: it.technicianNote.trim() || null,
+        customerNote: it.customerNote.trim() || null,
+        imagePaths: [],
+      };
+    });
+
+    // Header summary — representative service + earliest due date.
+    const first = resolveService(items[0], catalog);
+    const headerName =
+      items.length > 1
+        ? `${first.name} +${items.length - 1} รายการ`
+        : first.name;
+    const dueDates = items
+      .map((it) => it.dueDate)
+      .filter((d): d is string => !!d)
+      .sort();
+    const anyUrgent = items.some((it) => it.urgent);
+
+    const { orderId, error } = await createSmartOrder({
+      customerId: resolved.id,
+      customerName: resolved.name,
+      customerType,
+      branchId: branch.id,
+      businessType,
+      serviceCategory: first.category || null,
+      serviceCode: first.code,
+      serviceName: headerName,
+      templateText:
+        items.length === 1 ? items[0].detail.trim() || null : headerName,
+      quantity: items.reduce(
+        (s, it) => s + Math.max(1, Math.floor(Number(it.quantity) || 1)),
+        0
+      ),
+      subtotal,
+      urgent: anyUrgent,
+      urgentFee: urgentTotal,
+      promotionCode: discount > 0 ? "MANUAL" : null,
+      discount,
+      total: grandTotal,
+      notes: orderNote.trim() || null,
+      status: "pending",
+      jobId: businessType === "care_u" ? careUJobId : null,
+      createdBy: user?.uid ?? null,
+      dueDate: dueDates[0] ?? null,
+    });
+
+    if (error || !orderId) {
+      setErrorMessage(error ?? "บันทึกใบงานไม่สำเร็จ");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Child line-items. A failure here is surfaced but the header is
+    // already saved — staff can re-open the order to fix items.
+    const itemsRes = await insertOrderItems(orderId, branch.id, itemInputs);
+    if (itemsRes.error) {
+      setErrorMessage(
+        `บันทึกใบงานแล้ว แต่บันทึกรายการไม่สำเร็จ: ${itemsRes.error}`
+      );
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Fire-and-forget post-create hooks (sheet sync + lifecycle).
+    void fetch("/api/sync-order-to-sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId }),
+    }).catch(() => {});
+    void triggerLifecycleEvent("order_created", orderId);
+
+    setIsSubmitting(false);
+    onCreated?.({
+      orderId,
+      itemCount: items.length,
+      total: grandTotal,
+      customerName: resolved.name,
+    });
+  };
+
+  const setBusinessType = (next: BusinessType) => {
+    setBusinessTypeState(next);
+    setBusinessTypeTouched(true);
+  };
+
+  // ----- Render -----------------------------------------------------------
+  const card =
+    "bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4";
+
+  return (
+    <div className="space-y-0">
+      {errorMessage && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
+      {/* 0 — Business type + branch */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          0 • ประเภทงาน
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setBusinessType("care_u")}
+            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+              businessType === "care_u"
+                ? "bg-green-700 border-green-700 text-white"
+                : "bg-white border-gray-300 text-gray-700"
+            }`}
+          >
+            Care U
+            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+              เสื้อผ้า / ดัดแปลง
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setBusinessType("ezy_repair")}
+            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+              businessType === "ezy_repair"
+                ? "bg-yellow-500 border-yellow-500 text-white"
+                : "bg-white border-gray-300 text-gray-700"
+            }`}
+          >
+            Ezy Repair
+            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+              รองเท้า / กระเป๋า
+            </span>
+          </button>
+        </div>
+        {canOverrideBranch ? (
+          <div className="mt-3">
+            <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1">
+              สาขา
+            </label>
+            <select
+              value={branch.id}
+              onChange={(e) => setBranchId(e.target.value)}
+              className="w-full rounded-xl border border-gray-300 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+            >
+              {ALL_BRANCHES.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.shortLabel}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <p className="mt-2 text-[11px] text-gray-500">
+            สาขา:{" "}
+            <span className="font-medium text-gray-700">
+              {branch.shortLabel}
+            </span>
+          </p>
+        )}
+      </section>
+
+      {/* 1 — Customer */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          1 • ลูกค้า
+        </p>
+        {selectedCustomer ? (
+          <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
+            <div className="min-w-0">
+              <p className="font-medium text-gray-800 truncate">
+                {selectedCustomer.name}
+              </p>
+              <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCustomerId("");
+                setCustomerSearch("");
+              }}
+              className="text-sm text-green-700 hover:text-green-800 font-medium"
+            >
+              เปลี่ยน
+            </button>
+          </div>
+        ) : isCreatingNewCustomer ? (
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={newCustomerName}
+              onChange={(e) => setNewCustomerName(e.target.value)}
+              placeholder="ชื่อลูกค้า"
+              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+            />
+            <input
+              type="tel"
+              inputMode="tel"
+              value={newCustomerPhone}
+              onChange={(e) => setNewCustomerPhone(e.target.value)}
+              placeholder="เบอร์โทร"
+              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreatingNewCustomer(false);
+                setNewCustomerName("");
+                setNewCustomerPhone("");
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              ย้อนกลับไปค้นหาลูกค้า
+            </button>
+          </div>
+        ) : (
+          <>
+            <input
+              type="search"
+              value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+              placeholder="ค้นหาด้วยเบอร์โทรหรือชื่อ"
+              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+            />
+            {customerSearch.trim() && customerMatches.length > 0 && (
+              <div className="mt-2 border border-gray-200 rounded-xl bg-white divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                {customerMatches.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    onClick={() => {
+                      setCustomerId(c.id);
+                      setCustomerSearch("");
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-green-50"
+                  >
+                    <p className="font-medium text-gray-800">{c.name}</p>
+                    <p className="text-sm text-gray-500">{c.phone}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+            {customerSearch.trim() && customerMatches.length === 0 && (
+              <p className="mt-2 text-xs text-gray-500">ไม่พบลูกค้าที่ตรงกัน</p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreatingNewCustomer(true);
+                const digits = normalizePhone(customerSearch);
+                if (digits) setNewCustomerPhone(customerSearch);
+                else setNewCustomerName(customerSearch);
+              }}
+              className="mt-3 w-full border border-dashed border-green-500 text-green-700 hover:bg-green-50 font-semibold rounded-xl py-2.5"
+            >
+              + เพิ่มลูกค้าใหม่
+            </button>
+          </>
+        )}
+        <div className="mt-4">
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            ประเภทลูกค้า
+          </label>
+          <select
+            value={customerType}
+            onChange={(e) => setCustomerType(e.target.value)}
+            className="w-full rounded-xl border border-gray-300 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
+          >
+            {CUSTOMER_TYPES.map((t) => (
+              <option key={t.code} value={t.code}>
+                {t.nameTh}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
+
+      {/* 2 — Items */}
+      <section className={card}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-bold uppercase tracking-widest text-green-700">
+            2 • รายการรับซ่อม ({items.length})
+          </p>
+        </div>
+        <div className="space-y-3">
+          {items.map((it, idx) => (
+            <ItemCard
+              key={it.localId}
+              index={idx}
+              item={it}
+              catalog={catalog}
+              technicians={technicians}
+              canRemove={items.length > 1}
+              lineTotal={draftLineTotal(it)}
+              onPatch={(patch) => patchItem(it.localId, patch)}
+              onRemove={() => removeItem(it.localId)}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={addItem}
+          className="mt-3 w-full border border-dashed border-green-500 text-green-700 hover:bg-green-50 font-semibold rounded-xl py-2.5"
+        >
+          + เพิ่มรายการ
+        </button>
+      </section>
+
+      {/* 3 — Job ID */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          3 • Job ID
+        </p>
+        {businessType === "care_u" ? (
+          <input
+            type="text"
+            value={careUJobId}
+            onChange={(e) => setCareUJobId(e.target.value)}
+            placeholder="เช่น CARE-001"
+            maxLength={32}
+            className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
+          />
+        ) : (
+          <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
+            Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
+          </p>
+        )}
+      </section>
+
+      {/* 4 — Summary */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          4 • สรุปยอด
+        </p>
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm space-y-1.5">
+          <div className="flex justify-between">
+            <span className="text-gray-600">ยอดรวมรายการ</span>
+            <span className="text-gray-800">{formatCurrency(subtotal)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-600">คิวงานด่วน</span>
+            <span className="text-gray-800">{formatCurrency(urgentTotal)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-gray-600">ส่วนลด</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={discountInput}
+              onChange={(e) => setDiscountInput(e.target.value)}
+              placeholder="0"
+              className="w-28 rounded-lg border border-gray-300 p-1.5 text-right text-sm outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+          <div className="flex justify-between items-center pt-1 border-t border-gray-200">
+            <span className="text-gray-700 font-medium">ยอดรวมสุทธิ</span>
+            <span className="text-2xl font-bold text-green-700">
+              {formatCurrency(grandTotal)}
+            </span>
+          </div>
+        </div>
+        <textarea
+          value={orderNote}
+          onChange={(e) => setOrderNote(e.target.value)}
+          rows={2}
+          placeholder="บันทึกภายในร้าน (ทั้งใบงาน)"
+          className="mt-3 w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+        />
+      </section>
+
+      <button
+        onClick={() => void handleSubmit()}
+        disabled={isSubmitting}
+        className="w-full bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white font-semibold py-3.5 rounded-xl shadow-sm"
+      >
+        {isSubmitting ? "กำลังบันทึก..." : "บันทึกใบงาน"}
+      </button>
+    </div>
+  );
+}
+
+// ---------- Item card -------------------------------------------------------
+
+function ItemCard({
+  index,
+  item,
+  catalog,
+  technicians,
+  canRemove,
+  lineTotal,
+  onPatch,
+  onRemove,
+}: {
+  index: number;
+  item: DraftItem;
+  catalog: ServiceItem[];
+  technicians: TechnicianProfile[];
+  canRemove: boolean;
+  lineTotal: number;
+  onPatch: (patch: Partial<DraftItem>) => void;
+  onRemove: () => void;
+}) {
+  const filtered = catalog.filter(
+    (s) => !item.category || s.category === item.category
+  );
+  const isOther = item.serviceCode === OTHER_CODE;
+
+  const onSelectService = (code: string) => {
+    const svc = catalog.find((s) => s.code === code);
+    onPatch({
+      serviceCode: code,
+      detail: svc?.templateTh ?? item.detail,
+      unitPrice:
+        svc && svc.basePrice !== null ? String(svc.basePrice) : item.unitPrice,
+    });
+  };
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-bold text-gray-700">
+          รายการที่ {index + 1}
+        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-bold text-green-700">
+            {formatCurrency(lineTotal)}
+          </span>
+          {canRemove && (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="text-xs font-semibold text-red-600 hover:text-red-700"
+            >
+              ลบ
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <select
+          value={item.category}
+          onChange={(e) =>
+            onPatch({
+              category: e.target.value as ServiceCategoryKey | "",
+              serviceCode: "",
+            })
+          }
+          className="rounded-lg border border-gray-300 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        >
+          <option value="">ทุกหมวด</option>
+          {SERVICE_CATEGORIES.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.labelTh}
+            </option>
+          ))}
+        </select>
+        <select
+          value={item.serviceCode}
+          onChange={(e) => onSelectService(e.target.value)}
+          className="rounded-lg border border-gray-300 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        >
+          <option value="">เลือกบริการ</option>
+          {filtered.map((s) => (
+            <option key={s.code} value={s.code}>
+              {s.nameTh}
+              {s.basePrice === null ? " • ประเมินราคา" : ` • ฿${s.basePrice}`}
+            </option>
+          ))}
+          <option value={OTHER_CODE}>อื่นๆ — ระบุบริการเอง</option>
+        </select>
+      </div>
+
+      {isOther && (
+        <input
+          type="text"
+          value={item.customName}
+          onChange={(e) => onPatch({ customName: e.target.value })}
+          placeholder="ชื่อบริการ (พิมพ์เอง)"
+          className="mt-2 w-full rounded-lg border border-green-300 bg-green-50/40 p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        />
+      )}
+
+      <textarea
+        value={item.detail}
+        onChange={(e) => onPatch({ detail: e.target.value })}
+        rows={2}
+        placeholder="รายละเอียดงาน"
+        className="mt-2 w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+      />
+
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <LabeledField label="ราคา/หน่วย">
+          <input
+            type="number"
+            inputMode="decimal"
+            value={item.unitPrice}
+            onChange={(e) => onPatch({ unitPrice: e.target.value })}
+            placeholder="0"
+            className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </LabeledField>
+        <LabeledField label="จำนวน">
+          <input
+            type="number"
+            inputMode="numeric"
+            value={item.quantity}
+            onChange={(e) => onPatch({ quantity: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </LabeledField>
+        <LabeledField label="กำหนดรับ">
+          <input
+            type="date"
+            value={item.dueDate}
+            onChange={(e) => onPatch({ dueDate: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </LabeledField>
+        <LabeledField label="ช่าง">
+          <select
+            value={item.technicianId}
+            onChange={(e) => onPatch({ technicianId: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 bg-white p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          >
+            <option value="">— ยังไม่ระบุ —</option>
+            {technicians.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.display_name}
+              </option>
+            ))}
+          </select>
+        </LabeledField>
+      </div>
+
+      <label className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-yellow-50 border border-yellow-200 px-3 py-2">
+        <span className="text-sm font-medium text-gray-800">
+          คิวงานด่วน +{Math.max(0, Number(item.urgentFee) || 0)}
+        </span>
+        <input
+          type="checkbox"
+          checked={item.urgent}
+          onChange={(e) => onPatch({ urgent: e.target.checked })}
+          className="w-5 h-5 accent-green-700"
+        />
+      </label>
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <input
+          type="text"
+          value={item.customerNote}
+          onChange={(e) => onPatch({ customerNote: e.target.value })}
+          placeholder="หมายเหตุจากลูกค้า"
+          className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <input
+          type="text"
+          value={item.technicianNote}
+          onChange={(e) => onPatch({ technicianNote: e.target.value })}
+          placeholder="โน้ตถึงช่าง (ภายใน)"
+          className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        />
+      </div>
+    </div>
+  );
+}
+
+function LabeledField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="block text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+export default IntakeOrderForm;
