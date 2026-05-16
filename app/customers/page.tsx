@@ -7,6 +7,7 @@ import { t } from "@/lib/translations";
 import { Table } from "@/components/Table";
 import { Modal } from "@/components/Modal";
 import { CustomerHistoryModal } from "@/components/CustomerHistoryModal";
+import { UnmatchedOrdersModal } from "@/components/UnmatchedOrdersModal";
 import { Customer } from "@/types";
 import { formatDate, formatCurrency, formatPhoneNumber } from "@/lib/utils";
 import {
@@ -112,6 +113,7 @@ export default function CustomersPage() {
   const [importPreview, setImportPreview] = useState<ParsedCustomerRow[]>([]);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
+  const [resolverOpen, setResolverOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [statsByCustomer, setStatsByCustomer] = useState<
@@ -784,10 +786,19 @@ export default function CustomersPage() {
       )}
 
       {statsMeta.unmatchedOrders > 0 && (
-        <div className="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-          {language === "th"
-            ? `มี ${statsMeta.unmatchedOrders} จาก ${statsMeta.totalOrders} ใบงานที่ยังจับคู่กับลูกค้าไม่ได้ (customer_id ขาดและชื่อไม่ตรง) — ใบงานเหล่านี้จะไม่ถูกนับใน "ครั้ง / จำนวนเงินที่ใช้ไป"`
-            : `${statsMeta.unmatchedOrders} of ${statsMeta.totalOrders} orders could not be linked to a customer (missing customer_id and name mismatch) — they are excluded from visits/spend totals.`}
+        <div className="mb-4 flex flex-col gap-2 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            {language === "th"
+              ? `มี ${statsMeta.unmatchedOrders} จาก ${statsMeta.totalOrders} ใบงานที่ยังจับคู่กับลูกค้าไม่ได้ — ใบงานเหล่านี้จะไม่ถูกนับใน "ครั้ง / จำนวนเงินที่ใช้ไป"`
+              : `${statsMeta.unmatchedOrders} of ${statsMeta.totalOrders} orders could not be linked to a customer — excluded from visits/spend totals.`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setResolverOpen(true)}
+            className="shrink-0 rounded-lg bg-yellow-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-yellow-700"
+          >
+            {language === "th" ? "จับคู่ใบงาน" : "Resolve"}
+          </button>
         </div>
       )}
 
@@ -944,6 +955,17 @@ export default function CustomersPage() {
         customerName={historyCustomer?.name ?? ""}
         customerPhone={historyCustomer?.phone}
         onClose={() => setHistoryCustomer(null)}
+      />
+
+      <UnmatchedOrdersModal
+        isOpen={resolverOpen}
+        customers={customers.map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+        }))}
+        onClose={() => setResolverOpen(false)}
+        onResolved={() => void fetchCustomerStats(customers)}
       />
     </div>
   );

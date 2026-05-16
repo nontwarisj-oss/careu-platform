@@ -59,7 +59,7 @@ const PRICING_COLUMNS =
   "id, service_code, category, business_type, display_name, description, base_price, pricing_type, urgent_fee_default, is_active, sort_order, branch_id, brand_id, effective_from, effective_to, created_at, created_by, updated_at, updated_by";
 
 export type PricingFetchResult = {
-  /** Merged catalog ready for the UI / SmartOrderForm. */
+  /** Merged catalog ready for the UI / IntakeOrderForm. */
   services: ServiceItem[];
   /** Raw DB rows for the /pricing admin page (includes inactive + future). */
   rows: ServicePriceRow[];
