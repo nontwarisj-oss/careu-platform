@@ -124,6 +124,8 @@ export async function POST(req: Request) {
   }
 
   // ---- Execute ----------------------------------------------------------
+  const moved: Record<string, number> = {};
+
   // 1. Reassign every order to the survivor.
   if (orderIds.length > 0) {
     const upd = await admin
@@ -137,8 +139,42 @@ export async function POST(req: Request) {
       );
     }
   }
+  moved.orders = orderIds.length;
 
-  // 2. Audit each reassigned order (best-effort).
+  // 2. Reassign the customer-keyed child tables (activity, notifications,
+  //    staff notes). Best-effort + future-safe: a missing table/column
+  //    (under-migrated DB, or one not yet built) is skipped, never fatal.
+  //    Invoices / payments / receipts are not separate tables in this
+  //    platform — they are the order itself, already moved in step 1.
+  const CHILD_TABLES = [
+    "customer_activity",
+    "customer_notifications",
+    "customer_notes",
+  ] as const;
+  for (const table of CHILD_TABLES) {
+    const res = await admin
+      .from(table)
+      .update({ customer_id: survivorId })
+      .eq("customer_id", duplicateId)
+      .select("id");
+    if (res.error) {
+      if (
+        !/relation .* does not exist|column .* does not exist|schema cache/i.test(
+          res.error.message
+        )
+      ) {
+        return NextResponse.json(
+          { ok: false, reason: `ย้าย ${table} ไม่สำเร็จ: ${res.error.message}` },
+          { status: 500 }
+        );
+      }
+      // Table/column absent on this DB — skip.
+    } else {
+      moved[table] = (res.data ?? []).length;
+    }
+  }
+
+  // 3. Audit each reassigned order (best-effort) — per-ticket trail.
   if (orderIds.length > 0) {
     const auditRows = orderIds.map((id) => ({
       order_id: id,
@@ -158,7 +194,25 @@ export async function POST(req: Request) {
     }
   }
 
-  // 3. Remove the duplicate. If an FK blocks the delete, neutralise it
+  // 4. Durable merge log — a note on the SURVIVOR recording the merge.
+  //    customer_notes is the customer-scoped trail; this keeps the merge
+  //    auditable from the customer's own history forever.
+  const movedSummary = Object.entries(moved)
+    .filter(([, n]) => n > 0)
+    .map(([t, n]) => `${t}:${n}`)
+    .join(", ");
+  await admin.from("customer_notes").insert({
+    customer_id: survivorId,
+    body:
+      `รวมลูกค้าซ้ำ — ดึงประวัติจาก "${duplicate.name}" ` +
+      `(id ${duplicateId.slice(0, 8)}) เมื่อ ${new Date().toLocaleString(
+        "th-TH"
+      )}` +
+      (movedSummary ? ` · ย้าย ${movedSummary}` : ""),
+    created_by: profile.id ?? null,
+  });
+
+  // 5. Remove the duplicate. If an FK blocks the delete, neutralise it
   //    so it no longer surfaces as a duplicate.
   let duplicateRemoved = true;
   const del = await admin.from("customers").delete().eq("id", duplicateId);
@@ -177,6 +231,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     ordersMoved: orderIds.length,
+    moved,
     duplicateRemoved,
     survivorId,
   });

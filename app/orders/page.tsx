@@ -17,7 +17,12 @@ import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { OrderDetailModal } from "@/components/OrderDetailModal";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/StatusBadge";
-import { ORDER_OPS_FLOW, orderStatusLabel, isOverdue } from "@/lib/statusBadges";
+import {
+  ORDER_OPS_FLOW,
+  orderStatusLabel,
+  isOverdue,
+  nextOrderStatus,
+} from "@/lib/statusBadges";
 import { getBranchById, branches as ALL_BRANCHES } from "@/lib/brandConfig";
 import { fetchOrderItemsForOrders } from "@/lib/orderItems";
 import { useAuth } from "@/lib/authContext";
@@ -467,6 +472,7 @@ function OrderCard({
 }) {
   const overdue = isOverdue(order.status, order.due_date);
   const dueToday = order.due_date === today;
+  const next = nextOrderStatus(order.status);
   const branch = order.branch_id ? getBranchById(order.branch_id) : null;
   const techLabel =
     order.technicianIds.length === 0
@@ -529,37 +535,49 @@ function OrderCard({
         <PaymentStatusBadge status={order.payment_status} size="sm" />
       </div>
 
-      {/* Actions */}
+      {/* Actions — one-tap advance for the happy path, dropdown for the
+          rest. Big tap targets for tablet front-counter use. */}
       <div
-        className="mt-3 flex items-center justify-between gap-2"
+        className="mt-3 space-y-2"
         onClick={(e) => e.stopPropagation()}
       >
-        <select
-          value={order.status}
-          onChange={(e) => onStatusChange(e.target.value)}
-          aria-label="เปลี่ยนสถานะ"
-          className="min-h-[40px] rounded-lg border border-gray-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
-        >
-          {ORDER_OPS_FLOW.map((s) => (
-            <option key={s} value={s}>
-              {orderStatusLabel(s)}
-            </option>
-          ))}
-          {!ORDER_OPS_FLOW.includes(
-            order.status as (typeof ORDER_OPS_FLOW)[number]
-          ) && (
-            <option value={order.status}>
-              {orderStatusLabel(order.status)}
-            </option>
-          )}
-        </select>
-        <Link
-          href={`/orders/${order.id}/document`}
-          onClick={(e) => e.stopPropagation()}
-          className="shrink-0 text-sm font-medium text-green-700 hover:text-green-800"
-        >
-          เอกสาร →
-        </Link>
+        {next && (
+          <button
+            type="button"
+            onClick={() => onStatusChange(next)}
+            className="min-h-[44px] w-full rounded-lg bg-green-700 px-3 text-sm font-semibold text-white hover:bg-green-800"
+          >
+            → {orderStatusLabel(next)}
+          </button>
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <select
+            value={order.status}
+            onChange={(e) => onStatusChange(e.target.value)}
+            aria-label="เปลี่ยนสถานะ"
+            className="min-h-[44px] rounded-lg border border-gray-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          >
+            {ORDER_OPS_FLOW.map((s) => (
+              <option key={s} value={s}>
+                {orderStatusLabel(s)}
+              </option>
+            ))}
+            {!ORDER_OPS_FLOW.includes(
+              order.status as (typeof ORDER_OPS_FLOW)[number]
+            ) && (
+              <option value={order.status}>
+                {orderStatusLabel(order.status)}
+              </option>
+            )}
+          </select>
+          <Link
+            href={`/orders/${order.id}/document`}
+            onClick={(e) => e.stopPropagation()}
+            className="shrink-0 text-sm font-medium text-green-700 hover:text-green-800"
+          >
+            เอกสาร →
+          </Link>
+        </div>
       </div>
     </div>
   );

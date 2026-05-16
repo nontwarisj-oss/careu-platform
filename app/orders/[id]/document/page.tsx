@@ -15,6 +15,7 @@ import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { useAuth } from "@/lib/authContext";
 import { buildReceiptData, type ReceiptData } from "@/lib/receiptData";
 import { fetchOrderItems, type OrderItemRow } from "@/lib/orderItems";
+import { OrderPhotoGallery } from "@/components/OrderPhotoGallery";
 import {
   printReceipt,
   saveReceiptAsImage,
@@ -451,6 +452,9 @@ export default function OrderDocumentPage({
 
         {/* Internal staff controls — never printed */}
         <div className="mt-4 space-y-4 print:hidden">
+          {/* Order-wide repair photo gallery */}
+          <OrderPhotoGallery items={orderItems} />
+
           {/* Cost panel */}
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             <div className="flex items-start justify-between gap-3 mb-3">

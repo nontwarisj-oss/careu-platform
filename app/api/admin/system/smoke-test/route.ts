@@ -27,7 +27,14 @@ type CheckResult = {
   name: string;
   status: "ok" | "warn" | "missing" | "error";
   message: string;
-  category: "config" | "db" | "workers" | "broadcast" | "security" | "public";
+  category:
+    | "config"
+    | "db"
+    | "workers"
+    | "broadcast"
+    | "security"
+    | "public"
+    | "ops";
   detail?: Record<string, unknown>;
 };
 
@@ -490,6 +497,87 @@ export async function GET() {
       );
     } catch (err) {
       checks.push(errorRes("public_quote_pipeline", err instanceof Error ? err.message : String(err), "public"));
+    }
+
+    // ----- Store-ops operational validation -----
+    // Multi-item intake: how many order_items rows back the orders.
+    try {
+      const r = await admin
+        .from("order_items")
+        .select("id", { count: "exact", head: true });
+      checks.push(
+        ok("ops_multi_item", `${r.count ?? 0} order item(s) recorded`, "ops")
+      );
+    } catch (err) {
+      checks.push(errorRes("ops_multi_item", err instanceof Error ? err.message : String(err), "ops"));
+    }
+
+    // Urgent-fee integrity: an order flagged urgent should carry a fee.
+    try {
+      const r = await admin
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .eq("urgent", true)
+        .or("urgent_fee.is.null,urgent_fee.eq.0");
+      const cnt = r.count ?? 0;
+      checks.push(
+        cnt === 0
+          ? ok("ops_urgent_fee", "every urgent order carries an urgent fee", "ops")
+          : warn(
+              "ops_urgent_fee",
+              `${cnt} urgent order(s) have no urgent fee — review`,
+              "ops"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("ops_urgent_fee", err instanceof Error ? err.message : String(err), "ops"));
+    }
+
+    // Unlinked orders: customer_id NULL → excluded from visits/spend.
+    try {
+      const r = await admin
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .is("customer_id", null);
+      const cnt = r.count ?? 0;
+      checks.push(
+        cnt === 0
+          ? ok("ops_unlinked_orders", "every order is linked to a customer", "ops")
+          : warn(
+              "ops_unlinked_orders",
+              `${cnt} order(s) not linked to a customer — use the /customers resolver`,
+              "ops"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("ops_unlinked_orders", err instanceof Error ? err.message : String(err), "ops"));
+    }
+
+    // Duplicate-customer signal: customers sharing a normalized phone.
+    try {
+      const r = await admin
+        .from("customers")
+        .select("normalized_phone")
+        .not("normalized_phone", "is", null)
+        .limit(5000);
+      const seen = new Set<string>();
+      const dups = new Set<string>();
+      for (const row of (r.data ?? []) as Array<{ normalized_phone: string }>) {
+        const p = row.normalized_phone;
+        if (seen.has(p)) dups.add(p);
+        else seen.add(p);
+      }
+      checks.push(
+        dups.size === 0
+          ? ok("ops_duplicate_customers", "no customers share a phone number", "ops")
+          : warn(
+              "ops_duplicate_customers",
+              `${dups.size} phone number(s) shared by multiple customers — use the merge tool`,
+              "ops"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("ops_duplicate_customers", err instanceof Error ? err.message : String(err), "ops"));
     }
   } else {
     checks.push(

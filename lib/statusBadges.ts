@@ -159,6 +159,29 @@ export const ORDER_OPS_FLOW: OrderStatus[] = [
   "cancelled",
 ];
 
+/**
+ * The single forward step for a one-tap "advance" on the operations
+ * board. The happy path is pending → in-progress → completed →
+ * ready-for-pickup → delivered; the side states (waiting_parts,
+ * outsource) rejoin at in-progress. Terminal states return null.
+ * Non-linear moves (cancel, send to outsource) still use the full
+ * status dropdown.
+ */
+const NEXT_STATUS: Record<string, OrderStatus | null> = {
+  pending: "in-progress",
+  "in-progress": "completed",
+  waiting_parts: "in-progress",
+  outsource: "in-progress",
+  completed: "ready-for-pickup",
+  "ready-for-pickup": "delivered",
+  delivered: null,
+  cancelled: null,
+};
+
+export function nextOrderStatus(status: string): OrderStatus | null {
+  return NEXT_STATUS[status] ?? null;
+}
+
 export function orderStatusLabel(
   status: string,
   language: "th" | "en" = "th"

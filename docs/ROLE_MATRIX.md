@@ -369,7 +369,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-16 | Store Ops Hardening — per-item image workflow. `OrderItemImages` captures repair photos per garment (intake + post-repair) into `order_items.image_paths`. New auth'd routes `/api/admin/upload-url` + `/api/admin/order-images` (owner/HQ/branch_manager/front_staff/technician) reuse the existing signed-URL storage pipeline. Tablet/mobile camera capture + preview. No migration. | owner · hq_admin · branch_manager · front_staff · technician (operator photo upload) |
 | 2026-05-16 | Store Ops Hardening — operations board refinement. `/orders` board gains a QC queue (`completed` = repaired, awaiting check) and branch filtering: owner/HQ pick any branch, branch-locked roles are pinned to their own branch (board branch-isolation). No migration. | branch-locked roles see only their branch on `/orders` |
 | 2026-05-16 | Store Ops Hardening — duplicate customer merge. `/customers` "รวมลูกค้าซ้ำ" (owner/HQ only) folds a duplicate into a survivor: `POST /api/admin/customers/merge` reassigns every `orders.customer_id`, audits each via `order_audit_log` (`customer_merged`), then deletes the duplicate (neutralised if an FK blocks). Preview (dry run) before execute. No migration. | `/api/admin/customers/merge` — **owner · hq_admin** only |
+| 2026-05-16 | Store Ops Hardening (final) — cross-table merge now also moves `customer_activity` / `customer_notifications` / `customer_notes` + writes a durable merge-log note on the survivor. Order-level photo gallery on the document page. One-tap status advance on the operations board. `/admin/system/smoke-test` gains a "Store operations" check category; `docs/OPERATIONAL_REGRESSION.md` checklist added. No migration, no role-matrix change. | — |
 
 ---
 
-**Last updated:** 2026-05-16 (Store Ops Hardening — duplicate customer merge)
+**Last updated:** 2026-05-16 (Store Ops Hardening — final QA + integrity)

@@ -22,7 +22,14 @@ type Check = {
   name: string;
   status: CheckStatus;
   message: string;
-  category: "config" | "db" | "workers" | "broadcast" | "security" | "public";
+  category:
+    | "config"
+    | "db"
+    | "workers"
+    | "broadcast"
+    | "security"
+    | "public"
+    | "ops";
   detail?: Record<string, unknown>;
 };
 
@@ -48,6 +55,7 @@ const CATEGORY_LABEL: Record<Check["category"], string> = {
   broadcast: "Broadcast pipeline",
   security: "Security",
   public: "Public website",
+  ops: "Store operations",
 };
 
 const STATUS_TONE: Record<CheckStatus, string> = {
