@@ -16,10 +16,8 @@
 
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/supabaseAuth";
-import {
-  refreshBranchCustomerTiers,
-  refreshCustomerTier,
-} from "@/lib/customerTierService";
+import { refreshCustomerTier } from "@/lib/customerTierService";
+import { recalcCustomerStats } from "@/lib/customerRecalc";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -68,8 +66,9 @@ export async function POST(req: Request) {
     branchCode = body.branchCode ?? null;
   }
 
-  const summary = await refreshBranchCustomerTiers(branchCode, {
-    limit: body.limit,
-  });
-  return NextResponse.json({ ok: true, ...summary, scopedBranch: branchCode });
+  // Batch path — recalcCustomerStats recomputes visits + spend + tier with
+  // the robust order matcher (id → phone → name) and excludes cancelled
+  // orders, so long-standing customers are no longer mis-classified "new".
+  const summary = await recalcCustomerStats(branchCode, { limit: body.limit });
+  return NextResponse.json({ ...summary, scopedBranch: branchCode });
 }

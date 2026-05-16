@@ -15,6 +15,7 @@ import {
   type ParsedCustomerRow,
 } from "@/lib/customerImport";
 import { aggregateOrdersToCustomers } from "@/lib/customerStats";
+import { normalizePhone } from "@/lib/phone";
 import { useRole } from "@/lib/roleContext";
 import { canManageStaff } from "@/lib/permissions";
 import type { CustomerTier } from "@/lib/customerTierService";
@@ -181,33 +182,49 @@ export default function CustomersPage() {
 
   const fetchCustomerStats = useCallback(
     async (currentCustomers: Customer[]) => {
-      // Try the wide projection first (service_name lives there post smart-
-      // order migration); fall back to the legacy projection if columns are
-      // missing so old databases still aggregate correctly.
-      const wide = await supabase
-        .from("orders")
-        .select("customer_id, customer_name, price, created_at, service_name, item_name");
-      let rows: Array<{
+      type OrderStatRow = {
         customer_id: string | null;
         customer_name: string | null;
         price: number | string | null;
+        status?: string | null;
         created_at: string;
         service_name?: string | null;
         item_name?: string | null;
-      }> = [];
-      if (!wide.error) {
-        rows = (wide.data ?? []) as typeof rows;
-      } else {
-        const narrow = await supabase
+      };
+
+      // Paginate — Supabase caps a single select at ~1000 rows. A busy shop
+      // has far more orders than that; reading only the first page would
+      // undercount visits + spend and make long-time customers look "new".
+      // Try the wide projection first (service_name lives there post smart-
+      // order migration); fall back to the legacy projection if missing.
+      const PAGE = 1000;
+      let wideColumns = true;
+      const rows: OrderStatRow[] = [];
+      for (let from = 0; from < 500000; from += PAGE) {
+        const cols = wideColumns
+          ? "customer_id, customer_name, price, status, created_at, service_name, item_name"
+          : "customer_id, customer_name, price, status, created_at";
+        const res = await supabase
           .from("orders")
-          .select("customer_id, customer_name, price, created_at");
-        if (narrow.error) {
-          setStatsError(narrow.error.message);
+          .select(cols)
+          .order("created_at", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (res.error) {
+          // Wide projection unsupported on an older DB — retry narrow once,
+          // only while still on the first page so no rows are double-read.
+          if (wideColumns && rows.length === 0) {
+            wideColumns = false;
+            from -= PAGE; // re-read this page with the narrow projection
+            continue;
+          }
+          setStatsError(res.error.message);
           setStatsByCustomer({});
           setStatsMeta({ unmatchedOrders: 0, totalOrders: 0 });
           return;
         }
-        rows = (narrow.data ?? []) as typeof rows;
+        const batch = (res.data ?? []) as unknown as OrderStatRow[];
+        rows.push(...batch);
+        if (batch.length < PAGE) break;
       }
 
       setStatsError(null);
@@ -222,6 +239,9 @@ export default function CustomersPage() {
           customer_id: r.customer_id,
           customer_name: r.customer_name,
           price: Number(r.price ?? 0),
+          // status lets the aggregator drop cancelled orders from
+          // visits + spend totals.
+          status: r.status ?? null,
           created_at: r.created_at,
           service_name: r.service_name ?? null,
           item_name: r.item_name ?? null,
@@ -279,6 +299,8 @@ export default function CustomersPage() {
       branch_id: firstBranch.id,
       name: formData.name.trim(),
       phone: formData.phone.trim(),
+      // Canonical phone — keeps search + visit/spend matching reliable.
+      normalized_phone: normalizePhone(formData.phone),
       email: formData.email.trim() || "N/A",
       address: formData.address.trim() || "N/A",
       notes: null,

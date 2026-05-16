@@ -225,7 +225,10 @@ This pattern existed for Front_Desk and Pricing before this refactor and was the
 - Response surfaces `appended` count + target tab in a Thai toast.
 
 ### 7.3 Customer import
-- `/customers` → "ซิงค์จาก Google Sheet" → reads `Data_Center` via gviz CSV, dedups by `normalized_phone`, returns `{ inserted, matchedExisting, skipped, totalRows }`.
+- **Manual:** `/customers` → "ซิงค์จาก Google Sheet" → POST `/api/sync-customers`.
+- **Automatic:** the `sync-customers` cron (`/api/cron/sync-customers`, hourly) runs the same import + then a visit/spend recalc — operators no longer need to click repeatedly.
+- Both routes share `lib/customerSheetSync.ts::syncCustomersFromSheet` → reads `Data_Center` via gviz CSV, dedups by canonical phone, **only INSERTs** new rows (existing customers' stats are never overwritten by a sync). Returns `{ inserted, matchedExisting, skipped, totalRows }`.
+- The hourly cron also calls `lib/customerRecalc.ts::recalcCustomerStats` — recomputes `total_orders` / `lifetime_spend` / `last_visit_at` / `customer_tier` from the order history using the robust `id → phone → name` matcher, with cancelled orders excluded. The `/customers` "Refresh tier" button triggers the same recalc on demand.
 
 ### 7.4 Expense import
 - `/expenses` → "ซิงค์ Expense_Log" → reads the Expense_Log tab, validates header row, upserts into `public.expense_log`.
@@ -315,4 +318,4 @@ If `findRowByColumnValue` throws (auth glitch, rate limit, sheet renamed), the w
 
 ---
 
-**Last updated:** 2026-05-14 (cron retry job wired — `/api/cron/retry-worker` + `CRON_SECRET`)
+**Last updated:** 2026-05-16 (bug-fix phase — hourly `sync-customers` cron + visit/spend recalc)

@@ -36,7 +36,8 @@ export type CronName =
   | "comm-performance-aggregate"
   | "worker-maintenance"
   | "operator-digest"
-  | "webhook-retry";
+  | "webhook-retry"
+  | "sync-customers";
 
 export type HeartbeatPayload = {
   rowsProcessed?: number;

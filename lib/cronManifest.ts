@@ -107,6 +107,14 @@ export const CRON_MANIFEST: CronManifestEntry[] = [
     description:
       "Re-applies failed provider webhooks from webhook_retry_queue.",
   },
+  {
+    cronName: "sync-customers",
+    path: "/api/cron/sync-customers",
+    schedule: "0 * * * *",
+    intervalMinutes: 60,
+    description:
+      "Hourly customer import from the Data_Center sheet + visit/spend recalc.",
+  },
 ];
 
 /** Look up a manifest entry by cron name. */

@@ -233,9 +233,14 @@ export type BranchRefreshResult = {
 
 /**
  * Recompute tiers for every customer in a branch (or all branches when
- * branchCode is null). Hard cap of 2000 customers per call — the foundation
- * never needs to refresh more than that in one tick; a cron job can chunk
- * larger workloads. Returns counts so the admin UI can render a summary.
+ * branchCode is null). Hard cap of 2000 customers per call.
+ *
+ * DEPRECATED (bug-fix phase): this batch path matched orders by
+ * customer_id ONLY, so customers whose legacy/sheet-imported orders lost
+ * their customer_id were stored with 0 orders and mis-tiered. The admin
+ * refresh route + the hourly cron now call `recalcCustomerStats`
+ * (lib/customerRecalc.ts), which uses the robust id → phone → name
+ * matcher and excludes cancelled orders. Kept only as a fallback.
  */
 export async function refreshBranchCustomerTiers(
   branchCode: string | null,

@@ -20,12 +20,16 @@ export const formatCurrency = (amount: number): string => {
   })}`;
 };
 
+import { normalizePhone } from "@/lib/phone";
+
 export const formatPhoneNumber = (phone: string): string => {
-  // Basic Thai phone format
+  // Basic Thai phone format. Normalize FIRST so a number that lost its
+  // leading zero in a spreadsheet import ("812345678") still displays
+  // correctly as "081-234-5678" instead of the broken 9-digit form.
   if (!phone) return "";
-  const cleaned = phone.replace(/\D/g, "");
-  if (cleaned.length === 10) {
-    return `${cleaned.substring(0, 3)}-${cleaned.substring(3, 6)}-${cleaned.substring(6)}`;
+  const normalized = normalizePhone(phone);
+  if (/^0\d{9}$/.test(normalized)) {
+    return `${normalized.slice(0, 3)}-${normalized.slice(3, 6)}-${normalized.slice(6)}`;
   }
-  return phone;
+  return normalized || phone;
 };

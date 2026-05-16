@@ -49,3 +49,24 @@ export function samePhone(
   const nb = normalizePhone(b);
   return na.length > 0 && na === nb;
 }
+
+/**
+ * Display form of a phone number — always with the leading zero.
+ *
+ * Excel / Google Sheets coerce phone columns into numbers and drop the
+ * leading zero ("0812345678" → "812345678"). Raw values are stored as
+ * imported, so any screen that shows `customers.phone` directly would
+ * render the broken 9-digit form. Run the raw value through this before
+ * displaying it: a recognizable Thai number is canonicalised to
+ * "0XXXXXXXXX"; anything unrecognized is returned untouched so no
+ * information is lost.
+ */
+export function formatPhoneDisplay(value: string | null | undefined): string {
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  const normalized = normalizePhone(raw);
+  // Canonical Thai local number: 10 digits starting with 0 (mobile) or a
+  // 9-digit Bangkok landline that normalizePhone padded to 10.
+  if (/^0\d{8,9}$/.test(normalized)) return normalized;
+  return raw;
+}

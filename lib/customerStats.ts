@@ -3,27 +3,43 @@
 // imported sheet duplicates leave orphan references behind) AND whose stored
 // customer_name has minor whitespace/punctuation differences.
 //
-// Strategy: build five lookup indexes (id, normalized phone, exact lower name,
-// simple name with all whitespace + punctuation stripped, name with embedded
-// phone digits) and try them in order for every order. The first match wins.
+// Strategy: build lookup indexes (id, normalized phone, exact lower name,
+// simple name with whitespace + punctuation stripped) and try them in order
+// for every order. The first match wins.
 //
-// `orders` does not carry a phone column, so phone fallback only fires when
-// the order's `customer_name` cell happens to contain phone digits (a common
-// shape in the legacy Google Sheet rows like "John Smith 081-234-5678").
+// Match order (bug-fix phase — phone first, then name fallback):
+//   1. order.customer_id  — the real FK, strongest signal.
+//   2. normalized phone digits embedded in order.customer_name — legacy
+//      Google-Sheet rows like "John Smith 081-234-5678".
+//   3. exact lowercased customer_name.
+//   4. simpleName (whitespace + punctuation stripped) — "Mr. John Smith "
+//      vs "John Smith".
+//
+// Cancelled / invalid orders are excluded from visit + spend totals so a
+// voided ticket never inflates a customer's history.
 
 import { normalizePhone } from "@/lib/phone";
+
+/** Order statuses that must NEVER count toward visits or spend. */
+export const EXCLUDED_ORDER_STATUSES = ["cancelled"] as const;
 
 export type CustomerStats = {
   orderCount: number;
   totalSpent: number;
   latestDate: string | null;
   latestService: string | null;
+  /** Branch slug where the customer placed the most orders. */
+  primaryBranchId: string | null;
 };
 
 export type CustomerLite = {
   id: string;
   name: string;
   phone: string;
+  /** Optional precomputed normalized phone (customers.normalized_phone). */
+  normalizedPhone?: string | null;
+  /** Optional precomputed normalized name (customers.normalized_name). */
+  normalizedName?: string | null;
 };
 
 export type OrderLite = {
@@ -36,12 +52,23 @@ export type OrderLite = {
   created_at: string;
   service_name?: string | null;
   item_name?: string | null;
+  /** orders.status — used to drop cancelled/invalid tickets. */
+  status?: string | null;
+  /** orders.branch_id — used to derive the customer's primary branch. */
+  branch_id?: string | null;
+};
+
+export type AggregateOptions = {
+  /** Statuses excluded from totals. Defaults to EXCLUDED_ORDER_STATUSES. */
+  excludeStatuses?: readonly string[];
 };
 
 export type AggregationResult = {
   stats: Record<string, CustomerStats>;
   unmatchedOrders: number;
   totalOrders: number;
+  /** Orders dropped because their status was excluded (cancelled etc.). */
+  excludedOrders: number;
 };
 
 function emptyStats(): CustomerStats {
@@ -50,6 +77,7 @@ function emptyStats(): CustomerStats {
     totalSpent: 0,
     latestDate: null,
     latestService: null,
+    primaryBranchId: null,
   };
 }
 
@@ -61,25 +89,30 @@ function simpleName(value: string | null | undefined): string {
 }
 
 /**
- * Build a `customerId → CustomerStats` map. Aggregation rules:
- *   - Match by `order.customer_id` first.
- *   - Then by exact lowercased+trimmed `customer_name`.
- *   - Then by `simpleName` (whitespace + punctuation stripped) — handles
- *     legacy rows like "Mr. John Smith " vs "John Smith".
- *   - Then by phone digits found inside `customer_name` — handles rows where
- *     the front-desk crammed phone into the name cell ("John 0812345678").
+ * Build a `customerId → CustomerStats` map.
+ *
  *   - `totalSpent` prefers `order.total` if present, else `order.price` (the
  *     post-discount net written by createSmartOrder).
  *   - `latestService` follows the newest order, preferring `service_name`
  *     before `item_name`.
+ *   - `primaryBranchId` is the branch slug carrying the most matched orders.
+ *   - Orders whose status is in `excludeStatuses` (cancelled by default) are
+ *     dropped before aggregation — they never inflate visits or spend.
  *
  * Returns `unmatchedOrders` so the UI can surface "N orders not linked yet"
  * instead of silently zeroing those customers out.
  */
 export function aggregateOrdersToCustomers(
   customers: CustomerLite[],
-  orders: OrderLite[]
+  orders: OrderLite[],
+  options: AggregateOptions = {}
 ): AggregationResult {
+  const excluded = new Set(
+    (options.excludeStatuses ?? EXCLUDED_ORDER_STATUSES).map((s) =>
+      s.toLowerCase()
+    )
+  );
+
   const byId = new Map<string, CustomerLite>();
   const byPhone = new Map<string, CustomerLite>();
   const byNameLower = new Map<string, CustomerLite>();
@@ -87,37 +120,50 @@ export function aggregateOrdersToCustomers(
 
   for (const c of customers) {
     byId.set(c.id, c);
-    const phone = normalizePhone(c.phone);
+    const phone =
+      (c.normalizedPhone && c.normalizedPhone.trim()) ||
+      normalizePhone(c.phone);
     if (phone && !byPhone.has(phone)) byPhone.set(phone, c);
     const nameLower = (c.name ?? "").trim().toLowerCase();
     if (nameLower && !byNameLower.has(nameLower)) byNameLower.set(nameLower, c);
-    const compact = simpleName(c.name);
+    const compact = simpleName(c.normalizedName || c.name);
     if (compact && !bySimpleName.has(compact)) bySimpleName.set(compact, c);
   }
 
   const stats: Record<string, CustomerStats> = {};
+  const branchTally: Record<string, Map<string, number>> = {};
   let unmatchedOrders = 0;
+  let excludedOrders = 0;
 
   for (const order of orders) {
+    // Drop cancelled / invalid tickets before they touch any total.
+    if (order.status && excluded.has(order.status.toLowerCase())) {
+      excludedOrders += 1;
+      continue;
+    }
+
     let target: CustomerLite | undefined;
 
+    // 1. The real FK.
     if (order.customer_id) {
       target = byId.get(order.customer_id);
     }
+    // 2. Phone digits embedded in the name cell (legacy sheet rows).
     if (!target && order.customer_name) {
-      const nameLower = order.customer_name.trim().toLowerCase();
-      if (nameLower) target = byNameLower.get(nameLower);
-    }
-    if (!target && order.customer_name) {
-      const compact = simpleName(order.customer_name);
-      if (compact) target = bySimpleName.get(compact);
-    }
-    if (!target && order.customer_name) {
-      // Phone digits embedded inside the name cell (legacy sheet rows).
       const embeddedPhone = normalizePhone(order.customer_name);
       if (embeddedPhone.length >= 9) {
         target = byPhone.get(embeddedPhone);
       }
+    }
+    // 3. Exact lowercased name.
+    if (!target && order.customer_name) {
+      const nameLower = order.customer_name.trim().toLowerCase();
+      if (nameLower) target = byNameLower.get(nameLower);
+    }
+    // 4. Simple-name fallback (whitespace + punctuation stripped).
+    if (!target && order.customer_name) {
+      const compact = simpleName(order.customer_name);
+      if (compact) target = bySimpleName.get(compact);
     }
     if (!target) {
       unmatchedOrders += 1;
@@ -142,8 +188,32 @@ export function aggregateOrdersToCustomers(
       cur.latestService =
         order.service_name ?? order.item_name ?? cur.latestService;
     }
+
+    if (order.branch_id) {
+      const tally = branchTally[target.id] ?? new Map<string, number>();
+      tally.set(order.branch_id, (tally.get(order.branch_id) ?? 0) + 1);
+      branchTally[target.id] = tally;
+    }
     stats[target.id] = cur;
   }
 
-  return { stats, unmatchedOrders, totalOrders: orders.length };
+  // Resolve primary branch per customer (most-frequent branch).
+  for (const [customerId, tally] of Object.entries(branchTally)) {
+    let topBranch: string | null = null;
+    let topCount = 0;
+    for (const [branch, count] of tally) {
+      if (count > topCount) {
+        topCount = count;
+        topBranch = branch;
+      }
+    }
+    if (stats[customerId]) stats[customerId].primaryBranchId = topBranch;
+  }
+
+  return {
+    stats,
+    unmatchedOrders,
+    totalOrders: orders.length,
+    excludedOrders,
+  };
 }

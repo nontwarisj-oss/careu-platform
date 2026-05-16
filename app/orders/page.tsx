@@ -5,10 +5,6 @@ import Link from "next/link";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { OrderDetailModal } from "@/components/OrderDetailModal";
-import {
-  SmartOrderForm,
-  type SmartOrderCreatedSummary,
-} from "@/components/SmartOrderForm";
 import { useAuth } from "@/lib/authContext";
 import { OrderStatusBadge } from "@/components/StatusBadge";
 import {
@@ -72,10 +68,6 @@ export default function OrdersPage() {
 
   // Detail drawer
   const [detailOrder, setDetailOrder] = useState<Order | null>(null);
-
-  // Create toast
-  const [createdToast, setCreatedToast] =
-    useState<SmartOrderCreatedSummary | null>(null);
 
   const fetchOrders = useCallback(async () => {
     const { data, error } = await supabase
@@ -192,30 +184,13 @@ export default function OrdersPage() {
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">CareU OPS</p>
         <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900">คำสั่งซ่อม</h1>
         <p className="text-sm text-gray-600">
-          จัดการงานซ่อม ค้นหา กรองสถานะ และสร้างใบงานใหม่จากแคตตาล็อกบริการ
+          ค้นหา กรองสถานะ ดูรายละเอียด อัปเดตสถานะ และพิมพ์เอกสาร
         </p>
       </div>
 
       {errorMessage && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {errorMessage}
-        </div>
-      )}
-
-      {createdToast && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-start justify-between gap-3">
-          <span>
-            บันทึกใบงาน #{createdToast.orderId.slice(0, 8).toUpperCase()} •{" "}
-            {createdToast.customerName} • {formatCurrency(createdToast.total)}
-          </span>
-          <button
-            type="button"
-            onClick={() => setCreatedToast(null)}
-            className="text-green-700 hover:text-green-900"
-            aria-label="dismiss"
-          >
-            ✕
-          </button>
         </div>
       )}
 
@@ -239,21 +214,21 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* Smart form */}
-      <div className="bg-white p-5 md:p-6 rounded-2xl border border-green-100 shadow-sm mb-8">
-        <div className="mb-4">
-          <h2 className="text-lg font-bold text-gray-900">สร้างใบงานใหม่</h2>
+      {/* Create-new-job belongs to /intake — Orders is a management view.
+          A single clear entry point instead of an embedded duplicate form. */}
+      <div className="mb-8 flex flex-col gap-3 rounded-2xl border border-green-100 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900">รับงานใหม่</h2>
           <p className="text-xs text-gray-500">
-            เลือกบริการจากแคตตาล็อก ระบบจะเติมรายละเอียดและคำนวณยอดสุทธิให้อัตโนมัติ
+            สร้างใบงานใหม่ได้ที่หน้า “รับงานหน้าร้าน” — งานที่บันทึกจะแสดงในรายการด้านล่าง
           </p>
         </div>
-        <SmartOrderForm
-          variant="manage"
-          onCreated={(summary) => {
-            setCreatedToast(summary);
-            void fetchOrders();
-          }}
-        />
+        <Link
+          href="/intake"
+          className="shrink-0 rounded-xl bg-green-700 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-green-800"
+        >
+          + ไปหน้ารับงาน
+        </Link>
       </div>
 
       {/* Orders table */}
