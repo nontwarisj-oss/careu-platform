@@ -49,11 +49,14 @@ export type OrderItemRow = {
   technician_note: string | null;
   customer_note: string | null;
   image_paths: string[] | null;
+  /** Per-item workflow status (migration 20260555). Same vocabulary as
+   *  orders.status. Defaults to 'pending' for rows created before it. */
+  status: string;
   created_at: string;
 };
 
 const ORDER_ITEM_COLUMNS =
-  "id, order_id, branch_id, line_no, category, service_code, service_name, detail, quantity, unit_price, urgent, urgent_fee, line_total, due_date, assigned_technician_id, technician_note, customer_note, image_paths, created_at";
+  "id, order_id, branch_id, line_no, category, service_code, service_name, detail, quantity, unit_price, urgent, urgent_fee, line_total, due_date, assigned_technician_id, technician_note, customer_note, image_paths, status, created_at";
 
 const isMissingRelation = (msg: string | undefined): boolean =>
   !!msg &&
@@ -137,6 +140,21 @@ export async function fetchOrderItems(
     .order("line_no", { ascending: true });
   if (res.error || !res.data) return [];
   return res.data as OrderItemRow[];
+}
+
+/**
+ * Update one item's workflow status. The order header status is left
+ * alone — it is the ticket-level rollup the operations board manages.
+ */
+export async function updateOrderItemStatus(
+  itemId: string,
+  status: string
+): Promise<{ error: string | null }> {
+  const res = await supabase
+    .from("order_items")
+    .update({ status })
+    .eq("id", itemId);
+  return { error: res.error?.message ?? null };
 }
 
 /** Batch variant — items for many orders in one query (operations board). */

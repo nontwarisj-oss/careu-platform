@@ -365,7 +365,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-16 | Store Ops Hardening Phase A — multi-item repair intake. Migration `20260554` adds `public.order_items` (child of `orders`). New `IntakeOrderForm` at `/intake`: many garments per ticket, each with service/custom-service/detail/price/qty/urgent-fee/due-date/technician/notes; receipt renders one line per item. Operational surface only — same intake roles, no role-matrix change. | — |
 | 2026-05-16 | Store Ops Hardening Phase B — Orders Operations Board. `/orders` rebuilt as a front-counter board: queue chips (today/overdue/urgent/ready/waiting-payment) + technician filter + search, mobile-first operations cards, inline status change. `statusBadges` extended additively with `waiting_parts`/`outsource`/`delivered` (free-text column — no migration). No role-matrix change — same orders-page visibility. | — |
 | 2026-05-16 | Store Ops Hardening — data integrity. Unmatched-order resolver: `/customers` "จับคู่ใบงาน" links orphan orders (`customer_id` NULL) to a customer so visits/spend count (`UnmatchedOrdersModal`, writes `orders.customer_id` only). Removed the duplicated legacy intake form (`SmartOrderForm.tsx` deleted — `IntakeOrderForm` is the single intake path). No migration, no role-matrix change. | — |
+| 2026-05-16 | Store Ops Hardening — per-item tracking. Migration `20260555` adds `order_items.status` (same vocabulary as `orders.status`). `OrderDetailModal` now lists each garment in a multi-item ticket with its own status changer, urgent flag, due date, and notes. No role-matrix change. | — |
 
 ---
 
-**Last updated:** 2026-05-16 (Store Ops Hardening — data-integrity resolver + dedup cleanup)
+**Last updated:** 2026-05-16 (Store Ops Hardening — per-item operational tracking)

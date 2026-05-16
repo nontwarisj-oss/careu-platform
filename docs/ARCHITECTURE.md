@@ -2304,8 +2304,13 @@ branch, job_id, status, grand total in `price`).
 - Per-item **image upload** — the `image_paths` column ships but the
   uploader UI is not wired into intake yet (follow-on; the public
   `PublicQuoteUploader` pipeline can be adapted for OPS).
-- `OrderDetailModal` still shows the order header only.
-- `SmartOrderForm.tsx` is now unused (kept in-tree, not deleted).
+- Per-item **status** — migration `20260555` adds `order_items.status`
+  (same free-text vocabulary as `orders.status`). `OrderDetailModal`
+  lists each garment with its own status changer, so a multi-item
+  ticket can have one item `ready` while another is `waiting_parts`.
+  The order header status stays the ticket-level rollup.
+- The legacy `SmartOrderForm.tsx` has been **deleted** — `IntakeOrderForm`
+  is the single order-creation path.
 
 ---
 

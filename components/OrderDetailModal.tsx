@@ -11,6 +11,13 @@ import {
   getPromotionByCode,
   getServiceByCode,
 } from "@/lib/pricing";
+import {
+  fetchOrderItems,
+  updateOrderItemStatus,
+  type OrderItemRow,
+} from "@/lib/orderItems";
+import { ORDER_OPS_FLOW, orderStatusLabel } from "@/lib/statusBadges";
+import { OrderStatusBadge } from "@/components/StatusBadge";
 
 export type OrderDetailInput = {
   id: string;
@@ -66,6 +73,7 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
   const [customerType, setCustomerType] = useState<string | null>(null);
   const [promotionCode, setPromotionCode] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[] | null>(null);
+  const [items, setItems] = useState<OrderItemRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -92,6 +100,7 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
       setCustomerType(null);
       setPromotionCode(null);
       setAttachments(null);
+      setItems([]);
 
       // Try the smart-order extended columns. If any are missing (migration not
       // yet applied), narrow the projection and retry so older databases work.
@@ -187,9 +196,25 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
         setAttachments((media ?? []) as Attachment[]);
       }
 
+      // Per-item rows (multi-item tickets). Empty for legacy orders.
+      setItems(await fetchOrderItems(supabase, order.id));
+
       setIsLoading(false);
     })();
   }, [order]);
+
+  const handleItemStatus = async (itemId: string, status: string) => {
+    setErrorMessage(null);
+    const prev = items;
+    setItems((curr) =>
+      curr.map((it) => (it.id === itemId ? { ...it, status } : it))
+    );
+    const res = await updateOrderItemStatus(itemId, status);
+    if (res.error) {
+      setErrorMessage(res.error);
+      setItems(prev);
+    }
+  };
 
   if (!order) return null;
 
@@ -387,6 +412,82 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
               </div>
             )}
           </div>
+
+          {/* Per-item workflow — multi-item tickets only */}
+          {items.length > 0 && (
+            <div className="border border-gray-200 rounded-xl p-4">
+              <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+                รายการในใบงาน ({items.length})
+              </p>
+              <div className="space-y-2">
+                {items.map((it) => (
+                  <div
+                    key={it.id}
+                    className="rounded-lg border border-gray-100 bg-gray-50/60 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900">
+                          {it.line_no}. {it.service_name}
+                          {Number(it.quantity) > 1 && (
+                            <span className="ml-1 text-xs text-gray-500">
+                              × {it.quantity}
+                            </span>
+                          )}
+                          {it.urgent && (
+                            <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
+                              ⚡ ด่วน
+                            </span>
+                          )}
+                        </p>
+                        {it.detail && (
+                          <p className="mt-0.5 whitespace-pre-wrap text-xs text-gray-600">
+                            {it.detail}
+                          </p>
+                        )}
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          {formatCurrency(Number(it.line_total))}
+                          {it.due_date ? ` · กำหนด ${it.due_date}` : ""}
+                        </p>
+                        {it.technician_note && (
+                          <p className="mt-0.5 text-[11px] text-gray-500">
+                            ช่าง: {it.technician_note}
+                          </p>
+                        )}
+                        {it.customer_note && (
+                          <p className="text-[11px] text-gray-500">
+                            ลูกค้า: {it.customer_note}
+                          </p>
+                        )}
+                      </div>
+                      <OrderStatusBadge status={it.status} size="sm" />
+                    </div>
+                    <select
+                      value={it.status}
+                      onChange={(e) =>
+                        void handleItemStatus(it.id, e.target.value)
+                      }
+                      aria-label="สถานะรายการ"
+                      className="mt-2 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+                    >
+                      {ORDER_OPS_FLOW.map((s) => (
+                        <option key={s} value={s}>
+                          {orderStatusLabel(s)}
+                        </option>
+                      ))}
+                      {!(ORDER_OPS_FLOW as readonly string[]).includes(
+                        it.status
+                      ) && (
+                        <option value={it.status}>
+                          {orderStatusLabel(it.status)}
+                        </option>
+                      )}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Notes */}
           <div className="border border-gray-200 rounded-xl p-4">
