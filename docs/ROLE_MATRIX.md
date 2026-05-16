@@ -367,7 +367,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-16 | Store Ops Hardening — data integrity. Unmatched-order resolver: `/customers` "จับคู่ใบงาน" links orphan orders (`customer_id` NULL) to a customer so visits/spend count (`UnmatchedOrdersModal`, writes `orders.customer_id` only). Removed the duplicated legacy intake form (`SmartOrderForm.tsx` deleted — `IntakeOrderForm` is the single intake path). No migration, no role-matrix change. | — |
 | 2026-05-16 | Store Ops Hardening — per-item tracking. Migration `20260555` adds `order_items.status` (same vocabulary as `orders.status`). `OrderDetailModal` now lists each garment in a multi-item ticket with its own status changer, urgent flag, due date, and notes. No role-matrix change. | — |
 | 2026-05-16 | Store Ops Hardening — per-item image workflow. `OrderItemImages` captures repair photos per garment (intake + post-repair) into `order_items.image_paths`. New auth'd routes `/api/admin/upload-url` + `/api/admin/order-images` (owner/HQ/branch_manager/front_staff/technician) reuse the existing signed-URL storage pipeline. Tablet/mobile camera capture + preview. No migration. | owner · hq_admin · branch_manager · front_staff · technician (operator photo upload) |
+| 2026-05-16 | Store Ops Hardening — operations board refinement. `/orders` board gains a QC queue (`completed` = repaired, awaiting check) and branch filtering: owner/HQ pick any branch, branch-locked roles are pinned to their own branch (board branch-isolation). No migration. | branch-locked roles see only their branch on `/orders` |
 
 ---
 
-**Last updated:** 2026-05-16 (Store Ops Hardening — per-item image workflow)
+**Last updated:** 2026-05-16 (Store Ops Hardening — operations board refinement)

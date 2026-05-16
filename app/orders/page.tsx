@@ -18,9 +18,12 @@ import { formatCurrency } from "@/lib/utils";
 import { OrderDetailModal } from "@/components/OrderDetailModal";
 import { OrderStatusBadge, PaymentStatusBadge } from "@/components/StatusBadge";
 import { ORDER_OPS_FLOW, orderStatusLabel, isOverdue } from "@/lib/statusBadges";
-import { getBranchById } from "@/lib/brandConfig";
+import { getBranchById, branches as ALL_BRANCHES } from "@/lib/brandConfig";
 import { fetchOrderItemsForOrders } from "@/lib/orderItems";
 import { useAuth } from "@/lib/authContext";
+import { useBranch } from "@/lib/branchContext";
+import { useRole } from "@/lib/roleContext";
+import { canChooseAnotherBranch } from "@/lib/permissions";
 import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import type { LifecycleEvent } from "@/lib/lifecycleNotifier";
 
@@ -60,6 +63,7 @@ type Queue =
   | "today"
   | "overdue"
   | "urgent"
+  | "qc"
   | "ready"
   | "waiting_payment";
 
@@ -68,6 +72,7 @@ const QUEUES: Array<{ key: Queue; label: string }> = [
   { key: "today", label: "กำหนดวันนี้" },
   { key: "overdue", label: "เลยกำหนด" },
   { key: "urgent", label: "งานด่วน" },
+  { key: "qc", label: "ตรวจงาน (QC)" },
   { key: "ready", label: "พร้อมรับ" },
   { key: "waiting_payment", label: "ค้างชำระ" },
 ];
@@ -81,6 +86,12 @@ function bangkokToday(): string {
 
 export default function OrdersBoardPage() {
   const { user } = useAuth();
+  const { branch } = useBranch();
+  const { role } = useRole();
+  // Owner / HQ may scan any branch; branch-locked roles are pinned to
+  // their own branch so the board stays branch-isolated.
+  const canPickBranch = canChooseAnotherBranch(role);
+
   const [orders, setOrders] = useState<BoardOrder[]>([]);
   const [techNames, setTechNames] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -88,8 +99,13 @@ export default function OrdersBoardPage() {
 
   const [queue, setQueue] = useState<Queue>("all");
   const [technicianFilter, setTechnicianFilter] = useState<string>("");
+  const [branchFilter, setBranchFilter] = useState<string>("");
   const [search, setSearch] = useState("");
   const [detailOrder, setDetailOrder] = useState<BoardOrder | null>(null);
+
+  // The branch the board is scoped to: a branch-locked role is always
+  // pinned to their own; owner/HQ pick via the dropdown (blank = all).
+  const effectiveBranch = canPickBranch ? branchFilter : branch.id;
 
   const today = bangkokToday();
 
@@ -217,31 +233,43 @@ export default function OrdersBoardPage() {
     if (event) void triggerLifecycleEvent(event, orderId);
   };
 
-  // ---- Queue counts (computed once over the full list) -------------------
+  // Orders within the board's branch scope — every count + queue works
+  // off this so a branch-locked role never sees another branch's work.
+  const branchScoped = useMemo(
+    () =>
+      effectiveBranch
+        ? orders.filter((o) => o.branch_id === effectiveBranch)
+        : orders,
+    [orders, effectiveBranch]
+  );
+
+  // ---- Queue counts ------------------------------------------------------
   const counts = useMemo(() => {
     const c: Record<Queue, number> = {
-      all: orders.length,
+      all: branchScoped.length,
       today: 0,
       overdue: 0,
       urgent: 0,
+      qc: 0,
       ready: 0,
       waiting_payment: 0,
     };
-    for (const o of orders) {
+    for (const o of branchScoped) {
       if (o.due_date === today) c.today += 1;
       if (isOverdue(o.status, o.due_date)) c.overdue += 1;
       if (o.urgent && o.status !== "delivered" && o.status !== "cancelled")
         c.urgent += 1;
+      if (o.status === "completed") c.qc += 1;
       if (o.status === "ready-for-pickup") c.ready += 1;
       if (o.payment_status !== "paid" && o.status !== "cancelled")
         c.waiting_payment += 1;
     }
     return c;
-  }, [orders, today]);
+  }, [branchScoped, today]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return orders.filter((o) => {
+    return branchScoped.filter((o) => {
       // Queue filter.
       if (queue === "today" && o.due_date !== today) return false;
       if (queue === "overdue" && !isOverdue(o.status, o.due_date)) return false;
@@ -250,6 +278,7 @@ export default function OrdersBoardPage() {
         !(o.urgent && o.status !== "delivered" && o.status !== "cancelled")
       )
         return false;
+      if (queue === "qc" && o.status !== "completed") return false;
       if (queue === "ready" && o.status !== "ready-for-pickup") return false;
       if (
         queue === "waiting_payment" &&
@@ -275,7 +304,7 @@ export default function OrdersBoardPage() {
       }
       return true;
     });
-  }, [orders, queue, technicianFilter, search, today]);
+  }, [branchScoped, queue, technicianFilter, search, today]);
 
   const technicianOptions = useMemo(
     () =>
@@ -337,8 +366,12 @@ export default function OrdersBoardPage() {
         ))}
       </div>
 
-      {/* Search + technician filter */}
-      <div className="mb-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+      {/* Search + technician + branch filters */}
+      <div
+        className={`mb-5 grid grid-cols-1 gap-2 ${
+          canPickBranch ? "sm:grid-cols-4" : "sm:grid-cols-3"
+        }`}
+      >
         <input
           type="search"
           value={search}
@@ -361,6 +394,21 @@ export default function OrdersBoardPage() {
             </option>
           ))}
         </select>
+        {canPickBranch && (
+          <select
+            value={branchFilter}
+            onChange={(e) => setBranchFilter(e.target.value)}
+            aria-label="กรองตามสาขา"
+            className="rounded-xl border border-gray-200 bg-white px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-green-500"
+          >
+            <option value="">ทุกสาขา</option>
+            {ALL_BRANCHES.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.shortLabel}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Board */}
