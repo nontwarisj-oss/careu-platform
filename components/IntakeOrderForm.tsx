@@ -40,6 +40,7 @@ import { useAuth } from "@/lib/authContext";
 import { useRole } from "@/lib/roleContext";
 import { canChooseAnotherBranch } from "@/lib/permissions";
 import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
+import { OrderItemImages } from "@/components/OrderItemImages";
 
 type Customer = { id: string; name: string; phone: string };
 
@@ -68,6 +69,7 @@ type DraftItem = {
   technicianId: string;
   technicianNote: string;
   customerNote: string;
+  imagePaths: string[];
 };
 
 function makeEmptyItem(): DraftItem {
@@ -88,6 +90,7 @@ function makeEmptyItem(): DraftItem {
     technicianId: "",
     technicianNote: "",
     customerNote: "",
+    imagePaths: [],
   };
 }
 
@@ -360,7 +363,7 @@ export function IntakeOrderForm({
         assignedTechnicianId: it.technicianId || null,
         technicianNote: it.technicianNote.trim() || null,
         customerNote: it.customerNote.trim() || null,
-        imagePaths: [],
+        imagePaths: it.imagePaths,
       };
     });
 
@@ -647,6 +650,7 @@ export function IntakeOrderForm({
               item={it}
               catalog={catalog}
               technicians={technicians}
+              branchCode={branch.branchCode}
               canRemove={items.length > 1}
               lineTotal={draftLineTotal(it)}
               onPatch={(patch) => patchItem(it.localId, patch)}
@@ -743,6 +747,7 @@ function ItemCard({
   item,
   catalog,
   technicians,
+  branchCode,
   canRemove,
   lineTotal,
   onPatch,
@@ -752,6 +757,7 @@ function ItemCard({
   item: DraftItem;
   catalog: ServiceItem[];
   technicians: TechnicianProfile[];
+  branchCode: string;
   canRemove: boolean;
   lineTotal: number;
   onPatch: (patch: Partial<DraftItem>) => void;
@@ -916,6 +922,17 @@ function ItemCard({
           onChange={(e) => onPatch({ technicianNote: e.target.value })}
           placeholder="โน้ตถึงช่าง (ภายใน)"
           className="w-full rounded-lg border border-gray-300 p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+        />
+      </div>
+
+      <div className="mt-2">
+        <p className="mb-1 text-[10px] uppercase tracking-wide text-gray-500">
+          รูปงาน / จุดเสียหาย
+        </p>
+        <OrderItemImages
+          value={item.imagePaths}
+          onChange={(paths) => onPatch({ imagePaths: paths })}
+          branchCode={branchCode}
         />
       </div>
     </div>

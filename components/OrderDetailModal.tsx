@@ -14,10 +14,12 @@ import {
 import {
   fetchOrderItems,
   updateOrderItemStatus,
+  updateOrderItemImages,
   type OrderItemRow,
 } from "@/lib/orderItems";
 import { ORDER_OPS_FLOW, orderStatusLabel } from "@/lib/statusBadges";
 import { OrderStatusBadge } from "@/components/StatusBadge";
+import { OrderItemImages } from "@/components/OrderItemImages";
 
 export type OrderDetailInput = {
   id: string;
@@ -214,6 +216,17 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
       setErrorMessage(res.error);
       setItems(prev);
     }
+  };
+
+  const handleItemImages = async (itemId: string, imagePaths: string[]) => {
+    setErrorMessage(null);
+    setItems((curr) =>
+      curr.map((it) =>
+        it.id === itemId ? { ...it, image_paths: imagePaths } : it
+      )
+    );
+    const res = await updateOrderItemImages(itemId, imagePaths);
+    if (res.error) setErrorMessage(res.error);
   };
 
   if (!order) return null;
@@ -483,6 +496,16 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
                         </option>
                       )}
                     </select>
+                    <div className="mt-2">
+                      <OrderItemImages
+                        value={it.image_paths ?? []}
+                        onChange={(paths) =>
+                          void handleItemImages(it.id, paths)
+                        }
+                        branchCode={branchId}
+                        orderId={order.id}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>

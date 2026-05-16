@@ -157,6 +157,18 @@ export async function updateOrderItemStatus(
   return { error: res.error?.message ?? null };
 }
 
+/** Replace one item's photo path list (order_items.image_paths). */
+export async function updateOrderItemImages(
+  itemId: string,
+  imagePaths: string[]
+): Promise<{ error: string | null }> {
+  const res = await supabase
+    .from("order_items")
+    .update({ image_paths: imagePaths })
+    .eq("id", itemId);
+  return { error: res.error?.message ?? null };
+}
+
 /** Batch variant — items for many orders in one query (operations board). */
 export async function fetchOrderItemsForOrders(
   client: SupabaseClient,
