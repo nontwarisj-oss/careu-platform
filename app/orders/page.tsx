@@ -353,7 +353,7 @@ export default function OrdersBoardPage() {
             key={qd.key}
             type="button"
             onClick={() => setQueue(qd.key)}
-            className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition ${
+            className={`min-h-[44px] rounded-full border px-4 py-2 text-sm font-semibold transition ${
               queue === qd.key
                 ? "border-green-700 bg-green-700 text-white"
                 : "border-gray-200 bg-white text-gray-700 hover:border-green-300"
@@ -529,10 +529,10 @@ function OrderCard({
           : "ไม่ระบุกำหนดรับ"}
       </p>
 
-      {/* Badges */}
+      {/* Badges — md size for at-a-glance reading at the counter */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <OrderStatusBadge status={order.status} size="sm" />
-        <PaymentStatusBadge status={order.payment_status} size="sm" />
+        <OrderStatusBadge status={order.status} size="md" />
+        <PaymentStatusBadge status={order.payment_status} size="md" />
       </div>
 
       {/* Actions — one-tap advance for the happy path, dropdown for the
