@@ -18,6 +18,7 @@ import { requireRole } from "@/lib/supabaseAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { checkManifestDrift } from "@/lib/manifestDriftCheck";
 import { webhookMetrics } from "@/lib/webhookAudit";
+import { SERVICE_CONTENT } from "@/lib/serviceContent";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +27,7 @@ type CheckResult = {
   name: string;
   status: "ok" | "warn" | "missing" | "error";
   message: string;
-  category: "config" | "db" | "workers" | "broadcast" | "security";
+  category: "config" | "db" | "workers" | "broadcast" | "security" | "public";
   detail?: Record<string, unknown>;
 };
 
@@ -425,6 +426,71 @@ export async function GET() {
     } catch (err) {
       checks.push(errorRes("send_caps", err instanceof Error ? err.message : String(err), "security"));
     }
+
+    // ----- Phase 27D: public website -----
+    // Branch pages — at least one active branch backs /branches/[code].
+    try {
+      const r = await admin
+        .from("branches")
+        .select("code", { count: "exact", head: true })
+        .eq("is_active", true);
+      const cnt = r.count ?? 0;
+      checks.push(
+        cnt > 0
+          ? ok("public_branch_pages", `${cnt} active branch page(s)`, "public")
+          : warn(
+              "public_branch_pages",
+              "no active branches — /branches is empty",
+              "public"
+            )
+      );
+    } catch (err) {
+      checks.push(errorRes("public_branch_pages", err instanceof Error ? err.message : String(err), "public"));
+    }
+
+    // Branch public-settings coverage — how many have operating_hours.
+    try {
+      const r = await admin
+        .from("branches")
+        .select("operating_hours")
+        .eq("is_active", true);
+      const rows = (r.data ?? []) as Array<{
+        operating_hours: unknown;
+      }>;
+      const withHours = rows.filter(
+        (x) => x.operating_hours && typeof x.operating_hours === "object"
+      ).length;
+      checks.push(
+        ok(
+          "public_branch_hours",
+          `${withHours}/${rows.length} branch(es) have operating hours set`,
+          "public",
+          { withHours, total: rows.length }
+        )
+      );
+    } catch (err) {
+      checks.push(errorRes("public_branch_hours", err instanceof Error ? err.message : String(err), "public"));
+    }
+
+    // Recent quote requests — proves the public quote pipeline works.
+    try {
+      const since = new Date(
+        Date.now() - 30 * 24 * 60 * 60 * 1000
+      ).toISOString();
+      const r = await admin
+        .from("quote_requests")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", since);
+      checks.push(
+        ok(
+          "public_quote_pipeline",
+          `${r.count ?? 0} quote request(s) in last 30d`,
+          "public"
+        )
+      );
+    } catch (err) {
+      checks.push(errorRes("public_quote_pipeline", err instanceof Error ? err.message : String(err), "public"));
+    }
   } else {
     checks.push(
       missing(
@@ -434,6 +500,40 @@ export async function GET() {
       )
     );
   }
+
+  // ----- Public website checks that need no DB -----
+  checks.push(
+    ok("public_service_pages", `${SERVICE_CONTENT.length} service SEO page(s)`, "public", {
+      slugs: SERVICE_CONTENT.map((s) => s.slug),
+    })
+  );
+  checks.push(
+    envSet("NEXT_PUBLIC_SITE_URL")
+      ? ok("public_sitemap", "NEXT_PUBLIC_SITE_URL set — sitemap absolute URLs OK", "public")
+      : warn(
+          "public_sitemap",
+          "NEXT_PUBLIC_SITE_URL unset — sitemap falls back to a placeholder host",
+          "public"
+        )
+  );
+  checks.push(
+    envSet("NEXT_PUBLIC_BASE_URL")
+      ? ok("public_upload", "NEXT_PUBLIC_BASE_URL set — quote uploads + tracking links resolve", "public")
+      : warn(
+          "public_upload",
+          "NEXT_PUBLIC_BASE_URL unset — quote upload URLs may not resolve",
+          "public"
+        )
+  );
+  checks.push(
+    envSet("NEXT_PUBLIC_LINE_OA_URL")
+      ? ok("public_line_cta", "NEXT_PUBLIC_LINE_OA_URL set — LINE CTAs link out", "public")
+      : warn(
+          "public_line_cta",
+          "NEXT_PUBLIC_LINE_OA_URL unset — global LINE CTA falls back to /contact",
+          "public"
+        )
+  );
 
   // ----- Summary -----
   const summary = {

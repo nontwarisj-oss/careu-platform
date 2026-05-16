@@ -2203,6 +2203,31 @@ See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
 
 ---
 
+## 12dd. Franchise-safe public layer (post-`20260553`)
+
+> Status: **operator-managed public website**. Phase 27D — branch public settings move from code to a UI; the website shows dynamic open/closed status and per-branch branding.
+
+See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
+
+### 12dd.1 Schema (migration `20260553`)
+
+`branches` += `manual_status` (open/closed override), `holiday_dates` (jsonb), `map_url`, `line_url`, `hero_image_path` — all additive nullable.
+
+### 12dd.2 Pieces
+
+- `lib/branchPublicStatus.ts::computeBranchStatus` — pure resolver: manual override → holiday → today's hours vs Bangkok time → `unknown`.
+- `/admin/settings/branches` + `/api/admin/settings/branch-public` — owner/HQ operator UI for the public fields; audited.
+- Dynamic open/closed badge on the branch page, homepage finder, and quote-wizard selector (`/api/public/branches-list` returns `status`).
+- Per-branch branding: `hero_image_path`, `line_url`, `map_url` on the branch page.
+- `/admin/system/smoke-test` "Public website" category.
+
+### 12dd.3 Known limitations
+
+- `hero_image_path` is a `/public` path — there is no image-upload UI for it yet (operator drops the file + sets the path).
+- Open/closed is computed at request time (server components / API) — the public pages are `force-dynamic` where the badge matters.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

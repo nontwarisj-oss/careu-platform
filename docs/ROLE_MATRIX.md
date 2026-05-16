@@ -156,6 +156,7 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/api/admin/system/incident-export`** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`webhook_audit_log` / `escalation_recipients` tables** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Provider webhooks (`/api/webhooks/*`, `/api/line/webhook`)** | ⚠ machine-only (provider HMAC signature) | same | same | same | same |
+| **`/admin/settings/branches` UI + `/api/admin/settings/branch-public`** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`/admin/system/webhook-retries` UI** | ✅ all | ✅ all | ✅ 🏢 own branch (read) | ❌ | ❌ |
 | **`GET /api/admin/system/webhook-retries`** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
 | **`POST /api/admin/system/webhook-retries` replay** | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -358,7 +359,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 26 — communication reliability completion. Webhook retry queue + dead-letter (`webhook_retry_queue`), provider-agnostic delivery receipt adapter, multi-target LINE escalation fan-out, manifest CI gate (`prebuild` hook), dead-letter explorer + replay console. Migration `20260550`. | — |
 | 2026-05-15 | Phase 27A — customer portal polish. Order-history filters, reorder (`/api/portal/reorder`), saved customer preferences, notification centre (`/portal/notifications`), attachment HEIC fallback, session UX. All customer-cookie scoped — no operator-role surface. Migration `20260551`. | — |
 | 2026-05-15 | Phase 27B — public website maturity. Homepage sections, dynamic `/branches/[code]` + `/services/[slug]` SEO pages, 4-step quote wizard with safe uploads + localStorage draft-save. Anonymous/public surface — no operator-role change. Migration `20260552`. | — |
+| 2026-05-15 | Phase 27D — franchise-safe public layer. `/admin/settings/branches` + `/api/admin/settings/branch-public` (owner/HQ) operator UI for branch public settings; dynamic open/closed status; public smoke-test category. Migration `20260553`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 27B — public website maturity)
+**Last updated:** 2026-05-15 (Phase 27D — franchise-safe public layer)

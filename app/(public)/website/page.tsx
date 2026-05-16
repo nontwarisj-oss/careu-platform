@@ -10,6 +10,7 @@ import Link from "next/link";
 import { defaultBrandTheme } from "@/lib/publicTheme";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
+import { computeBranchStatus } from "@/lib/branchPublicStatus";
 
 export const metadata: Metadata = {
   title: "หน้าแรก",
@@ -50,6 +51,9 @@ type BranchRow = {
   name: string;
   type: string | null;
   address: string | null;
+  operating_hours: Record<string, string> | null;
+  manual_status: "open" | "closed" | null;
+  holiday_dates: string[] | null;
 };
 
 async function loadBranches(): Promise<BranchRow[]> {
@@ -57,7 +61,9 @@ async function loadBranches(): Promise<BranchRow[]> {
   if (!admin) return [];
   const { data } = await admin
     .from("branches")
-    .select("code, short_label, short_name, name, type, address")
+    .select(
+      "code, short_label, short_name, name, type, address, operating_hours, manual_status, holiday_dates"
+    )
     .eq("is_active", true)
     .order("code", { ascending: true });
   return (data as BranchRow[] | null) ?? [];
@@ -195,25 +201,45 @@ export default async function PublicHomePage() {
           </p>
         ) : (
           <div className="mt-5 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {branches.map((b) => (
-              <Link
-                key={b.code}
-                href={`/branches/${b.code}`}
-                className="block rounded-2xl border border-gray-200 bg-white p-4 hover:border-green-300 hover:shadow-md transition"
-              >
-                <h3 className="font-bold text-gray-900">
-                  {b.short_label ?? b.short_name ?? b.name}
-                </h3>
-                {b.address && (
-                  <p className="mt-1 text-xs text-gray-600 line-clamp-2">
-                    {b.address}
+            {branches.map((b) => {
+              const status = computeBranchStatus({
+                manualStatus: b.manual_status,
+                operatingHours: b.operating_hours,
+                holidayDates: b.holiday_dates,
+              });
+              return (
+                <Link
+                  key={b.code}
+                  href={`/branches/${b.code}`}
+                  className="block rounded-2xl border border-gray-200 bg-white p-4 hover:border-green-300 hover:shadow-md transition"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="font-bold text-gray-900">
+                      {b.short_label ?? b.short_name ?? b.name}
+                    </h3>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        status.status === "open"
+                          ? "bg-green-50 text-green-700 border border-green-200"
+                          : status.status === "closed"
+                            ? "bg-red-50 text-red-700 border border-red-200"
+                            : "bg-gray-50 text-gray-500 border border-gray-200"
+                      }`}
+                    >
+                      {status.label}
+                    </span>
+                  </div>
+                  {b.address && (
+                    <p className="mt-1 text-xs text-gray-600 line-clamp-2">
+                      {b.address}
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs font-semibold text-green-700">
+                    ดูข้อมูลสาขา →
                   </p>
-                )}
-                <p className="mt-2 text-xs font-semibold text-green-700">
-                  ดูข้อมูลสาขา →
-                </p>
-              </Link>
-            ))}
+                </Link>
+              );
+            })}
           </div>
         )}
       </section>

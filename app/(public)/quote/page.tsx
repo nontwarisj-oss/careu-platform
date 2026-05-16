@@ -14,7 +14,13 @@ import { defaultBrandTheme } from "@/lib/publicTheme";
 import { SERVICE_CATEGORIES } from "@/lib/pricing";
 import { PublicQuoteUploader } from "@/components/PublicQuoteUploader";
 
-type BranchOption = { code: string; label: string; brand: string | null };
+type BranchOption = {
+  code: string;
+  label: string;
+  brand: string | null;
+  status?: "open" | "closed" | "unknown";
+  statusLabel?: string;
+};
 
 type WizardForm = {
   serviceCategory: string;
@@ -287,9 +293,21 @@ export default function QuoteWizardPage() {
                   {branches.map((b) => (
                     <option key={b.code} value={b.code}>
                       {b.label}
+                      {b.statusLabel ? ` · ${b.statusLabel}` : ""}
                     </option>
                   ))}
                 </select>
+                {(() => {
+                  const sel = branches.find((b) => b.code === form.branchCode);
+                  if (sel?.status === "closed") {
+                    return (
+                      <p className="mt-1 text-[11px] text-amber-700">
+                        สาขานี้ปิดอยู่ตอนนี้ — ส่งคำขอได้ ทางร้านจะติดต่อกลับเมื่อเปิด
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
               </Field>
               <Field label="ความเร่งด่วน">
                 <ChoiceRow

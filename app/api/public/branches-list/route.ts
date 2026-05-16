@@ -10,6 +10,7 @@
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { computeBranchStatus } from "@/lib/branchPublicStatus";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,6 +21,9 @@ type BranchRow = {
   short_name: string | null;
   name: string;
   brand: string | null;
+  operating_hours: Record<string, string> | null;
+  manual_status: "open" | "closed" | null;
+  holiday_dates: string[] | null;
 };
 
 export async function GET() {
@@ -29,16 +33,28 @@ export async function GET() {
   }
   const { data, error } = await admin
     .from("branches")
-    .select("code, short_label, short_name, name, brand, is_active")
+    .select(
+      "code, short_label, short_name, name, brand, is_active, operating_hours, manual_status, holiday_dates"
+    )
     .eq("is_active", true)
     .order("code", { ascending: true });
   if (error || !data) {
     return NextResponse.json({ ok: false, branches: [] }, { status: 500 });
   }
-  const branches = (data as BranchRow[]).map((b) => ({
-    code: b.code,
-    label: b.short_label ?? b.short_name ?? b.name,
-    brand: b.brand,
-  }));
+  const branches = (data as BranchRow[]).map((b) => {
+    const status = computeBranchStatus({
+      manualStatus: b.manual_status,
+      operatingHours: b.operating_hours,
+      holidayDates: b.holiday_dates,
+    });
+    return {
+      code: b.code,
+      label: b.short_label ?? b.short_name ?? b.name,
+      brand: b.brand,
+      // Phase 27D: dynamic open/closed for the quote wizard selector.
+      status: status.status,
+      statusLabel: status.label,
+    };
+  });
   return NextResponse.json({ ok: true, branches });
 }

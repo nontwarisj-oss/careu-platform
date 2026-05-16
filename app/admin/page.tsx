@@ -279,6 +279,18 @@ const CARDS: AdminCard[] = [
       "M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z",
     enabled: true,
   },
+  {
+    href: "/admin/settings/branches",
+    titleTh: "Branch public settings",
+    titleEn: "Branch public settings",
+    descTh:
+      "เวลาทำการ · โปรโมชัน · เปิด/ปิด · วันหยุด · ลิงก์แผนที่/LINE — Owner / HQ",
+    descEn:
+      "Per-branch public website settings — hours, promo, open/closed, holidays, links.",
+    iconPath:
+      "M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z",
+    enabled: true,
+  },
 ];
 
 export default function AdminLandingPage() {

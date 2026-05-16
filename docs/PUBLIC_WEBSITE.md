@@ -156,4 +156,16 @@ Migration `20260552` adds four nullable columns — `branches.operating_hours` (
 6. **Public upload safety** — [`components/PublicQuoteUploader`](../components/PublicQuoteUploader.tsx): type + 8 MB validation, client-side compression ([`lib/imageCompress.ts`](../lib/imageCompress.ts) — canvas → JPEG; HEIC passes through), signed upload via `/api/public/upload-url` → `uploadToSignedUrl`, a per-file queue with progress + retry. Uploaded storage paths land in `quote_requests.photos`.
 7. **SEO** — `app/sitemap.ts` extended with `/services/[slug]`; `generateMetadata` + OpenGraph on all new pages; FAQ / Service / LocalBusiness JSON-LD.
 
-**Last updated:** 2026-05-15 (phase 27B — public website maturity)
+---
+
+## Phase 27D — franchise-safe public layer
+
+Migration `20260553` adds five additive nullable `branches` columns: `manual_status`, `holiday_dates` (jsonb), `map_url`, `line_url`, `hero_image_path`.
+
+1. **Operator settings UI** — `/admin/settings/branches` (owner/HQ) edits every branch's public fields — operating hours, promo banner, open/closed override, holiday dates, map + LINE links, hero image — with a live status preview. `GET/POST /api/admin/settings/branch-public`; audited to `cron_heartbeat_logs`. No code edit needed to change a branch's public face.
+2. **Dynamic open/closed** — [`lib/branchPublicStatus.ts`](../lib/branchPublicStatus.ts)`::computeBranchStatus` resolves: manual override → holiday → today's hours vs Bangkok time → `unknown`. Surfaced as a badge on the branch page hero, the homepage branch finder, and the quote wizard's branch selector (`/api/public/branches-list` now returns `status`).
+3. **Per-branch branding** — the branch page uses `hero_image_path` (background image with overlay), `line_url` (per-branch LINE CTA), and `map_url` (explicit map link, else derived from address).
+4. **Fallback** — every new column is nullable; pages degrade gracefully (no hours → "ติดต่อสาขา"; no hero → accent gradient; no line_url → global env). No hardcoded branches anywhere — all lists read the DB.
+5. **Public smoke test** — `/admin/system/smoke-test` gains a "Public website" category: branch-page count, operating-hours coverage, quote pipeline, service-page count, `NEXT_PUBLIC_SITE_URL` / `NEXT_PUBLIC_BASE_URL` / `NEXT_PUBLIC_LINE_OA_URL`.
+
+**Last updated:** 2026-05-15 (phase 27D — franchise-safe public layer)

@@ -14,6 +14,7 @@ import { notFound } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { themeForBranch, type BranchTheme } from "@/lib/publicTheme";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
+import { computeBranchStatus } from "@/lib/branchPublicStatus";
 
 type BranchRow = {
   id: string;
@@ -32,6 +33,11 @@ type BranchRow = {
   is_active: boolean;
   operating_hours: Record<string, string> | null;
   promo_banner: string | null;
+  manual_status: "open" | "closed" | null;
+  holiday_dates: string[] | null;
+  map_url: string | null;
+  line_url: string | null;
+  hero_image_path: string | null;
 };
 
 const DAY_ORDER: Array<{ key: string; label: string }> = [
@@ -52,7 +58,7 @@ async function loadBranch(code: string): Promise<BranchRow | null> {
   const { data } = await admin
     .from("branches")
     .select(
-      "id, code, short_label, short_name, receipt_name, name, brand, tagline, address, phone, logo_path, accent_class, type, is_active, operating_hours, promo_banner"
+      "id, code, short_label, short_name, receipt_name, name, brand, tagline, address, phone, logo_path, accent_class, type, is_active, operating_hours, promo_banner, manual_status, holiday_dates, map_url, line_url, hero_image_path"
     )
     .eq("code", code)
     .eq("is_active", true)
@@ -114,6 +120,19 @@ export default async function BranchDetailPage({
       ? branch.operating_hours
       : null;
 
+  // Phase 27D — dynamic open/closed + per-branch links.
+  const status = computeBranchStatus({
+    manualStatus: branch.manual_status,
+    operatingHours: hours,
+    holidayDates: branch.holiday_dates,
+  });
+  const lineHref = branch.line_url ?? LINE_URL;
+  const mapHref = branch.map_url
+    ? branch.map_url
+    : branch.address
+      ? mapsUrl(branch.address)
+      : null;
+
   // LocalBusiness structured data for local SEO.
   const jsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
@@ -132,8 +151,22 @@ export default async function BranchDetailPage({
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
 
-      <section className={`bg-gradient-to-r ${theme.accentClass} text-white`}>
-        <div className="max-w-6xl mx-auto px-4 py-10">
+      <section
+        className={`relative bg-gradient-to-r ${theme.accentClass} text-white`}
+      >
+        {branch.hero_image_path && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={branch.hero_image_path}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 h-full w-full object-cover opacity-30"
+            />
+            <div className="absolute inset-0 bg-black/20" />
+          </>
+        )}
+        <div className="relative max-w-6xl mx-auto px-4 py-10">
           <p className="text-[10px] uppercase tracking-[0.22em] font-semibold opacity-90">
             {theme.brandLabel}
           </p>
@@ -145,6 +178,26 @@ export default async function BranchDetailPage({
               “{branch.tagline}”
             </p>
           )}
+          <span
+            className={`mt-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${
+              status.status === "open"
+                ? "bg-white text-green-800"
+                : status.status === "closed"
+                  ? "bg-red-900/40 text-white border border-white/40"
+                  : "bg-white/20 text-white border border-white/30"
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                status.status === "open"
+                  ? "bg-green-600"
+                  : status.status === "closed"
+                    ? "bg-red-400"
+                    : "bg-gray-300"
+              }`}
+            />
+            {status.label}
+          </span>
         </div>
       </section>
 
@@ -237,9 +290,9 @@ export default async function BranchDetailPage({
           >
             ขอใบเสนอราคาที่สาขานี้
           </Link>
-          {branch.address && (
+          {mapHref && (
             <a
-              href={mapsUrl(branch.address)}
+              href={mapHref}
               target="_blank"
               rel="noopener noreferrer"
               className="block w-full rounded-xl border border-gray-200 bg-white px-5 py-3 text-center font-semibold text-gray-700 hover:bg-gray-50"
@@ -248,7 +301,7 @@ export default async function BranchDetailPage({
             </a>
           )}
           <a
-            href={LINE_URL}
+            href={lineHref}
             className="block w-full rounded-xl border border-green-300 bg-white px-5 py-3 text-center font-semibold text-green-700 hover:bg-green-50"
           >
             💬 ติดต่อทาง LINE
