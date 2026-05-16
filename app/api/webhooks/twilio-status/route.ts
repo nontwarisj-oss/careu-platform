@@ -29,6 +29,8 @@ import crypto from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
 import { isWebhookReplay, recordWebhookReceipt } from "@/lib/webhookAudit";
+import { enqueueWebhookRetry } from "@/lib/webhookRetryQueue";
+import { normalizeTwilioReceipt } from "@/lib/deliveryReceipt";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -234,6 +236,10 @@ export async function POST(req: Request) {
     detail: { messageStatus: payload.messageStatus, sid: payload.messageSid },
   });
 
+  // Phase 26: processing runs inside a try — a transient failure is
+  // captured into webhook_retry_queue (our own recovery path) rather
+  // than relying on Twilio's limited retry budget.
+  try {
   const mapped = TWILIO_TO_INTERNAL[payload.messageStatus];
   if (!mapped) {
     // Unknown status — log and 200 so Twilio doesn't retry forever.
@@ -413,6 +419,29 @@ export async function POST(req: Request) {
     notificationId: row.id,
     newStatus: patch.status ?? row.status,
   });
+  } catch (procErr) {
+    // Processing failed AFTER signature + replay passed — capture a
+    // normalized receipt into the retry queue and 200-ack so Twilio
+    // doesn't also retry (we own recovery now).
+    const reason =
+      procErr instanceof Error ? procErr.message : String(procErr);
+    const receipt = normalizeTwilioReceipt({
+      messageSid: payload.messageSid,
+      messageStatus: payload.messageStatus,
+      errorMessage: payload.errorMessage,
+    });
+    if (receipt) {
+      await enqueueWebhookRetry({ receipt, failureReason: reason });
+    }
+    await recordWebhookReceipt({
+      provider: "twilio",
+      eventId,
+      signatureValid: true,
+      outcome: "error",
+      detail: { reason, queuedForRetry: Boolean(receipt) },
+    });
+    return NextResponse.json({ ok: true, handled: false, queuedForRetry: true });
+  }
 }
 
 // Optional GET — useful for "is the webhook URL alive" checks from

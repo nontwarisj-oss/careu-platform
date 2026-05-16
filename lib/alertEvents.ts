@@ -137,13 +137,21 @@ async function deliverAndRecord(
   const recipients = Array.from(
     new Set([...esc.emails, ...prefs.recipients])
   );
-  const lineTarget = esc.lineTargets[0] ?? prefs.lineTarget;
+  // Phase 26: fan out to every escalation LINE target + the
+  // preference-scope target.
+  const lineTargets = Array.from(
+    new Set(
+      [...esc.lineTargets, prefs.lineTarget ?? ""].filter(
+        (t) => t.trim().length > 0
+      )
+    )
+  );
 
   let outcomes: AlertRouteOutcome[] = [];
   try {
     outcomes = await routeAlert(routable, {
       recipients,
-      lineTarget,
+      lineTargets,
       tier,
     });
   } catch (err) {
@@ -408,6 +416,68 @@ export async function listAlertEvents(opts: {
   const res = await q;
   if (res.error || !res.data) return [];
   return res.data as AlertEvent[];
+}
+
+/**
+ * Phase 26 replay tooling: re-route an existing alert event NOW,
+ * regardless of the escalation cooldown. The tier is derived from
+ * the event's escalation_count. Records fresh alert_deliveries rows.
+ */
+export async function replayAlertRouting(
+  alertEventId: string
+): Promise<{ ok: boolean; reason?: string; outcomes?: AlertRouteOutcome[] }> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return { ok: false, reason: "no admin client" };
+  const r = await admin
+    .from("alert_events")
+    .select(
+      "id, rule_name, metric, severity, source, branch_id, observed, threshold, comparison, escalation_count"
+    )
+    .eq("id", alertEventId)
+    .maybeSingle();
+  const ev = r.data as
+    | {
+        id: string;
+        rule_name: string;
+        metric: string;
+        severity: "warning" | "critical";
+        source: AlertSource;
+        branch_id: string | null;
+        observed: number | null;
+        threshold: number | null;
+        comparison: "gt" | "lt" | null;
+        escalation_count: number;
+      }
+    | null;
+  if (!ev) return { ok: false, reason: "ไม่พบ alert event" };
+
+  const tier: EscalationTier =
+    (ev.escalation_count ?? 0) >= 2
+      ? "owner"
+      : (ev.escalation_count ?? 0) >= 1
+        ? "hq"
+        : "alert";
+  const outcomes = await deliverAndRecord(
+    admin,
+    ev.id,
+    {
+      ruleName: ev.rule_name,
+      metric: ev.metric,
+      severity: ev.severity,
+      source: ev.source,
+      branchId: ev.branch_id,
+      observed: ev.observed,
+      threshold: ev.threshold,
+      comparison: ev.comparison,
+    },
+    "escalation",
+    tier
+  );
+  await admin
+    .from("alert_events")
+    .update({ last_routed_at: new Date().toISOString() })
+    .eq("id", ev.id);
+  return { ok: true, outcomes };
 }
 
 export async function listAlertDeliveries(opts: {

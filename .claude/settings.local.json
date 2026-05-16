@@ -36,7 +36,9 @@
       "Bash(grep -E \"\\\\.md$\")",
       "Bash(dir \"C:\\\\Users\\\\tnpba\\\\careu-platform\\\\app\\\\api\\\\webhooks\")",
       "Bash(grep -E \"\\\\.md$|README\")",
-      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tnpba\\\\careu-platform\\\\app\\\\admin\\\\system\\\\\" -ErrorAction SilentlyContinue | Select-Object Name)"
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tnpba\\\\careu-platform\\\\app\\\\admin\\\\system\\\\\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "Bash(node scripts/check-cron-manifest.mjs)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

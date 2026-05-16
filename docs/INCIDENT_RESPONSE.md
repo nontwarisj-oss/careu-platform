@@ -76,4 +76,20 @@ Every alert on `/admin/system/workers` has an **Export** button → downloads an
 
 ---
 
-**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)
+## 10. Webhook retry / dead-letter (Phase 26)
+
+`/admin/system/webhook-retries` — provider callbacks that failed processing. Auto-retried every ~10 min with backoff; 6 failures → **dead-letter**. A dead-letter row means a provider event never landed — open the row, read the `last_error` + `terminal_reason`, fix the cause, then **Replay**. Replays are idempotent (forward-only) and audited.
+
+## 11. Replay tooling (Phase 26)
+
+| Replay | Where |
+|---|---|
+| Webhook / retry job | `/admin/system/webhook-retries` → **Replay**. |
+| Delivery event | same — a queue row IS a normalized delivery receipt. |
+| Escalation | `/api/admin/system/alerts` POST `action='replay-escalation'` — re-routes an alert now. |
+
+All replay actions are owner/HQ-gated, rate-limited, and audited.
+
+---
+
+**Last updated:** 2026-05-15 (phase 26 — communication reliability completion)

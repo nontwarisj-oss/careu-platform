@@ -30,6 +30,8 @@ import {
 import { maybeRecordBroadcastDelivery } from "@/lib/broadcastDeliveryCallback";
 import { confirmAlertEmailDelivery } from "@/lib/deliveryConfirmation";
 import { isWebhookReplay, recordWebhookReceipt } from "@/lib/webhookAudit";
+import { enqueueWebhookRetry } from "@/lib/webhookRetryQueue";
+import { normalizeResendReceipt } from "@/lib/deliveryReceipt";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -174,6 +176,10 @@ export async function POST(req: Request) {
   const notificationId = notificationTag?.value ?? null;
   const providerEventId = event.data?.email_id ?? null;
 
+  // Phase 26: processing runs inside a try — a transient failure is
+  // captured into webhook_retry_queue rather than dropped.
+  try {
+
   // Try to backfill customer + branch from the linked notification.
   let customerId: string | null = null;
   let branchId: string | null = null;
@@ -267,6 +273,29 @@ export async function POST(req: Request) {
     mapped: internal,
     alertConfirmed,
   });
+  } catch (procErr) {
+    // Processing failed after signature + replay passed — capture a
+    // normalized receipt into the retry queue, 200-ack.
+    const reason =
+      procErr instanceof Error ? procErr.message : String(procErr);
+    const receipt = normalizeResendReceipt({
+      type: event.type ?? "",
+      emailId: event.data?.email_id ?? null,
+      notificationId,
+      eventId: svixId,
+    });
+    if (receipt) {
+      await enqueueWebhookRetry({ receipt, failureReason: reason });
+    }
+    await recordWebhookReceipt({
+      provider: "resend",
+      eventId: svixId,
+      signatureValid: true,
+      outcome: "error",
+      detail: { reason, queuedForRetry: Boolean(receipt) },
+    });
+    return NextResponse.json({ ok: true, handled: false, queuedForRetry: true });
+  }
 }
 
 export async function GET() {

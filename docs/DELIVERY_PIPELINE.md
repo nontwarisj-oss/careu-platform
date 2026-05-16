@@ -78,4 +78,18 @@ Reachable from:
 
 ---
 
-**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)
+## 7. Webhook retry queue (Phase 26)
+
+A provider callback that verifies + parses but then throws during processing is captured into `webhook_retry_queue` as a normalized `DeliveryReceipt` and 200-acked — the platform owns recovery instead of relying on the provider's retry budget. The `webhook-retry` cron (every ~10 min) re-applies it with exponential backoff; 6 failed attempts → `dead_letter`. See [WEBHOOK_SECURITY.md](./WEBHOOK_SECURITY.md).
+
+## 8. Provider-agnostic delivery receipt (Phase 26)
+
+`lib/deliveryReceipt.ts` normalizes every provider callback to one `DeliveryReceipt` shape and applies it idempotently via `applyDeliveryReceipt()`. This is both the retry-queue replay unit and the future-safe ingestion layer — when LINE ships delivery receipts, only `normalizeLineReceipt` needs filling in.
+
+## 9. Multi-target LINE escalation (Phase 26)
+
+`routeAlert` fans an alert out to **every** resolved LINE target (multiple operators + HQ + branch escalation groups), not just the first. Targets come from `escalation_recipients` ∪ `alert_preferences.line_target` ∪ `ALERT_LINE_TARGET`; each push is one `alert_deliveries` row. Dedup + cooldown unchanged.
+
+---
+
+**Last updated:** 2026-05-15 (phase 26 — communication reliability completion)

@@ -156,6 +156,12 @@ Legend: ✅ = full access · 👁 = read only · 🏢 = own branch only · ❌ =
 | **`/api/admin/system/incident-export`** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **`webhook_audit_log` / `escalation_recipients` tables** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Provider webhooks (`/api/webhooks/*`, `/api/line/webhook`)** | ⚠ machine-only (provider HMAC signature) | same | same | same | same |
+| **`/admin/system/webhook-retries` UI** | ✅ all | ✅ all | ✅ 🏢 own branch (read) | ❌ | ❌ |
+| **`GET /api/admin/system/webhook-retries`** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
+| **`POST /api/admin/system/webhook-retries` replay** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`/api/admin/system/alerts` `replay-escalation` action** | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **`webhook_retry_queue` table** | ✅ all | ✅ all | ✅ 🏢 own branch | ❌ | ❌ |
+| **`/api/cron/webhook-retry`** | ⚠ machine-only (Bearer CRON_SECRET) | same | same | same | same |
 | **Tracking redirect (`/api/track/click`, `/api/track/open`)** | ⚠ public — signed HMAC tokens | same | same | same | same |
 | **Resend webhook (`/api/webhooks/email-status`)** | ⚠ Svix signature via `RESEND_WEBHOOK_SECRET` | same | same | same | same |
 | **Portal unsubscribe (`/api/portal/unsubscribe`)** | n/a — customer cookie | n/a | n/a | n/a | n/a |
@@ -349,7 +355,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 23 — alert delivery + weekly digest. Added `alert_preferences` + `alert_deliveries` tables, `/admin/system/alert-preferences` (owner/HQ), real email routing via `lib/channels/email`, escalation cooldown, `operator-digest` cron + `send-digest` action. Migration `20260547`. | — |
 | 2026-05-15 | Phase 24 — operational observability. Alert-email delivery confirmation, real LINE operator channel, declarative cron manifest (`vercel.json` + `lib/cronManifest.ts`), cron health dashboard (next-run + recovery hints), `/admin/system/branch-health` (branch_manager own-branch), tiered escalation chain, delivery audit trail (`<DeliveryTimeline>`). Migration `20260548`. | — |
 | 2026-05-15 | Phase 25 — trustworthiness hardening. Webhook signature/replay/audit hardening (`webhook_audit_log`), cron manifest drift guard, role-tiered `escalation_recipients` with mute, delivery trace explorer, provider reliability metrics, incident snapshot export. Migration `20260549`. | — |
+| 2026-05-15 | Phase 26 — communication reliability completion. Webhook retry queue + dead-letter (`webhook_retry_queue`), provider-agnostic delivery receipt adapter, multi-target LINE escalation fan-out, manifest CI gate (`prebuild` hook), dead-letter explorer + replay console. Migration `20260550`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 25 — trustworthiness hardening)
+**Last updated:** 2026-05-15 (Phase 26 — communication reliability completion)

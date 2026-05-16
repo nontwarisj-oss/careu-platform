@@ -71,13 +71,6 @@ export const CRON_MANIFEST: CronManifestEntry[] = [
     description: "Transcodes pending HEIC uploads to web-friendly JPEG.",
   },
   {
-    cronName: "reconcile",
-    path: "/api/cron/reconcile",
-    schedule: "0 * * * *",
-    intervalMinutes: 60,
-    description: "Hourly Google-Sheet reconciliation.",
-  },
-  {
     cronName: "engagement-aggregate",
     path: "/api/cron/engagement-aggregate",
     schedule: "0 1 * * *",
@@ -105,6 +98,14 @@ export const CRON_MANIFEST: CronManifestEntry[] = [
     schedule: "0 1 * * 1",
     intervalMinutes: 7 * 24 * 60,
     description: "Weekly operator digest email (Monday 08:00 Bangkok).",
+  },
+  {
+    cronName: "webhook-retry",
+    path: "/api/cron/webhook-retry",
+    schedule: "*/10 * * * *",
+    intervalMinutes: 10,
+    description:
+      "Re-applies failed provider webhooks from webhook_retry_queue.",
   },
 ];
 

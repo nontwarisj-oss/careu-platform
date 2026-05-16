@@ -33,6 +33,7 @@ const CRON_EXPECTED_INTERVAL_MIN: Record<CronName, number> = {
   "comm-performance-aggregate": 24 * 60, // nightly
   "worker-maintenance": 15, // lock janitor + alert sweep
   "operator-digest": 7 * 24 * 60, // weekly
+  "webhook-retry": 10, // failed-webhook recovery drain
 };
 
 /** "A queued row should leave the queue within N minutes." Beyond

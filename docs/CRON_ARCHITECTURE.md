@@ -85,4 +85,18 @@ Surfaced on `/admin/system/workers` (Cron manifest drift section) and as a `cron
 
 ---
 
-**Last updated:** 2026-05-15 (phase 25 — manifest drift guard)
+---
+
+## 7. Manifest CI gate (Phase 26)
+
+`scripts/check-cron-manifest.mjs` is the **build-blocking** drift gate. It compares the three sources of truth — `lib/cronManifest.ts` (regex over the source), `vercel.json`, and the `app/api/cron/*` route directories — and exits non-zero on any: MISSING / ORPHAN / NO ENDPOINT / UNDECLARED / DUPLICATE.
+
+- `pnpm check:crons` — run it standalone.
+- `prebuild` npm hook — runs automatically before every `pnpm build`, so drift fails the build / CI before deploy.
+- Runtime equivalent: `lib/manifestDriftCheck.ts` (workers dashboard + smoke test) — that one also checks heartbeat staleness, which needs the DB.
+
+The 11 crons in the manifest each have a `/api/cron/<name>` route. `reconcile` is operator-triggered (`/api/admin/reconcile/run`) and is intentionally NOT a `vercel.json` cron — it is not in the manifest.
+
+---
+
+**Last updated:** 2026-05-15 (phase 26 — manifest CI gate)

@@ -16,6 +16,7 @@ import { computeWorkerHealth } from "@/lib/workerHealth";
 import { checkManifestDrift } from "@/lib/manifestDriftCheck";
 import { webhookMetrics } from "@/lib/webhookAudit";
 import { computeProviderMetrics } from "@/lib/providerMetrics";
+import { webhookRetryMetrics } from "@/lib/webhookRetryQueue";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,12 +25,14 @@ export async function GET() {
   const guarded = await requireRole(["owner", "hq_admin"]);
   if (guarded instanceof NextResponse) return guarded;
 
-  const [snapshot, manifestDrift, webhooks, providers] = await Promise.all([
-    computeWorkerHealth(),
-    checkManifestDrift(),
-    webhookMetrics(24),
-    computeProviderMetrics({ windowHours: 24 }),
-  ]);
+  const [snapshot, manifestDrift, webhooks, providers, retryQueue] =
+    await Promise.all([
+      computeWorkerHealth(),
+      checkManifestDrift(),
+      webhookMetrics(24),
+      computeProviderMetrics({ windowHours: 24 }),
+      webhookRetryMetrics(24),
+    ]);
 
   return NextResponse.json({
     ok: true,
@@ -37,5 +40,6 @@ export async function GET() {
     manifestDrift,
     webhooks,
     providers,
+    retryQueue,
   });
 }

@@ -107,6 +107,14 @@ type ProviderMetrics = {
   }>;
 };
 
+type RetryQueueMetrics = {
+  windowHours: number;
+  pending: number;
+  retrying: number;
+  deadLetter: number;
+  succeeded24h: number;
+};
+
 type Snapshot = {
   generatedAt: string;
   overall: "healthy" | "warning" | "critical";
@@ -116,6 +124,7 @@ type Snapshot = {
   manifestDrift?: ManifestDrift;
   webhooks?: WebhookMetrics;
   providers?: ProviderMetrics;
+  retryQueue?: RetryQueueMetrics;
 };
 
 type AlertEvent = {
@@ -617,8 +626,54 @@ function Inner() {
         {snapshot.webhooks && (
           <WebhookTrustSection webhooks={snapshot.webhooks} />
         )}
+        {snapshot.retryQueue && (
+          <RetryQueueSection retry={snapshot.retryQueue} />
+        )}
       </div>
     </div>
+  );
+}
+
+function RetryQueueSection({ retry }: { retry: RetryQueueMetrics }) {
+  const open = retry.pending + retry.retrying;
+  return (
+    <section
+      className={`rounded-2xl border p-4 ${
+        retry.deadLetter > 0
+          ? "border-red-300 bg-red-50"
+          : open > 0
+            ? "border-amber-300 bg-amber-50"
+            : "border-gray-200 bg-white"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-bold text-gray-900">
+          Webhook reliability ({retry.windowHours}h)
+        </h2>
+        <Link
+          href="/admin/system/webhook-retries"
+          className="text-[11px] font-semibold text-green-700 hover:text-green-900 underline"
+        >
+          เปิด retry / dead-letter explorer →
+        </Link>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+        <Chip label="pending" value={retry.pending} tone={retry.pending > 0 ? "amber" : "gray"} />
+        <Chip label="retrying" value={retry.retrying} tone={retry.retrying > 0 ? "amber" : "gray"} />
+        <Chip
+          label="dead-letter"
+          value={retry.deadLetter}
+          tone={retry.deadLetter > 0 ? "red" : "gray"}
+        />
+        <Chip label="recovered 24h" value={retry.succeeded24h} tone="green" />
+      </div>
+      {retry.deadLetter > 0 && (
+        <p className="mt-2 text-[11px] text-red-800">
+          ⚠ มี webhook {retry.deadLetter} รายการใน dead-letter — ต้อง replay
+          ด้วยตนเองหรือตรวจสอบ
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -798,14 +853,16 @@ function Chip({
 }: {
   label: string;
   value: number;
-  tone: "green" | "red" | "gray";
+  tone: "green" | "red" | "gray" | "amber";
 }) {
   const cls =
     tone === "green"
       ? "border-green-300 bg-green-50 text-green-800"
       : tone === "red"
         ? "border-red-300 bg-red-50 text-red-800"
-        : "border-gray-300 bg-gray-50 text-gray-600";
+        : tone === "amber"
+          ? "border-amber-300 bg-amber-50 text-amber-800"
+          : "border-gray-300 bg-gray-50 text-gray-600";
   return (
     <span className={`rounded-full border px-2 py-0.5 font-semibold ${cls}`}>
       {label} {value}

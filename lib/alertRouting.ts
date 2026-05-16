@@ -51,8 +51,9 @@ export type AlertRouteOutcome = {
 export type RouteOptions = {
   /** Email recipient addresses, resolved per escalation tier. */
   recipients: string[];
-  /** LINE user / group / room id to push the alert to. */
-  lineTarget?: string | null;
+  /** Phase 26: LINE user / group / room ids — the alert fans out to
+   *  every target (multiple operators / HQ + branch groups). */
+  lineTargets?: string[];
   /** Escalation tier — drives the subject prefix. 'alert' = first
    *  fire; 'hq' / 'owner' = re-routes after the escalation cooldown. */
   tier?: EscalationTier;
@@ -200,20 +201,30 @@ async function routeSlack(
 async function routeLine(
   a: RoutableAlert,
   opts: RouteOptions
-): Promise<AlertRouteOutcome> {
-  // Target precedence: per-scope alert_preferences.line_target →
-  // ALERT_LINE_TARGET env. A LINE user / group / room id all work as
-  // the push `to` field.
-  const target =
-    (opts.lineTarget ?? "").trim() ||
-    (process.env.ALERT_LINE_TARGET ?? "").trim();
-  if (!target) {
-    return {
-      channel: "line",
-      recipient: null,
-      status: "skipped",
-      reason: "no LINE target (alert_preferences.line_target / ALERT_LINE_TARGET)",
-    };
+): Promise<AlertRouteOutcome[]> {
+  // Phase 26: fan out to EVERY configured LINE target — multiple
+  // operators, plus HQ + branch escalation groups. Target set =
+  // resolved escalation/preference targets ∪ ALERT_LINE_TARGET env.
+  const targets = Array.from(
+    new Set(
+      [
+        ...(opts.lineTargets ?? []),
+        (process.env.ALERT_LINE_TARGET ?? "").trim(),
+      ]
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0)
+    )
+  );
+  if (targets.length === 0) {
+    return [
+      {
+        channel: "line",
+        recipient: null,
+        status: "skipped",
+        reason:
+          "no LINE target (escalation_recipients / alert_preferences / ALERT_LINE_TARGET)",
+      },
+    ];
   }
 
   // Token: dedicated ALERT_LINE_TOKEN, else the global LINE OA token.
@@ -228,45 +239,48 @@ async function routeLine(
     }
   }
   if (!token) {
-    return {
-      channel: "line",
-      recipient: target,
-      status: "skipped",
-      reason: "no LINE channel token (ALERT_LINE_TOKEN / LINE OA)",
-    };
+    return [
+      {
+        channel: "line",
+        recipient: targets.join(","),
+        status: "skipped",
+        reason: "no LINE channel token (ALERT_LINE_TOKEN / LINE OA)",
+      },
+    ];
   }
 
   const tier = opts.tier ?? "alert";
   const text = `${tierPrefix(tier, a.severity)}\n${summarise(a)}\n→ /admin/system/workers`;
-  try {
-    const res = await pushTextMessage(
-      {
-        origin: "branch",
-        channelAccessToken: token,
-        channelSecret: null,
-        oaBasicId: null,
-        oaDisplayName: null,
-        branchId: null,
-      },
-      target,
-      text
-    );
-    return {
-      channel: "line",
-      recipient: target,
-      status: res.ok ? "sent" : "failed",
-      reason: res.ok
-        ? `requestId=${res.requestId ?? "?"}`
-        : `LINE ${res.status}: ${res.reason}`,
-    };
-  } catch (err) {
-    return {
-      channel: "line",
-      recipient: target,
-      status: "failed",
-      reason: err instanceof Error ? err.message : String(err),
-    };
+  const cfg = {
+    origin: "branch" as const,
+    channelAccessToken: token,
+    channelSecret: null,
+    oaBasicId: null,
+    oaDisplayName: null,
+    branchId: null,
+  };
+  const outcomes: AlertRouteOutcome[] = [];
+  for (const target of targets) {
+    try {
+      const res = await pushTextMessage(cfg, target, text);
+      outcomes.push({
+        channel: "line",
+        recipient: target,
+        status: res.ok ? "sent" : "failed",
+        reason: res.ok
+          ? `requestId=${res.requestId ?? "?"}`
+          : `LINE ${res.status}: ${res.reason}`,
+      });
+    } catch (err) {
+      outcomes.push({
+        channel: "line",
+        recipient: target,
+        status: "failed",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
+  return outcomes;
 }
 
 /**
@@ -292,7 +306,7 @@ export async function routeAlert(
   }
   outcomes.push(await routeSlack(a, tier));
   try {
-    outcomes.push(await routeLine(a, opts));
+    outcomes.push(...(await routeLine(a, opts)));
   } catch (err) {
     outcomes.push({
       channel: "line",

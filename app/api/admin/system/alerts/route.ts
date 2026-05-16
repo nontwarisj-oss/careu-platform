@@ -16,6 +16,7 @@ import {
   evaluateAndRecordAlerts,
   listAlertDeliveries,
   listAlertEvents,
+  replayAlertRouting,
   resolveAlert,
 } from "@/lib/alertEvents";
 import { runLockJanitorTick } from "@/lib/workerLockJanitor";
@@ -70,7 +71,12 @@ export async function GET(req: Request) {
 }
 
 type Body = {
-  action?: "acknowledge" | "resolve" | "run-maintenance" | "send-digest";
+  action?:
+    | "acknowledge"
+    | "resolve"
+    | "run-maintenance"
+    | "send-digest"
+    | "replay-escalation";
   id?: string;
 };
 
@@ -137,6 +143,21 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { ok: false, reason: "id required" },
       { status: 400 }
+    );
+  }
+
+  if (body.action === "replay-escalation") {
+    // Owner / HQ only — re-route an alert NOW (replay console).
+    if (role !== "owner" && role !== "hq_admin") {
+      return NextResponse.json(
+        { ok: false, reason: "owner / hq_admin only" },
+        { status: 403 }
+      );
+    }
+    const r = await replayAlertRouting(body.id);
+    return NextResponse.json(
+      { ok: r.ok, reason: r.reason, outcomes: r.outcomes },
+      { status: r.ok ? 200 : 409 }
     );
   }
 

@@ -75,4 +75,17 @@ Add to the **daily check**: glance at Webhook trust (0 bad) + Cron manifest drif
 
 ---
 
-**Last updated:** 2026-05-15 (phase 25 — trustworthiness hardening)
+## 7. Phase 26 surfaces
+
+| Need | Where |
+|---|---|
+| A webhook failed to process | `/admin/system/webhook-retries` — auto-retries; replay manually if dead-lettered. |
+| Re-send an alert now | `/admin/system/workers` alert row, or `replay-escalation` action. |
+| Alert multiple LINE operators | `/admin/system/escalation-recipients` — add a `line_target` per recipient; all are paged. |
+| Confirm crons won't drift on deploy | `pnpm check:crons` (also runs as `prebuild`). |
+
+Add to the **daily check**: glance at Webhook reliability on the workers page — `dead-letter` should be 0.
+
+---
+
+**Last updated:** 2026-05-15 (phase 26 — communication reliability completion)

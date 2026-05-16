@@ -2105,6 +2105,44 @@ See [DELIVERY_PIPELINE.md](./DELIVERY_PIPELINE.md), [INCIDENT_RESPONSE.md](./INC
 
 ---
 
+## 12aa. Communication reliability completion (post-`20260550`)
+
+> Status: **communication reliability complete**. Webhook failures are recoverable, LINE escalation fans out to every operator, cron drift fails the build, and delivery ingestion is provider-agnostic + future-safe.
+
+See [WEBHOOK_SECURITY.md](./WEBHOOK_SECURITY.md), [DELIVERY_PIPELINE.md](./DELIVERY_PIPELINE.md), [CRON_ARCHITECTURE.md](./CRON_ARCHITECTURE.md).
+
+### 12aa.1 Schema (migration `20260550`)
+
+- `webhook_retry_queue` — a failed-but-verified provider callback, captured as a normalized `DeliveryReceipt` with retry metadata (attempts / max_attempts / next_retry_at / status / terminal_reason).
+
+### 12aa.2 Webhook retry queue
+
+`lib/deliveryReceipt.ts` — provider-agnostic `DeliveryReceipt` + `normalize{Twilio,Resend,Line}Receipt` + idempotent `applyDeliveryReceipt`. `lib/webhookRetryQueue.ts` — `enqueueWebhookRetry`, `runWebhookRetryTick` (exp-backoff, dead-letter), `replayWebhookRetry`. The twilio + email webhooks wrap processing in try/catch → on throw, enqueue a normalized receipt + 200-ack. `webhook-retry` cron (12th cron, ~10 min) drains it.
+
+### 12aa.3 Multi-target LINE escalation
+
+`lib/alertRouting.ts::routeLine` fans out to every resolved LINE target (`RouteOptions.lineTargets[]`); one `alert_deliveries` row per push. `lib/alertEvents.ts` merges `escalation_recipients` LINE targets + `alert_preferences.line_target`.
+
+### 12aa.4 Manifest CI gate
+
+`scripts/check-cron-manifest.mjs` — compares `cronManifest.ts` ↔ `vercel.json` ↔ `app/api/cron/*`; exits non-zero on drift. Wired as the `prebuild` npm hook → drift fails the build. `reconcile` removed from the manifest (operator-triggered, no `/api/cron` endpoint).
+
+### 12aa.5 Dead-letter explorer + replay console
+
+`/admin/system/webhook-retries` + `/api/admin/system/webhook-retries` — list / filter / preview payload / **Replay** (owner/HQ, audited, rate-limited). `replayAlertRouting` + the alerts API `replay-escalation` action complete the replay console.
+
+### 12aa.6 Reliability dashboard
+
+`/admin/system/workers` adds a **Webhook reliability** section (`webhook_retry_queue` pending / retrying / dead-letter / recovered-24h) alongside the Phase 25 webhook-trust + provider-metrics + manifest-drift sections.
+
+### 12aa.7 Known limitations
+
+- LINE delivery receipts remain a placeholder (`normalizeLineReceipt` returns null) — the wiring point exists for when LINE's API exposes them.
+- The retry queue replays the normalized delivery receipt (status transition + broadcast metric + alert confirm + comm event) — not the webhook route's full secondary side-effects (e.g. `customer_activity` rows); those are cosmetic, the delivery state is what's recovered.
+- `webhook-retry` enqueue is best-effort; if the queue insert itself fails, the provider's own retry is the last line of defence.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
