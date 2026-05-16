@@ -2228,6 +2228,38 @@ See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
 
 ---
 
+## 12ee. SEO & performance deep pass (Phase 27C)
+
+> Status: **production-grade public UX**. Phase 27C — canonical URLs, structured data, dynamic OG images, loading skeletons, and an accessibility pass. No migration — additive code only.
+
+See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
+
+### 12ee.1 SEO surface
+
+- [`lib/publicSeo.ts`](../lib/publicSeo.ts) — `SITE_URL`, `absoluteUrl()`, `canonical()`, `breadcrumbJsonLd()`. One source of truth for the public origin.
+- `metadataBase` is set on the `(public)` layout; every public page emits `<link rel="canonical">` + absolute `og:url`.
+- `/quote` + `/track` are client components — each gained a thin `layout.tsx` solely to carry metadata.
+- JSON-LD: homepage `Organization` + `WebSite`; branch `LocalBusiness` (now with `url`, `image`, `openingHoursSpecification`) + `BreadcrumbList`; service `BreadcrumbList`. `sitemap.ts` / `robots.ts` unchanged (already cover branches + services).
+
+### 12ee.2 Dynamic OG images
+
+- [`lib/ogTemplate.tsx`](../lib/ogTemplate.tsx) — shared `next/og` card renderer (flexbox-only, inline styles for Satori).
+- Three `opengraph-image.tsx` routes: `(public)` default (static), `/services/[slug]` (prerendered per slug), `/branches/[branchCode]` (on-demand, DB-backed, degrades to a generic card on any error).
+- Text is Latin-only — the default `next/og` font has no Thai glyphs. Branch codes + English service titles are what the cards show.
+
+### 12ee.3 Performance + a11y
+
+- `loading.tsx` on every DB-backed public segment, all rendering [`components/PublicSkeleton.tsx`](../components/PublicSkeleton.tsx) — instant Suspense fallback.
+- `(public)/not-found.tsx` — branded 404 with public chrome.
+- Skip-to-content link + `<main id="main-content">`; global `:focus-visible` ring in `globals.css`; quote wizard step indicator gains `aria-label` / `aria-current`; quote nav bar is `sticky bottom-0` on mobile.
+
+### 12ee.4 Known limitations
+
+- OG cards cannot render Thai until a Thai font is bundled into `ImageResponse`.
+- `next/image` was not adopted on public pages — the branch hero stays a raw `<img>` (a remote-pattern config touches infra; deferred).
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

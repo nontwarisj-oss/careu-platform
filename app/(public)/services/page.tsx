@@ -4,11 +4,13 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { SERVICE_CATEGORIES } from "@/lib/pricing";
 import { defaultBrandTheme } from "@/lib/publicTheme";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
+import { canonical } from "@/lib/publicSeo";
 
 export const metadata: Metadata = {
   title: "บริการของเรา",
   description:
     "บริการครบครันจาก Care U + Ezy Repair — ดัดแปลงเสื้อผ้า, ซิป, ซักรีด, ซ่อมรองเท้า / กระเป๋า, งานปัก",
+  alternates: canonical("/services"),
 };
 
 type CatalogRow = {

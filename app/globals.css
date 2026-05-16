@@ -25,6 +25,16 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Accessible keyboard focus (Phase 27C). A visible ring on every
+   focusable element that does not already paint its own. Scoped to
+   :focus-visible so pointer clicks stay ring-free. Components that set
+   an explicit focus-visible ring (public nav, buttons) override this. */
+:focus-visible {
+  outline: 2px solid #15803d;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 @media print {
   /* Default print page size: A4. The thermal receipt swaps to 80mm via
      body.printing-thermal below. */

@@ -11,16 +11,19 @@ import { defaultBrandTheme } from "@/lib/publicTheme";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
 import { computeBranchStatus } from "@/lib/branchPublicStatus";
+import { SITE_URL, absoluteUrl, canonical } from "@/lib/publicSeo";
 
 export const metadata: Metadata = {
   title: "หน้าแรก",
   description:
     "Care U — ร้านดัดแปลงเสื้อผ้า ซ่อมซิป ซ่อมรองเท้าและกระเป๋า หลายสาขาในกรุงเทพฯ ติดตามงานออนไลน์และขอใบเสนอราคาผ่านเว็บได้ทันที",
+  alternates: canonical("/website"),
   openGraph: {
     title: "Care U — ดูแลเสื้อผ้า ซ่อมรองเท้า กระเป๋า",
     description:
       "ร้านดัดแปลงเสื้อผ้า / ซ่อมรองเท้า / กระเป๋า — ขอใบเสนอราคาและติดตามงานออนไลน์",
     type: "website",
+    url: absoluteUrl("/website"),
   },
 };
 
@@ -85,12 +88,37 @@ export default async function PublicHomePage() {
     })),
   };
 
+  // Organization + WebSite identity — helps search engines build the
+  // brand knowledge panel and treat /website as the site home.
+  const siteJsonLd = [
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      name: "Care U",
+      url: SITE_URL,
+      description:
+        "ร้านดัดแปลงเสื้อผ้า ซ่อมซิป ซ่อมรองเท้าและกระเป๋า หลายสาขาในกรุงเทพฯ",
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      name: "Care U",
+      url: SITE_URL,
+      inLanguage: "th-TH",
+    },
+  ];
+
   return (
     <div>
       {/* FAQ structured data */}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+      />
+      {/* Organization + WebSite structured data */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(siteJsonLd) }}
       />
 
       {/* ---------- Hero ---------- */}

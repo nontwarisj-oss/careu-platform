@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { defaultBrandTheme } from "@/lib/publicTheme";
+import { canonical } from "@/lib/publicSeo";
 
 export const metadata: Metadata = {
   title: "เกี่ยวกับเรา",
   description:
     "Care U OPS — ร้านซ่อมผ้า + ซ่อมรองเท้า / กระเป๋า บริการแบบมืออาชีพ. ทุกสาขามาตรฐานเดียวกัน ติดตามงานออนไลน์ได้",
+  alternates: canonical("/about"),
 };
 
 export default function AboutPage() {

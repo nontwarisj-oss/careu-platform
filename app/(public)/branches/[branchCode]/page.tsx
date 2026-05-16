@@ -15,6 +15,26 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { themeForBranch, type BranchTheme } from "@/lib/publicTheme";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
 import { computeBranchStatus } from "@/lib/branchPublicStatus";
+import { absoluteUrl, canonical, breadcrumbJsonLd } from "@/lib/publicSeo";
+
+// schema.org dayOfWeek names, indexed by the operating_hours day keys.
+const SCHEMA_DAY: Record<string, string> = {
+  mon: "Monday",
+  tue: "Tuesday",
+  wed: "Wednesday",
+  thu: "Thursday",
+  fri: "Friday",
+  sat: "Saturday",
+  sun: "Sunday",
+};
+
+/** "09:00-19:00" → { opens, closes }; null on an unparseable value. */
+function parseHoursWindow(
+  raw: string
+): { opens: string; closes: string } | null {
+  const m = /^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/.exec(raw.trim());
+  return m ? { opens: m[1], closes: m[2] } : null;
+}
 
 type BranchRow = {
   id: string;
@@ -99,10 +119,17 @@ export async function generateMetadata({
   const description =
     branch.tagline ??
     `${title}${branch.address ? ` — ${branch.address}` : ""}`.trim();
+  const path = `/branches/${encodeURIComponent(branch.code)}`;
   return {
     title,
     description,
-    openGraph: { title, description, type: "website" },
+    alternates: canonical(path),
+    openGraph: {
+      title,
+      description,
+      type: "website",
+      url: absoluteUrl(path),
+    },
   };
 }
 
@@ -133,22 +160,58 @@ export default async function BranchDetailPage({
       ? mapsUrl(branch.address)
       : null;
 
+  // openingHoursSpecification derived from operating_hours — only the
+  // days that carry a parseable window are emitted.
+  const openingSpec = hours
+    ? Object.entries(hours)
+        .filter(([k]) => k in SCHEMA_DAY)
+        .flatMap(([k, raw]) => {
+          const w = typeof raw === "string" ? parseHoursWindow(raw) : null;
+          return w
+            ? [
+                {
+                  "@type": "OpeningHoursSpecification",
+                  dayOfWeek: SCHEMA_DAY[k],
+                  opens: w.opens,
+                  closes: w.closes,
+                },
+              ]
+            : [];
+        })
+    : [];
+
   // LocalBusiness structured data for local SEO.
+  const branchPath = `/branches/${encodeURIComponent(branch.code)}`;
   const jsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
     name: branch.name,
+    url: absoluteUrl(branchPath),
     ...(branch.address ? { address: branch.address } : {}),
     ...(branch.phone && branch.phone !== "N/A"
       ? { telephone: branch.phone }
       : {}),
+    ...(branch.hero_image_path ? { image: branch.hero_image_path } : {}),
+    ...(openingSpec.length > 0
+      ? { openingHoursSpecification: openingSpec }
+      : {}),
   };
+
+  const breadcrumbLd = breadcrumbJsonLd([
+    { name: "หน้าแรก", path: "/website" },
+    { name: "สาขา", path: "/branches" },
+    { name: branch.short_label ?? branch.name, path: branchPath },
+  ]);
 
   return (
     <div>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd) }}
       />
 
       <section
@@ -161,6 +224,8 @@ export default async function BranchDetailPage({
               src={branch.hero_image_path}
               alt=""
               aria-hidden="true"
+              decoding="async"
+              fetchPriority="high"
               className="absolute inset-0 h-full w-full object-cover opacity-30"
             />
             <div className="absolute inset-0 bg-black/20" />

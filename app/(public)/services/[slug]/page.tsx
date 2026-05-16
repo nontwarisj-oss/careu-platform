@@ -13,6 +13,7 @@ import {
   getServiceContent,
   allServiceSlugs,
 } from "@/lib/serviceContent";
+import { absoluteUrl, canonical, breadcrumbJsonLd } from "@/lib/publicSeo";
 
 export function generateStaticParams(): Array<{ slug: string }> {
   return allServiceSlugs().map((slug) => ({ slug }));
@@ -30,7 +31,13 @@ export async function generateMetadata({
   return {
     title,
     description: svc.summary,
-    openGraph: { title, description: svc.summary, type: "article" },
+    alternates: canonical(`/services/${svc.slug}`),
+    openGraph: {
+      title,
+      description: svc.summary,
+      type: "article",
+      url: absoluteUrl(`/services/${svc.slug}`),
+    },
   };
 }
 
@@ -60,6 +67,12 @@ export default async function ServiceDetailPage({
     },
   };
 
+  const breadcrumbLd = breadcrumbJsonLd([
+    { name: "หน้าแรก", path: "/website" },
+    { name: "บริการ", path: "/services" },
+    { name: svc.titleTh, path: `/services/${svc.slug}` },
+  ]);
+
   // Related services — same category, excluding the current one.
   const related = SERVICE_CONTENT.filter(
     (s) => s.category === svc.category && s.slug !== svc.slug
@@ -70,6 +83,10 @@ export default async function ServiceDetailPage({
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbLd) }}
       />
 
       <section className={`bg-gradient-to-r ${theme.accentClass} text-white`}>

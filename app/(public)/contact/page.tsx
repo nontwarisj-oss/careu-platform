@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { defaultBrandTheme } from "@/lib/publicTheme";
+import { canonical } from "@/lib/publicSeo";
 
 export const metadata: Metadata = {
   title: "ติดต่อเรา",
   description:
     "ติดต่อ Care U OPS — สอบถามบริการ ขอใบเสนอราคา หรือติดตามงาน",
+  alternates: canonical("/contact"),
 };
 
 export default function ContactPage() {

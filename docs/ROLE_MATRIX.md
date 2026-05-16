@@ -360,7 +360,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 27A — customer portal polish. Order-history filters, reorder (`/api/portal/reorder`), saved customer preferences, notification centre (`/portal/notifications`), attachment HEIC fallback, session UX. All customer-cookie scoped — no operator-role surface. Migration `20260551`. | — |
 | 2026-05-15 | Phase 27B — public website maturity. Homepage sections, dynamic `/branches/[code]` + `/services/[slug]` SEO pages, 4-step quote wizard with safe uploads + localStorage draft-save. Anonymous/public surface — no operator-role change. Migration `20260552`. | — |
 | 2026-05-15 | Phase 27D — franchise-safe public layer. `/admin/settings/branches` + `/api/admin/settings/branch-public` (owner/HQ) operator UI for branch public settings; dynamic open/closed status; public smoke-test category. Migration `20260553`. | — |
+| 2026-05-16 | Phase 27C — SEO & performance deep pass. Canonical URLs + `metadataBase`, `Organization`/`WebSite`/`BreadcrumbList` + enriched `LocalBusiness` JSON-LD, dynamic `next/og` OG images, `loading.tsx` skeletons, public `not-found.tsx`, skip-link + global focus ring. Public/customer surface only — no operator-role change. No migration. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 27D — franchise-safe public layer)
+**Last updated:** 2026-05-16 (Phase 27C — SEO & performance deep pass)

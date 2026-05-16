@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { defaultBrandTheme } from "@/lib/publicTheme";
+import { canonical } from "@/lib/publicSeo";
 
 export const metadata: Metadata = {
   title: "สาขาของเรา",
   description:
     "รายชื่อสาขา Care U + Ezy Repair ที่เปิดให้บริการ — ดูเวลา ที่อยู่ และบริการที่รองรับของแต่ละสาขา",
+  alternates: canonical("/branches"),
 };
 
 type BranchRow = {

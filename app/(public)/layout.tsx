@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { SITE_URL } from "@/lib/publicSeo";
 
 // The public website lives under this layout — no OPS sidebar, no
 // admin chrome. The root layout (app/layout.tsx) still mounts the
@@ -12,7 +13,11 @@ import Link from "next/link";
 // The OPS Sidebar component itself short-circuits when pathname starts
 // with a public prefix, so visitors don't see it.
 
+// metadataBase lets every public page emit absolute canonical + OG
+// URLs (and resolve the generated opengraph-image routes) from a
+// relative path. Set once here; inherited by all (public) pages.
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: {
     default: "Care U — บริการดูแลเสื้อผ้า / ซ่อมรองเท้า / กระเป๋า",
     template: "%s · Care U",
@@ -23,6 +28,7 @@ export const metadata: Metadata = {
     type: "website",
     siteName: "Care U OPS",
     locale: "th_TH",
+    url: SITE_URL,
   },
   robots: {
     index: true,
@@ -37,8 +43,17 @@ export default function PublicLayout({
 }) {
   return (
     <div className="min-h-screen flex flex-col bg-white text-gray-900">
+      {/* Keyboard users land here first — jump straight to content. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:rounded-lg focus:bg-green-700 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
+      >
+        ข้ามไปยังเนื้อหา
+      </a>
       <PublicHeader />
-      <main className="flex-1">{children}</main>
+      <main id="main-content" className="flex-1">
+        {children}
+      </main>
       <PublicFooter />
     </div>
   );
@@ -50,13 +65,16 @@ function PublicHeader() {
       <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
         <Link
           href="/website"
-          className="flex items-center gap-2"
+          className="flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-600 focus-visible:ring-offset-2"
           aria-label="Care U home"
         >
           <span className="inline-block w-8 h-8 rounded-lg bg-gradient-to-r from-green-700 to-emerald-600" />
           <span className="font-bold text-gray-900 text-lg">Care U</span>
         </Link>
-        <nav className="flex items-center gap-1 text-sm overflow-x-auto">
+        <nav
+          aria-label="เมนูหลัก"
+          className="flex items-center gap-1 text-sm overflow-x-auto"
+        >
           <NavLink href="/services">บริการ</NavLink>
           <NavLink href="/branches">สาขา</NavLink>
           <NavLink href="/track">ติดตามงาน</NavLink>
@@ -80,7 +98,7 @@ function NavLink({
   return (
     <Link
       href={href}
-      className="shrink-0 px-3 py-2 rounded-full text-gray-700 hover:bg-green-50 hover:text-green-800 font-medium"
+      className="shrink-0 px-3 py-2 rounded-full text-gray-700 hover:bg-green-50 hover:text-green-800 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-600"
     >
       {children}
     </Link>

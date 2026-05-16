@@ -197,15 +197,20 @@ export default function QuoteWizardPage() {
 
       <section className="max-w-3xl mx-auto px-4 py-6">
         {/* Step indicator */}
-        <ol className="flex items-center gap-1">
+        <ol
+          className="flex items-center gap-1"
+          aria-label={`ขั้นตอนที่ ${step + 1} จาก ${STEPS.length}: ${STEPS[step]}`}
+        >
           {STEPS.map((label, i) => (
             <li key={label} className="flex-1">
               <div
+                aria-hidden="true"
                 className={`h-1.5 rounded-full ${
                   i <= step ? "bg-green-600" : "bg-gray-200"
                 }`}
               />
               <span
+                aria-current={i === step ? "step" : undefined}
                 className={`mt-1 block text-[10px] font-semibold ${
                   i === step ? "text-green-700" : "text-gray-400"
                 }`}
@@ -409,8 +414,9 @@ export default function QuoteWizardPage() {
           )}
         </div>
 
-        {/* Nav */}
-        <div className="mt-4 flex items-center justify-between gap-3">
+        {/* Nav — sticks to the viewport bottom on mobile so the
+            primary action is always reachable above the fold. */}
+        <div className="mt-4 sticky bottom-0 z-10 -mx-4 flex items-center justify-between gap-3 border-t border-gray-100 bg-white/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
           <button
             type="button"
             onClick={() => setStep((s) => Math.max(0, s - 1))}
