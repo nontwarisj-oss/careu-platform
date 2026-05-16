@@ -71,6 +71,12 @@ interface SmartOrderFormProps {
 
 const NEEDS_QUOTE_TH = "ต้องประเมินราคา";
 
+// Sentinel service code for the "Other / อื่นๆ" path — staff types a
+// custom service name + detail + price instead of picking from the
+// catalog. Stored on the order as service_code so the receipt + reports
+// can still tell catalog vs custom work apart.
+const OTHER_CODE = "__OTHER__";
+
 export function SmartOrderForm({
   variant = "intake",
   onCreated,
@@ -93,6 +99,8 @@ export function SmartOrderForm({
   // ---- Service / job -----------------------------------------------------
   const [category, setCategory] = useState<ServiceCategoryKey | "">("");
   const [serviceCode, setServiceCode] = useState<string>("");
+  /** Custom service name — only used when serviceCode === OTHER_CODE. */
+  const [customServiceName, setCustomServiceName] = useState<string>("");
   const [templateText, setTemplateText] = useState<string>("");
   const [templateTouched, setTemplateTouched] = useState(false);
   const [unitPriceInput, setUnitPriceInput] = useState<string>("");
@@ -108,6 +116,8 @@ export function SmartOrderForm({
   // ---- Misc --------------------------------------------------------------
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<STATUS>("pending");
+  /** Optional pickup/ready date the customer expects (orders.due_date). */
+  const [dueDate, setDueDate] = useState<string>("");
 
   // ---- Business type + Job ID -----------------------------------------
   // Care U (clothing alteration) — staff enters job_id manually; server
@@ -216,6 +226,26 @@ export function SmartOrderForm({
     [serviceCatalog, serviceCode]
   );
 
+  // "Other" path — staff typed a custom service. `effectiveService` is what
+  // the rest of the form (validation, submit, summary) actually consumes:
+  // the catalog row normally, or a synthetic item built from the custom
+  // name when OTHER is chosen. Undefined until the form is submittable.
+  const isOther = serviceCode === OTHER_CODE;
+  const effectiveService: ServiceItem | undefined = useMemo(() => {
+    if (!isOther) return selectedService;
+    const name = customServiceName.trim();
+    if (!name) return undefined;
+    return {
+      code: OTHER_CODE,
+      category: (category || "special") as ServiceCategoryKey,
+      nameTh: name,
+      nameEn: name,
+      basePrice: null,
+      templateTh: "",
+      isSpecial: true,
+    };
+  }, [isOther, selectedService, customServiceName, category]);
+
   useEffect(() => {
     if (!selectedService) return;
     if (!templateTouched) {
@@ -250,7 +280,7 @@ export function SmartOrderForm({
   const total = Math.max(0, subtotal + urgentFeeAmount - discount);
 
   const isQuoteOnly =
-    selectedService?.basePrice === null && unitPrice === 0;
+    effectiveService?.basePrice === null && unitPrice === 0;
 
   const promotion = getPromotionByCode(promotionCode);
 
@@ -286,6 +316,7 @@ export function SmartOrderForm({
     setCustomerType("general");
     setCategory("");
     setServiceCode("");
+    setCustomServiceName("");
     setTemplateText("");
     setTemplateTouched(false);
     setUnitPriceInput("");
@@ -297,6 +328,7 @@ export function SmartOrderForm({
     setManualDiscount("");
     setNotes("");
     setStatus("pending");
+    setDueDate("");
     setCareUJobId("");
     setBusinessTypeTouched(false);
     setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
@@ -306,7 +338,11 @@ export function SmartOrderForm({
   const handleSubmit = async () => {
     setErrorMessage(null);
 
-    if (!selectedService) {
+    if (isOther && !customServiceName.trim()) {
+      setErrorMessage("พิมพ์ชื่อบริการสำหรับ “อื่นๆ” ก่อนบันทึก");
+      return;
+    }
+    if (!effectiveService) {
       setErrorMessage("เลือกบริการ/รายการก่อนบันทึก");
       return;
     }
@@ -352,6 +388,9 @@ export function SmartOrderForm({
             branch_id: branchRow.id,
             name: newCustomerName.trim(),
             phone: newCustomerPhone.trim(),
+            // Store the canonical phone so search + visit/spend matching
+            // work even if the raw value lost its leading zero.
+            normalized_phone: normalizePhone(newCustomerPhone),
             email: "N/A",
             address: "N/A",
             notes: null,
@@ -396,10 +435,10 @@ export function SmartOrderForm({
       customerType,
       branchId: branch.id,
       businessType,
-      serviceCategory: selectedService.category,
-      serviceCode: selectedService.code,
-      serviceName: selectedService.nameTh,
-      templateText: templateText || selectedService.templateTh || null,
+      serviceCategory: effectiveService.category,
+      serviceCode: effectiveService.code,
+      serviceName: effectiveService.nameTh,
+      templateText: templateText || effectiveService.templateTh || null,
       quantity: numericQuantity,
       subtotal,
       urgent,
@@ -412,6 +451,7 @@ export function SmartOrderForm({
       status,
       jobId: businessType === "care_u" ? careUJobId : null,
       createdBy: user?.uid ?? null,
+      dueDate: dueDate || null,
     });
 
     if (error || !orderId) {
@@ -444,10 +484,10 @@ export function SmartOrderForm({
       customerName: resolvedCustomer.name,
       customerPhone: resolvedCustomer.phone,
       serviceCategoryLabel:
-        SERVICE_CATEGORIES.find((c) => c.code === selectedService.category)
-          ?.labelTh ?? selectedService.category,
-      serviceName: selectedService.nameTh,
-      templateText: templateText || selectedService.templateTh,
+        SERVICE_CATEGORIES.find((c) => c.code === effectiveService.category)
+          ?.labelTh ?? effectiveService.category,
+      serviceName: effectiveService.nameTh,
+      templateText: templateText || effectiveService.templateTh,
       quantity: numericQuantity,
       unitPrice,
       subtotal,
@@ -680,7 +720,7 @@ export function SmartOrderForm({
             }
             className="rounded-xl border border-gray-300 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
           >
-            <option value="">เลือกหมวดบริการ</option>
+            <option value="">ทุกหมวด (แสดงทั้งหมด)</option>
             {SERVICE_CATEGORIES.map((c) => (
               <option key={c.code} value={c.code}>
                 {c.labelTh}
@@ -690,8 +730,7 @@ export function SmartOrderForm({
           <select
             value={serviceCode}
             onChange={(e) => handleSelectService(e.target.value)}
-            disabled={!category}
-            className="rounded-xl border border-gray-300 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-60"
+            className="rounded-xl border border-gray-300 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
           >
             <option value="">เลือกรายการบริการ</option>
             {filteredServices.map((s) => (
@@ -700,8 +739,19 @@ export function SmartOrderForm({
                 {s.basePrice === null ? " • ประเมินราคา" : ` • ฿${s.basePrice}`}
               </option>
             ))}
+            <option value={OTHER_CODE}>อื่นๆ — ระบุบริการเอง</option>
           </select>
         </div>
+
+        {isOther && (
+          <input
+            type="text"
+            value={customServiceName}
+            onChange={(e) => setCustomServiceName(e.target.value)}
+            placeholder="ชื่อบริการ (พิมพ์เอง) — เช่น เปลี่ยนซับใน, ซ่อมเป้กระเป๋า"
+            className="mt-3 w-full rounded-xl border border-green-300 bg-green-50/40 p-3 outline-none focus:ring-2 focus:ring-green-500"
+          />
+        )}
 
         <textarea
           value={templateText}
@@ -728,7 +778,7 @@ export function SmartOrderForm({
                 setUnitPriceTouched(true);
               }}
               placeholder={
-                selectedService?.basePrice === null ? NEEDS_QUOTE_TH : "0"
+                effectiveService?.basePrice === null ? NEEDS_QUOTE_TH : "0"
               }
               className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
             />
@@ -765,6 +815,18 @@ export function SmartOrderForm({
               <option value="ready-for-pickup">พร้อมรับ</option>
             </select>
           </div>
+        </div>
+
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-gray-700 mb-1">
+            กำหนดรับงาน (ถ้ามี)
+          </label>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            className="w-full rounded-xl border border-gray-300 bg-white p-3 outline-none focus:ring-2 focus:ring-green-500"
+          />
         </div>
       </section>
 
@@ -921,7 +983,7 @@ export function SmartOrderForm({
         disabled={
           isSubmitting ||
           (!selectedCustomer && !isCreatingNewCustomer) ||
-          !selectedService ||
+          !effectiveService ||
           unitPrice <= 0
         }
         className="w-full bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white font-semibold py-3.5 rounded-xl shadow-sm"
