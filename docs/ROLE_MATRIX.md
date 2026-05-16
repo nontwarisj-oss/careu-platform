@@ -356,7 +356,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 24 — operational observability. Alert-email delivery confirmation, real LINE operator channel, declarative cron manifest (`vercel.json` + `lib/cronManifest.ts`), cron health dashboard (next-run + recovery hints), `/admin/system/branch-health` (branch_manager own-branch), tiered escalation chain, delivery audit trail (`<DeliveryTimeline>`). Migration `20260548`. | — |
 | 2026-05-15 | Phase 25 — trustworthiness hardening. Webhook signature/replay/audit hardening (`webhook_audit_log`), cron manifest drift guard, role-tiered `escalation_recipients` with mute, delivery trace explorer, provider reliability metrics, incident snapshot export. Migration `20260549`. | — |
 | 2026-05-15 | Phase 26 — communication reliability completion. Webhook retry queue + dead-letter (`webhook_retry_queue`), provider-agnostic delivery receipt adapter, multi-target LINE escalation fan-out, manifest CI gate (`prebuild` hook), dead-letter explorer + replay console. Migration `20260550`. | — |
+| 2026-05-15 | Phase 27A — customer portal polish. Order-history filters, reorder (`/api/portal/reorder`), saved customer preferences, notification centre (`/portal/notifications`), attachment HEIC fallback, session UX. All customer-cookie scoped — no operator-role surface. Migration `20260551`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 26 — communication reliability completion)
+**Last updated:** 2026-05-15 (Phase 27A — customer portal polish)

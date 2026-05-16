@@ -4,6 +4,13 @@
 // material, assigned tech id, and free-form internal notes never leave
 // the route. Pagination via ?limit=&cursor= (cursor = last-seen
 // created_at, ISO).
+//
+// Phase 27A — optional server-side filters, always ANDed onto the
+// customer_id scope so a filter can never widen visibility:
+//   ?status=    one of pending|in-progress|completed|ready-for-pickup|cancelled
+//   ?branchId=  branches.code slug
+//   ?from= / ?to=  created_at date range (ISO date)
+//   ?q=         Job ID search (case-insensitive contains)
 
 import { NextResponse } from "next/server";
 import { readCustomerSessionFromCookies } from "@/lib/customerSession";
@@ -49,6 +56,20 @@ export async function GET(req: Request) {
   );
   const cursor = url.searchParams.get("cursor");
 
+  // Phase 27A filters — every one is ANDed onto the customer_id scope.
+  const statusFilter = (url.searchParams.get("status") ?? "").trim();
+  const branchFilter = (url.searchParams.get("branchId") ?? "").trim();
+  const fromFilter = (url.searchParams.get("from") ?? "").trim();
+  const toFilter = (url.searchParams.get("to") ?? "").trim();
+  const jobIdSearch = (url.searchParams.get("q") ?? "").trim();
+  const ALLOWED_STATUS = new Set([
+    "pending",
+    "in-progress",
+    "completed",
+    "ready-for-pickup",
+    "cancelled",
+  ]);
+
   let q = admin
     .from("orders")
     .select(
@@ -58,6 +79,13 @@ export async function GET(req: Request) {
     .order("created_at", { ascending: false })
     .limit(limit + 1);
   if (cursor) q = q.lt("created_at", cursor);
+  if (statusFilter && ALLOWED_STATUS.has(statusFilter)) {
+    q = q.eq("status", statusFilter);
+  }
+  if (branchFilter) q = q.eq("branch_id", branchFilter);
+  if (fromFilter) q = q.gte("created_at", `${fromFilter}T00:00:00.000Z`);
+  if (toFilter) q = q.lte("created_at", `${toFilter}T23:59:59.999Z`);
+  if (jobIdSearch) q = q.ilike("job_id", `%${jobIdSearch}%`);
 
   const { data, error } = await q;
   if (error || !data) {

@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+// /portal/signin — phone + OTP sign-in.
+// Phase 27A polish: session-expired banner (?expired=1), an OTP
+// resend cooldown timer, and a "this device is remembered 30 days"
+// reassurance line.
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type Step = "phone" | "code" | "done";
+
+const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function PortalSignInPage() {
   const router = useRouter();
@@ -14,9 +21,37 @@ export default function PortalSignInPage() {
   const [devCode, setDevCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const handleRequest = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Session-expired redirect lands here with ?expired=1.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("expired") === "1") setExpired(true);
+  }, []);
+
+  // Resend cooldown ticker.
+  const startCooldown = useCallback(() => {
+    setResendIn(RESEND_COOLDOWN_SECONDS);
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = setInterval(() => {
+      setResendIn((s) => {
+        if (s <= 1) {
+          if (tickRef.current) clearInterval(tickRef.current);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, []);
+
+  const requestOtp = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -33,15 +68,31 @@ export default function PortalSignInPage() {
       };
       if (!res.ok || !json.ok) {
         setError(json.reason ?? `ไม่สำเร็จ (HTTP ${res.status})`);
-      } else {
-        setRequestId(json.requestId ?? null);
-        setDevCode(json.devCode ?? null);
-        setStep("code");
+        return false;
       }
+      setRequestId(json.requestId ?? null);
+      setDevCode(json.devCode ?? null);
+      startCooldown();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  }, [phone, startCooldown]);
+
+  const handleRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setExpired(false);
+    const ok = await requestOtp();
+    if (ok) setStep("code");
+  };
+
+  const handleResend = async () => {
+    if (resendIn > 0) return;
+    setCode("");
+    await requestOtp();
   };
 
   const handleVerify = async (e: React.FormEvent) => {
@@ -69,6 +120,11 @@ export default function PortalSignInPage() {
 
   return (
     <div className="max-w-sm mx-auto">
+      {expired && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          เซสชันหมดอายุ — กรุณาเข้าสู่ระบบอีกครั้ง
+        </div>
+      )}
       <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
         <h1 className="text-2xl font-extrabold text-gray-900">
           เข้าสู่ระบบลูกค้า
@@ -150,6 +206,18 @@ export default function PortalSignInPage() {
             >
               {loading ? "กำลังตรวจสอบ..." : "ยืนยันรหัส"}
             </button>
+
+            {/* Resend with cooldown */}
+            <button
+              type="button"
+              onClick={() => void handleResend()}
+              disabled={loading || resendIn > 0}
+              className="w-full text-center text-xs font-semibold text-green-700 disabled:text-gray-400 disabled:font-normal"
+            >
+              {resendIn > 0
+                ? `ขอรหัสใหม่ได้ใน ${resendIn} วินาที`
+                : "ส่งรหัสอีกครั้ง"}
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -162,6 +230,9 @@ export default function PortalSignInPage() {
             >
               เปลี่ยนเบอร์
             </button>
+            <p className="text-center text-[10px] text-gray-400">
+              อุปกรณ์นี้จะจดจำการเข้าสู่ระบบไว้ 30 วัน
+            </p>
           </form>
         )}
       </div>

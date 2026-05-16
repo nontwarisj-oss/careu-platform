@@ -53,6 +53,21 @@ export default function PortalOrderDetailPage() {
   const [zoomPhoto, setZoomPhoto] = useState<PortalPhoto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+  const [reorderDone, setReorderDone] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  // Photo ids whose <img> failed to decode (HEIC the browser can't
+  // render natively) — shown as a download-link fallback instead.
+  const [failedPhotos, setFailedPhotos] = useState<Set<string>>(new Set());
+
+  const markPhotoFailed = useCallback((photoId: string) => {
+    setFailedPhotos((prev) => {
+      if (prev.has(photoId)) return prev;
+      const next = new Set(prev);
+      next.add(photoId);
+      return next;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -66,7 +81,7 @@ export default function PortalOrderDetailPage() {
       timelineRes.status === 401 ||
       photosRes.status === 401
     ) {
-      router.replace("/portal/signin");
+      router.replace("/portal/signin?expired=1");
       return;
     }
     const json = (await orderRes.json()) as {
@@ -104,6 +119,33 @@ export default function PortalOrderDetailPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const handleReorder = useCallback(async () => {
+    if (!id) return;
+    setReordering(true);
+    setReorderError(null);
+    try {
+      const res = await fetch("/api/portal/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: id }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        service?: string;
+      };
+      if (!res.ok || !json.ok) {
+        setReorderError(json.reason ?? `ส่งคำขอไม่สำเร็จ (HTTP ${res.status})`);
+        return;
+      }
+      setReorderDone(json.service ?? "งานซ่อม");
+    } catch (err) {
+      setReorderError(err instanceof Error ? err.message : "เครือข่ายขัดข้อง");
+    } finally {
+      setReordering(false);
+    }
+  }, [id]);
 
   // Visibility-aware polling — refresh every 30s while the tab is in
   // the foreground. Pauses entirely when the tab is hidden so a
@@ -212,6 +254,42 @@ export default function PortalOrderDetailPage() {
         )}
       </section>
 
+      {/* Phase 27A — "repair again": clone this order into a quote. */}
+      <section className="rounded-2xl border border-green-200 bg-green-50/60 p-5">
+        <h2 className="text-lg font-bold text-gray-900">ซ่อมงานนี้อีกครั้ง</h2>
+        {reorderDone ? (
+          <div className="mt-2">
+            <p className="text-sm text-green-800">
+              ✓ ส่งคำขอ &quot;{reorderDone}&quot; เรียบร้อย — ทีมงานสาขาจะติดต่อกลับเพื่อนัดหมาย
+            </p>
+            <Link
+              href="/portal"
+              className="mt-2 inline-block text-sm font-semibold text-green-700 underline"
+            >
+              กลับหน้าหลัก
+            </Link>
+          </div>
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-gray-600">
+              อยากให้ซ่อมแบบเดิมอีกครั้ง? กดปุ่มด้านล่างเพื่อส่งคำขอใหม่ —
+              เราจะกรอกบริการ + สาขาให้อัตโนมัติ
+            </p>
+            {reorderError && (
+              <p className="mt-2 text-xs text-red-700">{reorderError}</p>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleReorder()}
+              disabled={reordering}
+              className="mt-3 rounded-xl bg-green-700 hover:bg-green-800 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+            >
+              {reordering ? "กำลังส่งคำขอ..." : "ส่งคำขอซ่อมอีกครั้ง"}
+            </button>
+          </>
+        )}
+      </section>
+
       {photos.length > 0 && (
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-lg font-bold text-gray-900">รูปประกอบงาน</h2>
@@ -219,22 +297,38 @@ export default function PortalOrderDetailPage() {
             แตะรูปเพื่อขยาย — ลิงก์รูปมีอายุประมาณ 5 นาที
           </p>
           <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2">
-            {photos.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => setZoomPhoto(p)}
-                className="aspect-square rounded-xl overflow-hidden bg-gray-100 border border-gray-200 hover:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={p.url}
-                  alt={p.name ?? "รูปงาน"}
-                  loading="lazy"
-                  className="w-full h-full object-cover"
-                />
-              </button>
-            ))}
+            {photos.map((p) =>
+              failedPhotos.has(p.id) ? (
+                <a
+                  key={p.id}
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="aspect-square rounded-xl bg-gray-100 border border-gray-200 flex flex-col items-center justify-center gap-1 p-2 text-center hover:border-green-500"
+                >
+                  <span className="text-2xl">🖼️</span>
+                  <span className="text-[9px] text-gray-500 leading-tight">
+                    เปิดรูปไม่ได้ — แตะเพื่อดาวน์โหลด
+                  </span>
+                </a>
+              ) : (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setZoomPhoto(p)}
+                  className="aspect-square rounded-xl overflow-hidden bg-gray-100 border border-gray-200 hover:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={p.url}
+                    alt={p.name ?? "รูปงาน"}
+                    loading="lazy"
+                    onError={() => markPhotoFailed(p.id)}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              )
+            )}
           </div>
         </section>
       )}
@@ -294,13 +388,34 @@ export default function PortalOrderDetailPage() {
           >
             ปิด
           </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={zoomPhoto.url}
-            alt={zoomPhoto.name ?? "รูปงาน"}
-            className="max-w-full max-h-full object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
+          {failedPhotos.has(zoomPhoto.id) ? (
+            <div
+              className="rounded-xl bg-white p-6 text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-3xl">🖼️</p>
+              <p className="mt-2 text-sm text-gray-700">
+                เบราว์เซอร์เปิดรูปนี้ไม่ได้ (อาจเป็นไฟล์ HEIC)
+              </p>
+              <a
+                href={zoomPhoto.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-block rounded-lg bg-green-700 px-4 py-2 text-sm font-semibold text-white"
+              >
+                ดาวน์โหลดรูป
+              </a>
+            </div>
+          ) : (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={zoomPhoto.url}
+              alt={zoomPhoto.name ?? "รูปงาน"}
+              className="max-w-full max-h-full object-contain rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+              onError={() => markPhotoFailed(zoomPhoto.id)}
+            />
+          )}
         </div>
       )}
     </div>

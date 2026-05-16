@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PortalNotificationsLink } from "@/components/PortalNotificationsLink";
 
 export const metadata: Metadata = {
   title: {
@@ -26,6 +27,7 @@ export default function PortalLayout({
           </Link>
           <nav className="flex items-center gap-1 text-sm">
             <NavLink href="/portal/orders">งานของฉัน</NavLink>
+            <PortalNotificationsLink />
             <NavLink href="/portal/profile">โปรไฟล์</NavLink>
             <NavLink href="/website">เว็บหลัก</NavLink>
           </nav>

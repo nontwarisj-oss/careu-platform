@@ -212,4 +212,17 @@ Scope is one of `quote` (anonymous, anti-spam rate-limited 10/hr/IP), `customer`
 
 ---
 
-**Last updated:** 2026-05-14 (phase 12 — SMS provider, dispatch worker, phone-change flow, portal timeline + gallery, upload client)
+## Phase 27A — customer portal polish
+
+Migration `20260551` adds four nullable `customers.preferred_*` columns + `customer_notifications.customer_read_at`. Additive only — no rewrites.
+
+1. **Order history filters** — `/portal/orders` gains status chips, branch chips (derived from the customer's own orders — never hardcoded), a date range, and a Job ID search. Filtering is client-side over the loaded set (≤50) so it is instant. `/api/portal/orders` also accepts `status` / `branchId` / `from` / `to` / `q` query params, always ANDed onto the `customer_id` scope.
+2. **Reorder** — `POST /api/portal/reorder` clones a past order into a `quote_requests` row, linked to the customer immediately (`linked_customer_id`). Surfaced as "ซ่อมงานนี้อีกครั้ง" on the order detail page.
+3. **Saved preferences** — `/portal/preferences` gains a "ความชอบของคุณ" section: preferred branch / language / contact channel / pickup time. Persisted on `customers` via `/api/portal/profile` PATCH (validated against allow-lists).
+4. **Notification centre** — `/portal/notifications` lists `customer_notifications` with read/unread state (`customer_read_at`), per-channel filter chips, and delivery status. `GET/POST /api/portal/notifications` (POST `action='mark-read'`). The portal nav shows an unread badge (`<PortalNotificationsLink>`).
+5. **Timeline + attachments** — order detail keeps the status timeline; photos get a HEIC-safe fallback (a failed `<img>` becomes a download link) on both the grid and the zoom modal.
+6. **Session UX** — `/portal/signin` adds a session-expired banner (`?expired=1`), an OTP resend cooldown timer (60s), and a "remembered 30 days" note. All portal 401s now redirect to `/portal/signin?expired=1`.
+
+---
+
+**Last updated:** 2026-05-15 (phase 27A — customer portal polish)

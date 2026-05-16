@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
 
 type Prefs = {
   sms_enabled: boolean;
@@ -37,7 +38,7 @@ export default function PortalPreferencesPage() {
     void (async () => {
       const res = await fetch("/api/portal/preferences", { cache: "no-store" });
       if (res.status === 401) {
-        router.replace("/portal/signin");
+        router.replace("/portal/signin?expired=1");
         return;
       }
       const json = (await res.json()) as {
@@ -210,7 +211,207 @@ export default function PortalPreferencesPage() {
       <p className="text-[10px] text-gray-500 text-center">
         การปิดข้อความสำคัญ (เช่น OTP) ไม่สามารถปิดได้ — ระบบจะส่งเฉพาะเมื่อจำเป็น
       </p>
+
+      <SavedPreferences />
     </div>
+  );
+}
+
+// ---------- Phase 27A — saved customer preferences --------------------
+
+type SavedPrefs = {
+  preferredBranchId: string | null;
+  preferredLanguage: string | null;
+  preferredContactChannel: string | null;
+  preferredPickupTime: string | null;
+};
+
+const PICKUP_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "ไม่ระบุ" },
+  { value: "morning", label: "ช่วงเช้า (09:00–12:00)" },
+  { value: "afternoon", label: "ช่วงบ่าย (12:00–16:00)" },
+  { value: "evening", label: "ช่วงเย็น (16:00–19:00)" },
+];
+
+function SavedPreferences() {
+  const [prefs, setPrefs] = useState<SavedPrefs>({
+    preferredBranchId: null,
+    preferredLanguage: null,
+    preferredContactChannel: null,
+    preferredPickupTime: null,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/portal/profile", { cache: "no-store" });
+        if (!res.ok) {
+          setLoading(false);
+          return;
+        }
+        const json = (await res.json()) as {
+          ok?: boolean;
+          profile?: SavedPrefs;
+        };
+        if (json.ok && json.profile) {
+          setPrefs({
+            preferredBranchId: json.profile.preferredBranchId ?? null,
+            preferredLanguage: json.profile.preferredLanguage ?? null,
+            preferredContactChannel:
+              json.profile.preferredContactChannel ?? null,
+            preferredPickupTime: json.profile.preferredPickupTime ?? null,
+          });
+        }
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/portal/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          preferredBranchId: prefs.preferredBranchId,
+          preferredLanguage: prefs.preferredLanguage,
+          preferredContactChannel: prefs.preferredContactChannel,
+          preferredPickupTime: prefs.preferredPickupTime,
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; reason?: string };
+      if (!res.ok || !json.ok) {
+        setError(json.reason ?? `บันทึกไม่สำเร็จ (HTTP ${res.status})`);
+      } else {
+        setMessage("บันทึกความชอบแล้ว");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <section className="rounded-2xl border border-gray-100 bg-white p-5 animate-pulse">
+        <div className="h-5 w-1/3 bg-gray-200 rounded" />
+        <div className="mt-3 h-10 bg-gray-100 rounded" />
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-5 space-y-3">
+      <div>
+        <h2 className="text-base font-bold text-gray-900">ความชอบของคุณ</h2>
+        <p className="mt-1 text-[11px] text-gray-500">
+          ช่วยให้เราเตรียมบริการให้ตรงใจ — เว้นว่างได้ทุกช่อง
+        </p>
+      </div>
+
+      {message && (
+        <div className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </div>
+      )}
+
+      <PrefSelect
+        label="สาขาที่สะดวก"
+        value={prefs.preferredBranchId ?? ""}
+        onChange={(v) =>
+          setPrefs({ ...prefs, preferredBranchId: v || null })
+        }
+        options={[
+          { value: "", label: "ไม่ระบุ" },
+          ...ALL_BRANCHES.map((b) => ({ value: b.id, label: b.shortLabel })),
+        ]}
+      />
+      <PrefSelect
+        label="ภาษา"
+        value={prefs.preferredLanguage ?? ""}
+        onChange={(v) =>
+          setPrefs({ ...prefs, preferredLanguage: v || null })
+        }
+        options={[
+          { value: "", label: "ไม่ระบุ" },
+          { value: "th", label: "ไทย" },
+          { value: "en", label: "English" },
+        ]}
+      />
+      <PrefSelect
+        label="ช่องทางติดต่อที่สะดวก"
+        value={prefs.preferredContactChannel ?? ""}
+        onChange={(v) =>
+          setPrefs({ ...prefs, preferredContactChannel: v || null })
+        }
+        options={[
+          { value: "", label: "ไม่ระบุ" },
+          { value: "sms", label: "SMS" },
+          { value: "line", label: "LINE" },
+          { value: "email", label: "อีเมล" },
+        ]}
+      />
+      <PrefSelect
+        label="ช่วงเวลารับงานที่สะดวก"
+        value={prefs.preferredPickupTime ?? ""}
+        onChange={(v) =>
+          setPrefs({ ...prefs, preferredPickupTime: v || null })
+        }
+        options={PICKUP_OPTIONS}
+      />
+
+      <button
+        type="button"
+        onClick={() => void save()}
+        disabled={saving}
+        className="w-full rounded-xl bg-green-700 hover:bg-green-800 text-white px-5 py-2.5 text-sm font-semibold disabled:opacity-50"
+      >
+        {saving ? "กำลังบันทึก..." : "บันทึกความชอบ"}
+      </button>
+    </section>
+  );
+}
+
+function PrefSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[11px] font-semibold text-gray-700">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

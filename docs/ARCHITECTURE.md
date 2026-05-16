@@ -2143,6 +2143,38 @@ See [WEBHOOK_SECURITY.md](./WEBHOOK_SECURITY.md), [DELIVERY_PIPELINE.md](./DELIV
 
 ---
 
+## 12bb. Customer portal polish (post-`20260551`)
+
+> Status: **customer-grade portal**. Phase 27A — the first of the Phase 27 customer-experience series. Order-history filters, reorder, saved preferences, a notification centre, attachment + session UX.
+
+See [CUSTOMER_PORTAL.md](./CUSTOMER_PORTAL.md).
+
+### 12bb.1 Schema (migration `20260551`)
+
+- `customers` += `preferred_branch_id` / `preferred_language` / `preferred_contact_channel` / `preferred_pickup_time` — all nullable.
+- `customer_notifications` += `customer_read_at` — the portal notification-centre read marker (NULL = unread) + a partial index for the unread query.
+
+### 12bb.2 Portal features
+
+- **Order filters** — `/portal/orders` + `/api/portal/orders` (status / branch / date / Job ID), client-side over the loaded set; branch chips derived from the customer's own orders.
+- **Reorder** — `POST /api/portal/reorder` clones an order → `quote_requests` (linked customer); "repair again" on order detail.
+- **Saved preferences** — `/portal/preferences` "ความชอบของคุณ" section → `/api/portal/profile` PATCH (allow-list validated).
+- **Notification centre** — `/portal/notifications` + `GET/POST /api/portal/notifications`; `<PortalNotificationsLink>` nav badge.
+- **Attachment UX** — HEIC-safe `<img>` fallback (failed image → download link) on the photo grid + zoom modal.
+- **Session UX** — `/portal/signin` session-expired banner, OTP resend cooldown (60s); all portal 401s → `/portal/signin?expired=1`.
+
+### 12bb.3 Branch isolation
+
+Every new portal API reads the `customer_id` from the `careu_customer_session` cookie and scopes queries to it — a filter / param can never widen visibility. `/api/portal/reorder` verifies the order belongs to the calling customer before cloning.
+
+### 12bb.4 Known limitations
+
+- Order filtering is client-side over the most recent 50 orders — a customer with >50 orders won't filter older ones (rare; deferred).
+- `preferred_language` is stored but the portal UI is still Thai-only — the column is forward-wiring for a future i18n pass.
+- Customer-facing upload-to-order is still not built (portal views photos, doesn't add them) — deferred to the 27B quote wizard.
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:

@@ -13,7 +13,12 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const PROFILE_COLUMNS =
-  "id, name, phone, email, address, customer_tier, lifecycle_stage, branch_id, last_visit_at, total_orders, lifetime_spend, birth_date, birth_month_verified";
+  "id, name, phone, email, address, customer_tier, lifecycle_stage, branch_id, last_visit_at, total_orders, lifetime_spend, birth_date, birth_month_verified, preferred_branch_id, preferred_language, preferred_contact_channel, preferred_pickup_time";
+
+// Phase 27A — accepted values for the saved-preference fields.
+const PREF_LANGUAGES = new Set(["th", "en"]);
+const PREF_CHANNELS = new Set(["sms", "line", "email"]);
+const PREF_PICKUP = new Set(["morning", "afternoon", "evening"]);
 
 export async function GET() {
   const session = await readCustomerSessionFromCookies();
@@ -58,6 +63,12 @@ export async function GET() {
       lifetimeSpend: Number(row.lifetime_spend ?? 0),
       birthDate: (row.birth_date as string | null) ?? null,
       birthMonthVerified: !!row.birth_month_verified,
+      preferredBranchId: (row.preferred_branch_id as string | null) ?? null,
+      preferredLanguage: (row.preferred_language as string | null) ?? null,
+      preferredContactChannel:
+        (row.preferred_contact_channel as string | null) ?? null,
+      preferredPickupTime:
+        (row.preferred_pickup_time as string | null) ?? null,
     },
   });
 }
@@ -69,6 +80,12 @@ type PatchBody = {
    *  set, also flips birth_month_verified=true so the birthday
    *  trigger knows it can use this DOB. */
   birthDate?: string | null;
+  /** Phase 27A saved preferences — each independently optional;
+   *  null clears the preference. */
+  preferredBranchId?: string | null;
+  preferredLanguage?: string | null;
+  preferredContactChannel?: string | null;
+  preferredPickupTime?: string | null;
 };
 
 export async function PATCH(req: Request) {
@@ -123,6 +140,43 @@ export async function PATCH(req: Request) {
       patch.birth_date = body.birthDate;
       patch.birth_month_verified = true;
     }
+  }
+
+  // Phase 27A — saved preferences. Each is validated against its
+  // allow-list; an empty string / null clears it.
+  if (body.preferredBranchId !== undefined) {
+    patch.preferred_branch_id =
+      body.preferredBranchId?.trim() || null;
+  }
+  if (body.preferredLanguage !== undefined) {
+    const v = body.preferredLanguage?.trim() ?? "";
+    if (v && !PREF_LANGUAGES.has(v)) {
+      return NextResponse.json(
+        { ok: false, reason: "ภาษาที่เลือกไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+    patch.preferred_language = v || null;
+  }
+  if (body.preferredContactChannel !== undefined) {
+    const v = body.preferredContactChannel?.trim() ?? "";
+    if (v && !PREF_CHANNELS.has(v)) {
+      return NextResponse.json(
+        { ok: false, reason: "ช่องทางติดต่อไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+    patch.preferred_contact_channel = v || null;
+  }
+  if (body.preferredPickupTime !== undefined) {
+    const v = body.preferredPickupTime?.trim() ?? "";
+    if (v && !PREF_PICKUP.has(v)) {
+      return NextResponse.json(
+        { ok: false, reason: "ช่วงเวลารับงานไม่ถูกต้อง" },
+        { status: 400 }
+      );
+    }
+    patch.preferred_pickup_time = v || null;
   }
 
   if (Object.keys(patch).length === 0) {
