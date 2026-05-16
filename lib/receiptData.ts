@@ -126,8 +126,11 @@ export type ReceiptData = {
 const JOB_STATUS_TH: Record<string, string> = {
   pending: "รอดำเนิน",
   "in-progress": "กำลังซ่อม",
+  waiting_parts: "รออะไหล่",
+  outsource: "ส่งงานนอก",
   completed: "เสร็จสิ้น",
   "ready-for-pickup": "พร้อมรับ",
+  delivered: "ส่งมอบแล้ว",
   cancelled: "ยกเลิก",
 };
 

@@ -7,8 +7,11 @@
 export type OrderStatus =
   | "pending"
   | "in-progress"
+  | "waiting_parts"
+  | "outsource"
   | "completed"
   | "ready-for-pickup"
+  | "delivered"
   | "cancelled"
   | "overdue";
 
@@ -38,6 +41,18 @@ export const ORDER_STATUS_BADGES: Record<OrderStatus, BadgeSpec> = {
     classes: "border-blue-200 bg-blue-50 text-blue-800",
     dot: "🔵",
   },
+  waiting_parts: {
+    labelTh: "รออะไหล่",
+    labelEn: "Waiting parts",
+    classes: "border-orange-200 bg-orange-50 text-orange-800",
+    dot: "🟠",
+  },
+  outsource: {
+    labelTh: "ส่งงานนอก",
+    labelEn: "Outsourced",
+    classes: "border-indigo-200 bg-indigo-50 text-indigo-800",
+    dot: "🟣",
+  },
   completed: {
     labelTh: "เสร็จสิ้น",
     labelEn: "Completed",
@@ -49,6 +64,12 @@ export const ORDER_STATUS_BADGES: Record<OrderStatus, BadgeSpec> = {
     labelEn: "Ready",
     classes: "border-purple-200 bg-purple-50 text-purple-800",
     dot: "🟣",
+  },
+  delivered: {
+    labelTh: "ส่งมอบแล้ว",
+    labelEn: "Delivered",
+    classes: "border-teal-200 bg-teal-50 text-teal-800",
+    dot: "🟢",
   },
   cancelled: {
     labelTh: "ยกเลิก",
@@ -120,6 +141,24 @@ export const ORDER_STATUS_FLOW: OrderStatus[] = [
   "ready-for-pickup",
 ];
 
+/**
+ * Full operational status order for the /orders operations board.
+ * Extends ORDER_STATUS_FLOW with the shop-floor states (waiting_parts,
+ * outsource) and the terminal "delivered" / "cancelled" — the set the
+ * board's status changer offers. `orders.status` is a free-text column,
+ * so these need no migration.
+ */
+export const ORDER_OPS_FLOW: OrderStatus[] = [
+  "pending",
+  "in-progress",
+  "waiting_parts",
+  "outsource",
+  "completed",
+  "ready-for-pickup",
+  "delivered",
+  "cancelled",
+];
+
 export function orderStatusLabel(
   status: string,
   language: "th" | "en" = "th"
@@ -152,12 +191,18 @@ export function paymentStatusClasses(status: string): string {
   );
 }
 
-/** True when an order is past its due_date and not yet delivered to the customer. */
+/** True when an order is past its due_date and not yet finished. Terminal
+ *  states (ready-for-pickup, delivered, cancelled) are never "overdue". */
 export function isOverdue(
   status: string,
   dueDate: string | null | undefined
 ): boolean {
   if (!dueDate) return false;
-  if (status === "ready-for-pickup" || status === "cancelled") return false;
+  if (
+    status === "ready-for-pickup" ||
+    status === "delivered" ||
+    status === "cancelled"
+  )
+    return false;
   return new Date(dueDate) < new Date();
 }

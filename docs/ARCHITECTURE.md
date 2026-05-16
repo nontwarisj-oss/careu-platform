@@ -2304,9 +2304,51 @@ branch, job_id, status, grand total in `price`).
 - Per-item **image upload** — the `image_paths` column ships but the
   uploader UI is not wired into intake yet (follow-on; the public
   `PublicQuoteUploader` pipeline can be adapted for OPS).
-- `OrderDetailModal` + `/orders` still show the header only — the
-  operations board (Phase B) reworks that surface.
+- `OrderDetailModal` still shows the order header only.
 - `SmartOrderForm.tsx` is now unused (kept in-tree, not deleted).
+
+---
+
+## 12gg. Orders Operations Board — Store Ops Hardening Phase B
+
+> Status: **operations board**. `/orders` is the front-counter floor
+> board, not a form page. No migration, no architecture change — a new
+> view over existing data.
+
+### 12gg.1 Status vocabulary (additive)
+
+[`lib/statusBadges.ts`](../lib/statusBadges.ts) `ORDER_STATUS_BADGES`
+gains three shop-floor states — `waiting_parts`, `outsource`,
+`delivered` — alongside the existing `pending` / `in-progress` /
+`completed` / `ready-for-pickup` / `cancelled`. `orders.status` is a
+free-text column so **no migration is needed**. Existing statuses,
+the receipt flow, the dashboard matview, and the LINE lifecycle
+triggers are untouched — the new states simply don't fire customer
+notifications (they are internal). `ORDER_OPS_FLOW` is the ordered set
+the board's status changer offers; `isOverdue` now also treats
+`delivered` as terminal. `receiptData.ts` `JOB_STATUS_TH` gained the
+three Thai labels so receipts stay clean.
+
+### 12gg.2 The board ([`app/orders/page.tsx`](../app/orders/page.tsx))
+
+- **Queue chips** with live counts: ทั้งหมด / กำหนดวันนี้ / เลยกำหนด /
+  งานด่วน / พร้อมรับ / ค้างชำระ. Plus a technician filter dropdown and a
+  customer/Job-ID/phone search.
+- **Operations cards** (mobile-first grid): job id, customer + phone,
+  item count (from `order_items`, legacy = 1), branch, price, assigned
+  technician(s), due date (overdue / due-today highlighted), status +
+  payment badges, an inline status changer, and a link to the document.
+- Tapping a card opens the existing `OrderDetailModal`. Job creation
+  stays at `/intake` — the board has no embedded form.
+- Reuses `statusBadges`, `OrderDetailModal`, `getBranchById`,
+  `fetchOrderItemsForOrders`, the lifecycle trigger — no new
+  abstractions.
+
+### 12gg.3 Known limitations / follow-on
+
+- Inline status change is per-order; bulk actions are not provided.
+- The board reads the latest 500 orders — adequate per branch; a date
+  window / pagination is a later refinement.
 
 ---
 
