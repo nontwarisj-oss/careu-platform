@@ -357,7 +357,8 @@ This document defines the contract. Whenever a permission changes:
 | 2026-05-15 | Phase 25 — trustworthiness hardening. Webhook signature/replay/audit hardening (`webhook_audit_log`), cron manifest drift guard, role-tiered `escalation_recipients` with mute, delivery trace explorer, provider reliability metrics, incident snapshot export. Migration `20260549`. | — |
 | 2026-05-15 | Phase 26 — communication reliability completion. Webhook retry queue + dead-letter (`webhook_retry_queue`), provider-agnostic delivery receipt adapter, multi-target LINE escalation fan-out, manifest CI gate (`prebuild` hook), dead-letter explorer + replay console. Migration `20260550`. | — |
 | 2026-05-15 | Phase 27A — customer portal polish. Order-history filters, reorder (`/api/portal/reorder`), saved customer preferences, notification centre (`/portal/notifications`), attachment HEIC fallback, session UX. All customer-cookie scoped — no operator-role surface. Migration `20260551`. | — |
+| 2026-05-15 | Phase 27B — public website maturity. Homepage sections, dynamic `/branches/[code]` + `/services/[slug]` SEO pages, 4-step quote wizard with safe uploads + localStorage draft-save. Anonymous/public surface — no operator-role change. Migration `20260552`. | — |
 
 ---
 
-**Last updated:** 2026-05-15 (Phase 27A — customer portal polish)
+**Last updated:** 2026-05-15 (Phase 27B — public website maturity)

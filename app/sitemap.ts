@@ -1,12 +1,10 @@
-// Sitemap for the public website. Dynamic branch URLs come from the DB.
+// Sitemap for the public website. Dynamic branch + service URLs.
 // Crawlers respect the priority hints but the real signal is the URL list
 // itself — that's what we control here.
-//
-// Future enhancement: include per-service URLs once a /services/[code]
-// detail page exists.
 
 import type { MetadataRoute } from "next";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { allServiceSlugs } from "@/lib/serviceContent";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://careu.example.com";
 
@@ -25,14 +23,23 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${SITE_URL}/contact`, lastModified, priority: 0.5 },
   ];
 
+  // Dynamic per-service SEO pages.
+  const servicePages: MetadataRoute.Sitemap = allServiceSlugs().map(
+    (slug) => ({
+      url: `${SITE_URL}/services/${slug}`,
+      lastModified,
+      priority: 0.7,
+    })
+  );
+
   const admin = getSupabaseAdmin();
-  if (!admin) return staticPages;
+  if (!admin) return [...staticPages, ...servicePages];
 
   const { data, error } = await admin
     .from("branches")
     .select("code")
     .eq("is_active", true);
-  if (error || !data) return staticPages;
+  if (error || !data) return [...staticPages, ...servicePages];
 
   const branchPages: MetadataRoute.Sitemap = (data as Array<{ code: string }>).map(
     (b) => ({
@@ -42,5 +49,5 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     })
   );
 
-  return [...staticPages, ...branchPages];
+  return [...staticPages, ...servicePages, ...branchPages];
 }

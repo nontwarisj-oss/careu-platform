@@ -1,8 +1,19 @@
+// /branches/[branchCode] — branch detail page.
+//
+// Phase 27B maturity: operating hours, a Google-Maps CTA (derived
+// from the address — no map_url column needed), a LINE CTA, a
+// supported-services grid, an optional promo banner, and
+// LocalBusiness JSON-LD for local SEO.
+//
+// New columns operating_hours + promo_banner are nullable — the page
+// degrades gracefully when a branch has not filled them in.
+
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { themeForBranch, type BranchTheme } from "@/lib/publicTheme";
+import { SERVICE_CONTENT } from "@/lib/serviceContent";
 
 type BranchRow = {
   id: string;
@@ -19,7 +30,21 @@ type BranchRow = {
   accent_class: string | null;
   type: string | null;
   is_active: boolean;
+  operating_hours: Record<string, string> | null;
+  promo_banner: string | null;
 };
+
+const DAY_ORDER: Array<{ key: string; label: string }> = [
+  { key: "mon", label: "จันทร์" },
+  { key: "tue", label: "อังคาร" },
+  { key: "wed", label: "พุธ" },
+  { key: "thu", label: "พฤหัสบดี" },
+  { key: "fri", label: "ศุกร์" },
+  { key: "sat", label: "เสาร์" },
+  { key: "sun", label: "อาทิตย์" },
+];
+
+const LINE_URL = process.env.NEXT_PUBLIC_LINE_OA_URL ?? "/contact";
 
 async function loadBranch(code: string): Promise<BranchRow | null> {
   const admin = getSupabaseAdmin();
@@ -27,7 +52,7 @@ async function loadBranch(code: string): Promise<BranchRow | null> {
   const { data } = await admin
     .from("branches")
     .select(
-      "id, code, short_label, short_name, receipt_name, name, brand, tagline, address, phone, logo_path, accent_class, type, is_active"
+      "id, code, short_label, short_name, receipt_name, name, brand, tagline, address, phone, logo_path, accent_class, type, is_active, operating_hours, promo_banner"
     )
     .eq("code", code)
     .eq("is_active", true)
@@ -50,6 +75,12 @@ function rowToTheme(row: BranchRow): BranchTheme {
   };
 }
 
+function mapsUrl(address: string): string {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    address
+  )}`;
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -60,11 +91,12 @@ export async function generateMetadata({
   if (!branch) return { title: "ไม่พบสาขา" };
   const title = branch.short_label ?? branch.name;
   const description =
-    branch.tagline ?? `${title} — ${branch.address ?? ""}`.trim();
+    branch.tagline ??
+    `${title}${branch.address ? ` — ${branch.address}` : ""}`.trim();
   return {
     title,
     description,
-    openGraph: { title, description },
+    openGraph: { title, description, type: "website" },
   };
 }
 
@@ -77,12 +109,30 @@ export default async function BranchDetailPage({
   const branch = await loadBranch(branchCode);
   if (!branch) notFound();
   const theme = themeForBranch(rowToTheme(branch));
+  const hours =
+    branch.operating_hours && typeof branch.operating_hours === "object"
+      ? branch.operating_hours
+      : null;
+
+  // LocalBusiness structured data for local SEO.
+  const jsonLd: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "LocalBusiness",
+    name: branch.name,
+    ...(branch.address ? { address: branch.address } : {}),
+    ...(branch.phone && branch.phone !== "N/A"
+      ? { telephone: branch.phone }
+      : {}),
+  };
 
   return (
     <div>
-      <section
-        className={`bg-gradient-to-r ${theme.accentClass} text-white`}
-      >
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+
+      <section className={`bg-gradient-to-r ${theme.accentClass} text-white`}>
         <div className="max-w-6xl mx-auto px-4 py-10">
           <p className="text-[10px] uppercase tracking-[0.22em] font-semibold opacity-90">
             {theme.brandLabel}
@@ -98,56 +148,88 @@ export default async function BranchDetailPage({
         </div>
       </section>
 
+      {branch.promo_banner && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="max-w-6xl mx-auto px-4 py-2.5 text-sm text-amber-900 font-medium">
+            🎁 {branch.promo_banner}
+          </div>
+        </div>
+      )}
+
       <section className="max-w-6xl mx-auto px-4 py-8 grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">
+          {/* Branch info */}
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <h2 className="text-lg font-bold text-gray-900">ข้อมูลสาขา</h2>
             <dl className="mt-3 grid sm:grid-cols-2 gap-3 text-sm">
-              <div>
-                <dt className="text-xs uppercase tracking-widest text-gray-500">
-                  ชื่อเต็ม
-                </dt>
-                <dd className="mt-0.5 text-gray-900">{branch.name}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-widest text-gray-500">
-                  ประเภทธุรกิจ
-                </dt>
-                <dd className="mt-0.5 text-gray-900">
-                  {branch.type === "ezy_repair"
+              <Field label="ชื่อเต็ม" value={branch.name} />
+              <Field
+                label="ประเภทธุรกิจ"
+                value={
+                  branch.type === "ezy_repair"
                     ? "Ezy Repair (รองเท้า / กระเป๋า)"
                     : branch.type === "care_u"
-                    ? "Care U (ดัดแปลง / ซักรีด)"
-                    : "Mixed"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-widest text-gray-500">
-                  ที่อยู่
-                </dt>
-                <dd className="mt-0.5 text-gray-900">
-                  {branch.address ?? "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-widest text-gray-500">
-                  เบอร์ติดต่อ
-                </dt>
-                <dd className="mt-0.5 text-gray-900">
-                  {branch.phone && branch.phone !== "N/A"
-                    ? branch.phone
-                    : "—"}
-                </dd>
-              </div>
+                      ? "Care U (ดัดแปลง / ซักรีด)"
+                      : "บริการครบวงจร"
+                }
+              />
+              <Field label="ที่อยู่" value={branch.address ?? "—"} />
+              <Field
+                label="เบอร์ติดต่อ"
+                value={
+                  branch.phone && branch.phone !== "N/A" ? branch.phone : "—"
+                }
+              />
             </dl>
           </div>
 
-          <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-600">
-            แผนที่และเวลาเปิด-ปิดจะอยู่ที่นี่เมื่อระบบ map ของสาขาพร้อมใช้งาน —
-            ตอนนี้ติดต่อทางโทรศัพท์หรือ LINE ของสาขาได้เลย
+          {/* Operating hours */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-gray-900">เวลาทำการ</h2>
+            {hours ? (
+              <table className="mt-3 w-full text-sm">
+                <tbody>
+                  {DAY_ORDER.map((d) => (
+                    <tr
+                      key={d.key}
+                      className="border-b border-gray-50 last:border-0"
+                    >
+                      <td className="py-1.5 text-gray-600">{d.label}</td>
+                      <td className="py-1.5 text-right font-medium text-gray-900">
+                        {hours[d.key] ?? "ปิด"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="mt-2 text-sm text-gray-500">
+                กรุณาติดต่อสาขาทางโทรศัพท์หรือ LINE เพื่อสอบถามเวลาทำการ
+              </p>
+            )}
+            {hours?.note && (
+              <p className="mt-2 text-[11px] text-gray-500">{hours.note}</p>
+            )}
+          </div>
+
+          {/* Supported services */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-gray-900">บริการที่รองรับ</h2>
+            <div className="mt-3 grid sm:grid-cols-2 gap-2">
+              {SERVICE_CONTENT.map((s) => (
+                <Link
+                  key={s.slug}
+                  href={`/services/${s.slug}`}
+                  className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 hover:border-green-300 hover:bg-white"
+                >
+                  {s.titleTh}
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
 
+        {/* CTA rail */}
         <aside className="space-y-3">
           <Link
             href={`/quote?branch=${encodeURIComponent(branch.code)}`}
@@ -155,20 +237,41 @@ export default async function BranchDetailPage({
           >
             ขอใบเสนอราคาที่สาขานี้
           </Link>
+          {branch.address && (
+            <a
+              href={mapsUrl(branch.address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full rounded-xl border border-gray-200 bg-white px-5 py-3 text-center font-semibold text-gray-700 hover:bg-gray-50"
+            >
+              📍 เปิดใน Google Maps
+            </a>
+          )}
+          <a
+            href={LINE_URL}
+            className="block w-full rounded-xl border border-green-300 bg-white px-5 py-3 text-center font-semibold text-green-700 hover:bg-green-50"
+          >
+            💬 ติดต่อทาง LINE
+          </a>
           <Link
             href="/track"
-            className="block w-full rounded-xl border border-green-300 bg-white px-5 py-3 text-center font-semibold text-green-700 hover:bg-green-50"
+            className="block w-full rounded-xl border border-gray-200 bg-white px-5 py-3 text-center font-semibold text-gray-700 hover:bg-gray-50"
           >
             ติดตามงานของฉัน
           </Link>
-          <Link
-            href="/services"
-            className="block w-full rounded-xl border border-gray-200 bg-white px-5 py-3 text-center font-semibold text-gray-700 hover:bg-gray-50"
-          >
-            ดูบริการทั้งหมด
-          </Link>
         </aside>
       </section>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-widest text-gray-500">
+        {label}
+      </dt>
+      <dd className="mt-0.5 text-gray-900">{value}</dd>
     </div>
   );
 }

@@ -37,6 +37,9 @@ type Body = {
   serviceCategory?: string | null;
   notes?: string;
   photos?: string[];
+  /** Phase 27B quote wizard. */
+  urgency?: "standard" | "urgent";
+  fulfilmentPreference?: "in_store" | "pickup" | "delivery";
   /** Phase 20: UTM + signed nid passed from the campaign-landing URL.
    *  When the customer lands on /quote?utm_source=...&nid=... the
    *  client can either pass them verbatim or send the full
@@ -46,6 +49,8 @@ type Body = {
 };
 
 const ALLOWED_CONTACT = new Set(["phone", "line", "email", "any"]);
+const ALLOWED_URGENCY = new Set(["standard", "urgent"]);
+const ALLOWED_FULFILMENT = new Set(["in_store", "pickup", "delivery"]);
 const MAX_NOTES_LEN = 2000;
 const MAX_PHOTOS = 10;
 const MAX_NAME_LEN = 200;
@@ -92,6 +97,13 @@ export async function POST(req: Request) {
         .filter((u) => typeof u === "string" && u.length < 500)
         .slice(0, MAX_PHOTOS)
     : [];
+  const urgency =
+    body.urgency && ALLOWED_URGENCY.has(body.urgency) ? body.urgency : null;
+  const fulfilmentPreference =
+    body.fulfilmentPreference &&
+    ALLOWED_FULFILMENT.has(body.fulfilmentPreference)
+      ? body.fulfilmentPreference
+      : null;
 
   if (!phone) {
     return NextResponse.json(
@@ -149,6 +161,8 @@ export async function POST(req: Request) {
       service_category: serviceCategory,
       notes: notes || null,
       photos,
+      urgency,
+      fulfilment_preference: fulfilmentPreference,
       status: "new",
       utm_source: attrib.utm.utm_source ?? null,
       utm_medium: attrib.utm.utm_medium ?? null,

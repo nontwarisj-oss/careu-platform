@@ -144,4 +144,16 @@ Not cluster-aware — each cold-start gets a fresh map. A real attacker would hi
 
 ---
 
-**Last updated:** 2026-05-14 (public website + CRM foundation phase)
+## Phase 27B — public website maturity
+
+Migration `20260552` adds four nullable columns — `branches.operating_hours` (jsonb) + `branches.promo_banner`, and `quote_requests.urgency` + `quote_requests.fulfilment_preference`. Additive only.
+
+1. **Homepage** — `/website` rebuilt into sections: hero, service categories (linking the new detail pages), a 4-step process flow, a live branch finder (reads `branches` — no hardcoded list), an FAQ accordion, and a LINE CTA. `FAQPage` JSON-LD emitted.
+2. **Branch pages** — `/branches/[branchCode]` gains operating hours (graceful when `operating_hours` is NULL), a Google-Maps CTA derived from `address`, a LINE CTA, a supported-services grid, an optional `promo_banner`, and `LocalBusiness` JSON-LD.
+3. **Service pages** — new `/services/[slug]` (4 SEO pages: jeans-hemming, zipper-replacement, suit-alteration, dress-adjustment). Editorial content from [`lib/serviceContent.ts`](../lib/serviceContent.ts) — process, turnaround, price guidance, FAQ. `Service` + `FAQPage` JSON-LD. `/services` index links them.
+4. **Quote wizard** — `/quote` rebuilt as a 4-step wizard (service → photos → details → contact + review) with a step indicator. New fields: urgency + fulfilment preference. LINE continuation on success.
+5. **Anonymous draft-save** — the wizard auto-saves to `localStorage` (`careu_quote_draft_v1`); a returning visitor sees a "resume / start over" banner. Cleared on successful submit.
+6. **Public upload safety** — [`components/PublicQuoteUploader`](../components/PublicQuoteUploader.tsx): type + 8 MB validation, client-side compression ([`lib/imageCompress.ts`](../lib/imageCompress.ts) — canvas → JPEG; HEIC passes through), signed upload via `/api/public/upload-url` → `uploadToSignedUrl`, a per-file queue with progress + retry. Uploaded storage paths land in `quote_requests.photos`.
+7. **SEO** — `app/sitemap.ts` extended with `/services/[slug]`; `generateMetadata` + OpenGraph on all new pages; FAQ / Service / LocalBusiness JSON-LD.
+
+**Last updated:** 2026-05-15 (phase 27B — public website maturity)

@@ -41,7 +41,8 @@
       "Bash(echo \"exit=$?\")",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\tnpba\\\\careu-platform\" -Directory)",
       "Bash(Select-Object Name)",
-      "Bash(xargs grep -A40 \"create table.*quote_requests\")"
+      "Bash(xargs grep -A40 \"create table.*quote_requests\")",
+      "Bash(xargs grep -l \"branches\\\\|quote_requests\\\\|service_prices\")"
     ]
   }
 }

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { SERVICE_CATEGORIES } from "@/lib/pricing";
 import { defaultBrandTheme } from "@/lib/publicTheme";
+import { SERVICE_CONTENT } from "@/lib/serviceContent";
 
 export const metadata: Metadata = {
   title: "บริการของเรา",
@@ -56,6 +57,30 @@ export default async function ServicesPage() {
       </section>
 
       <section className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        {/* Featured services — link to the SEO detail pages. */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-gray-900">บริการแนะนำ</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            ดูรายละเอียดขั้นตอน ระยะเวลา และคำถามที่พบบ่อย
+          </p>
+          <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {SERVICE_CONTENT.map((s) => (
+              <Link
+                key={s.slug}
+                href={`/services/${s.slug}`}
+                className="rounded-xl border border-gray-100 bg-gray-50 p-3 hover:border-green-300 hover:bg-white transition"
+              >
+                <p className="font-semibold text-gray-900 text-sm">
+                  {s.titleTh}
+                </p>
+                <p className="mt-0.5 text-xs text-green-700 font-semibold">
+                  ฿{s.priceRangeThb} · {s.turnaround}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </div>
+
         {services.length === 0 ? (
           <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-gray-500">
             ยังไม่มีรายการบริการพร้อมแสดงในขณะนี้

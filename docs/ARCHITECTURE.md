@@ -2175,6 +2175,34 @@ Every new portal API reads the `customer_id` from the `careu_customer_session` c
 
 ---
 
+## 12cc. Public website maturity (post-`20260552`)
+
+> Status: **customer-grade public website**. Phase 27B — homepage sections, dynamic branch + service SEO pages, a multi-step quote wizard with safe uploads, anonymous draft-save.
+
+See [PUBLIC_WEBSITE.md](./PUBLIC_WEBSITE.md).
+
+### 12cc.1 Schema (migration `20260552`)
+
+- `branches` += `operating_hours` (jsonb) + `promo_banner` (text) — nullable; branch pages degrade gracefully.
+- `quote_requests` += `urgency` + `fulfilment_preference` (text) — from the quote wizard.
+
+### 12cc.2 Surfaces
+
+- **Homepage** `/website` — hero / service categories / process flow / live branch finder / FAQ / LINE CTA. Server component; branch finder reads `branches`.
+- **Branch pages** `/branches/[branchCode]` — hours, Maps CTA (derived from address), LINE CTA, supported services, promo banner, `LocalBusiness` JSON-LD.
+- **Service pages** `/services/[slug]` — new; editorial content from `lib/serviceContent.ts` (`generateStaticParams` over the slugs); `Service` + `FAQPage` JSON-LD.
+- **Quote wizard** `/quote` — 4-step (service → photos → details → contact); auto-saves to `localStorage`; LINE continuation.
+- **Uploads** — `lib/imageCompress.ts` (canvas JPEG, HEIC passthrough) + `components/PublicQuoteUploader` (validate → compress → signed upload → queue with retry).
+- **SEO** — `app/sitemap.ts` extended with service slugs; OpenGraph + JSON-LD across new pages.
+
+### 12cc.3 Known limitations
+
+- `operating_hours` / `promo_banner` are operator-entered data — branch pages show a graceful fallback until filled (no branch-edit UI in this phase).
+- Service-page content is a static editorial map (no CMS) — adding a service = a code change.
+- `og:image` still unconfigured (needs a brand asset in `/public`).
+
+---
+
 ## 12c. Operational UI foundation (post-2026-05-14)
 
 Three pieces ship together to standardise the operational surface without touching architecture:
