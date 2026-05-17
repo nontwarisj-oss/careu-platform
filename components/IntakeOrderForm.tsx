@@ -523,50 +523,21 @@ export function IntakeOrderForm({
     <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
       {/* ---------- LEFT — capture ---------- */}
       <div className="space-y-4 lg:col-span-2">
-      {/* 1 — Business type + branch */}
-      <section className={card}>
-        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          1 • ประเภทงาน + สาขา
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => setBusinessType("care_u")}
-            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
-              businessType === "care_u"
-                ? "bg-green-700 border-green-700 text-white"
-                : "bg-white border-gray-300 text-gray-700"
-            }`}
-          >
-            Care U
-            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
-              เสื้อผ้า / ดัดแปลง
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setBusinessType("ezy_repair")}
-            className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
-              businessType === "ezy_repair"
-                ? "bg-yellow-500 border-yellow-500 text-white"
-                : "bg-white border-gray-300 text-gray-700"
-            }`}
-          >
-            Ezy Repair
-            <span className="block text-[10px] font-normal mt-0.5 opacity-90">
-              รองเท้า / กระเป๋า
-            </span>
-          </button>
-        </div>
-        {canOverrideBranch ? (
-          <div className="mt-3">
-            <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1">
-              สาขา
-            </label>
+      {/* 1 — Branch · 2 — Job type. Two quick selectors share one row
+          on tablet/desktop so the gated steps below keep the vertical
+          space. Branch is step 1, job type step 2 — the workflow order
+          the counter follows: branch → job type → Job ID → customer. */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {/* 1 — Branch */}
+        <section className={card}>
+          <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+            1 • สาขา
+          </p>
+          {canOverrideBranch ? (
             <select
               value={branch.id}
               onChange={(e) => setBranchId(e.target.value)}
-              className="w-full rounded-xl border border-gray-300 bg-white p-2.5 text-sm outline-none focus:ring-2 focus:ring-green-500"
+              className="w-full rounded-xl border border-gray-300 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-green-500"
             >
               {ALL_BRANCHES.map((b) => (
                 <option key={b.id} value={b.id}>
@@ -574,18 +545,52 @@ export function IntakeOrderForm({
                 </option>
               ))}
             </select>
-          </div>
-        ) : (
-          <p className="mt-2 text-[11px] text-gray-500">
-            สาขา:{" "}
-            <span className="font-medium text-gray-700">
+          ) : (
+            <p className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
               {branch.shortLabel}
-            </span>
-          </p>
-        )}
-      </section>
+            </p>
+          )}
+        </section>
 
-      {/* 2 — Job ID — the ticket gate. The live duplicate check runs
+        {/* 2 — Job type / business type */}
+        <section className={card}>
+          <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+            2 • ประเภทงาน
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setBusinessType("care_u")}
+              className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+                businessType === "care_u"
+                  ? "bg-green-700 border-green-700 text-white"
+                  : "bg-white border-gray-300 text-gray-700"
+              }`}
+            >
+              Care U
+              <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+                เสื้อผ้า / ดัดแปลง
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setBusinessType("ezy_repair")}
+              className={`rounded-xl border px-3 py-3 text-sm font-semibold ${
+                businessType === "ezy_repair"
+                  ? "bg-yellow-500 border-yellow-500 text-white"
+                  : "bg-white border-gray-300 text-gray-700"
+              }`}
+            >
+              Ezy Repair
+              <span className="block text-[10px] font-normal mt-0.5 opacity-90">
+                รองเท้า / กระเป๋า
+              </span>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {/* 3 — Job ID — the ticket gate. The live duplicate check runs
           as staff type, so a clash surfaces here BEFORE the customer
           and items are entered — never a blind failure at save time.
           The whole card rings red/green so the result is visible
@@ -601,7 +606,7 @@ export function IntakeOrderForm({
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            2 • Job ID
+            3 • Job ID
           </p>
           {businessType === "care_u" && <JobIdBadge state={jobIdCheck} />}
         </div>
@@ -651,10 +656,10 @@ export function IntakeOrderForm({
         )}
       </section>
 
-      {/* 3 — Customer */}
+      {/* 4 — Customer — reached only after the Job ID gate above. */}
       <section className={card}>
         <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          3 • ลูกค้า
+          4 • ลูกค้า
         </p>
         {selectedCustomer ? (
           <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
@@ -770,11 +775,11 @@ export function IntakeOrderForm({
         </div>
       </section>
 
-      {/* 4 — Items */}
+      {/* 5 — Items */}
       <section className={card}>
         <div className="flex items-center justify-between mb-3">
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            4 • รายการรับซ่อม ({items.length})
+            5 • รายการรับซ่อม ({items.length})
           </p>
           {/* Running total here too — on a phone the sticky summary
               is far below, so staff see the net without scrolling. */}

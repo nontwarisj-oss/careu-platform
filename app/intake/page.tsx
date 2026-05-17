@@ -9,8 +9,8 @@ export default function IntakePage() {
   return (
     // Wide, tablet-first container — the intake form lays itself out in
     // two columns (capture left, sticky summary + save right) on lg+.
-    <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-3 md:p-6 pt-20 md:pt-6">
-      <div className="mx-auto w-full max-w-6xl">
+    <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-3 md:p-6 lg:p-8 pt-20 md:pt-6">
+      <div className="mx-auto w-full max-w-[1600px]">
         <div className="mb-4 border-l-4 border-yellow-400 pl-4">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">
             CareU OPS
@@ -19,7 +19,7 @@ export default function IntakePage() {
             รับงานหน้าร้าน
           </h1>
           <p className="text-xs text-gray-500 mt-1">
-            ประเภทงาน → Job ID → ลูกค้า → รายการ — ระบบคำนวณยอดและออกใบรับงานให้
+            สาขา → ประเภทงาน → Job ID → ลูกค้า → รายการ — ระบบคำนวณยอดและออกใบรับงานให้
           </p>
         </div>
 
