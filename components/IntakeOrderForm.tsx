@@ -41,7 +41,7 @@ import {
 } from "@/lib/technicianService";
 import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { normalizePhone } from "@/lib/phone";
-import { normalizeJobId } from "@/lib/jobId";
+import { normalizeJobId, sanitizeJobIdInput } from "@/lib/jobId";
 import { useAuth } from "@/lib/authContext";
 import { useRole } from "@/lib/roleContext";
 import { canChooseAnotherBranch } from "@/lib/permissions";
@@ -462,7 +462,7 @@ export function IntakeOrderForm({
         total: grandTotal,
         notes: orderNote.trim() || null,
         status: "pending",
-        jobId: businessType === "care_u" ? careUJobId : null,
+        jobId: businessType === "care_u" ? normalizeJobId(careUJobId) : null,
         createdBy: user?.uid ?? null,
         dueDate: dueDates[0] ?? null,
       });
@@ -617,27 +617,36 @@ export function IntakeOrderForm({
           3 • Job ID
         </p>
         {businessType === "care_u" ? (
-          <input
-            type="text"
-            value={careUJobId}
-            autoFocus
-            onChange={(e) => {
-              setCareUJobId(e.target.value);
-              // Editing invalidates any stale duplicate error.
-              if (errorMessage) setErrorMessage(null);
-            }}
-            placeholder="เช่น CARE-001"
-            maxLength={32}
-            className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
-              jobIdCheck === "duplicate"
-                ? "border-red-400 bg-red-50 focus:ring-red-500"
-                : jobIdCheck === "available"
-                  ? "border-green-500 bg-green-50/60 focus:ring-green-500"
-                  : jobIdCheck === "error"
-                    ? "border-amber-400 bg-amber-50 focus:ring-amber-500"
-                    : "border-gray-300 focus:ring-green-500"
-            }`}
-          />
+          <>
+            <input
+              type="text"
+              value={careUJobId}
+              autoFocus
+              onChange={(e) => {
+                // Auto-normalize as staff type — strip spaces,
+                // uppercase, keep only A-Z 0-9 - _ . / — so the field
+                // self-corrects ("36 xx" → "36XX") and staff never
+                // need to know spaces are not allowed.
+                setCareUJobId(sanitizeJobIdInput(e.target.value));
+                // Editing invalidates any stale duplicate error.
+                if (errorMessage) setErrorMessage(null);
+              }}
+              placeholder="เช่น CARE-001"
+              maxLength={32}
+              className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
+                jobIdCheck === "duplicate"
+                  ? "border-red-400 bg-red-50 focus:ring-red-500"
+                  : jobIdCheck === "available"
+                    ? "border-green-500 bg-green-50/60 focus:ring-green-500"
+                    : jobIdCheck === "error"
+                      ? "border-amber-400 bg-amber-50 focus:ring-amber-500"
+                      : "border-gray-300 focus:ring-green-500"
+              }`}
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              พิมพ์ได้ เช่น 36XX หรือ 36 xx — ระบบจะแปลงเป็น 36XX ให้อัตโนมัติ
+            </p>
+          </>
         ) : (
           <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
             Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
@@ -679,14 +688,14 @@ export function IntakeOrderForm({
                     : "text-gray-500"
             }`}
           >
-            {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
+            {jobIdCheck === "checking" &&
+              "กำลังตรวจสอบ Job ID — รอสักครู่"}
             {jobIdCheck === "duplicate" &&
-              `❌ Job ID "${normalizeJobId(careUJobId) ?? ""}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`}
+              `❌ Job ID "${careUJobId}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`}
             {jobIdCheck === "available" &&
-              `✓ Job ID "${normalizeJobId(careUJobId) ?? ""}" ใช้งานได้`}
-            {jobIdCheck === "error" && `⚠ ${JOB_ID_CHECK_ERROR_MESSAGE}`}
-            {jobIdCheck === "idle" &&
-              "กรอก Job ID ด้านบนก่อน — ระบบตรวจซ้ำให้อัตโนมัติก่อนรับลูกค้า"}
+              `✓ Job ID "${careUJobId}" ใช้งานได้`}
+            {jobIdCheck === "error" && JOB_ID_CHECK_ERROR_MESSAGE}
+            {jobIdCheck === "idle" && "กรอก Job ID ก่อนบันทึก"}
           </p>
         ) : (
           <p className="text-sm text-gray-500">

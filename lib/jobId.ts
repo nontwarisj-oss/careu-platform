@@ -43,3 +43,24 @@ export function normalizeJobId(
   if (!isValidJobId(trimmed)) return null;
   return trimmed.toUpperCase();
 }
+
+/**
+ * Normalize a Job ID AS THE STAFF TYPE — bind this to the input's
+ * `value` so the field self-corrects on every keystroke. Unlike
+ * normalizeJobId (which validates and returns null on bad input),
+ * this always returns a clean, valid string: leading/trailing and
+ * internal spaces vanish, letters uppercase, and any character
+ * outside the allowed set (A-Z 0-9 - _ . /) is dropped. Capped at 32.
+ *
+ *   "36 xx"  → "36XX"
+ *   "  35xx" → "35XX"
+ *
+ * The result, when non-empty, always passes isValidJobId — so staff
+ * never need to know that spaces are not allowed.
+ */
+export function sanitizeJobIdInput(value: string): string {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9\-._\/]/g, "")
+    .slice(0, 32);
+}

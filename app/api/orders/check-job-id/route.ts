@@ -118,10 +118,19 @@ export async function POST(req: Request) {
     .eq("business_type", businessType);
 
   if (res.error) {
-    // A genuine server-side query failure — log it and return "error".
-    // NEVER "duplicate": a broken probe must not be reported as a
-    // taken Job ID.
-    console.error("[check-job-id] orders lookup failed:", res.error.message);
+    // A genuine server-side query failure — log the FULL error
+    // (message + code + details + hint + the inputs) so the cause is
+    // diagnosable from the server logs. NEVER return "duplicate": a
+    // broken probe must not be reported as a taken Job ID.
+    console.error("[check-job-id] orders lookup failed", {
+      message: res.error.message,
+      code: res.error.code,
+      details: res.error.details,
+      hint: res.error.hint,
+      branchId,
+      businessType,
+      jobId: normalizedJobId,
+    });
     return reply({
       ok: false,
       state: "error",
