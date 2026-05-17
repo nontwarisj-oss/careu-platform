@@ -8,9 +8,9 @@
 // (optional) technician.
 //
 // Reuses the proven order libs: createSmartOrder (4-tier header insert
-// with job_id handling) + insertOrderItems (child rows). Legacy single-
-// item orders are unaffected — this only changes how NEW orders are
-// captured.
+// with job_id handling) + the /api/orders/items route (child rows,
+// service-role insert). Legacy single-item orders are unaffected —
+// this only changes how NEW orders are captured.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
@@ -31,7 +31,7 @@ import {
   type JobIdCheckState,
 } from "@/lib/orderCreate";
 import {
-  insertOrderItems,
+  saveOrderItemsViaRoute,
   computeLineTotal,
   type OrderItemInput,
 } from "@/lib/orderItems";
@@ -474,12 +474,20 @@ export function IntakeOrderForm({
         return;
       }
 
-      // Child line-items. A failure here is surfaced but the header is
-      // already saved — staff can re-open the order to fix items.
-      const itemsRes = await insertOrderItems(orderId, branch.id, itemInputs);
+      // Child line-items — saved via the service-role route so the
+      // insert is not blocked by RLS on public.order_items. If it
+      // fails we roll the just-created header back (orders runs with
+      // RLS disabled, so the browser delete works): no orphan order,
+      // and the form never reports a success it did not achieve.
+      const itemsRes = await saveOrderItemsViaRoute(
+        orderId,
+        branch.id,
+        itemInputs
+      );
       if (itemsRes.error) {
+        await supabase.from("orders").delete().eq("id", orderId);
         setErrorMessage(
-          `บันทึกใบงานแล้ว แต่บันทึกรายการไม่สำเร็จ: ${itemsRes.error}`
+          `บันทึกรายการไม่สำเร็จ — ยกเลิกใบงานแล้ว ลองอีกครั้ง: ${itemsRes.error}`
         );
         return;
       }

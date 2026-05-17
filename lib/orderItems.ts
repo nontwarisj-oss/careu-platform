@@ -85,11 +85,17 @@ export function sumItemsTotal(items: OrderItemInput[]): number {
  * Insert the line-items for a freshly-created order. Best-effort: a
  * missing public.order_items table (un-migrated DB) is swallowed so
  * order creation still succeeds as a legacy single-item order.
+ *
+ * `client` defaults to the browser client; the /api/orders/items
+ * route passes the service-role client so the insert bypasses RLS on
+ * public.order_items (which is RLS-enabled in production). The intake
+ * form must go through that route — see saveOrderItemsViaRoute.
  */
 export async function insertOrderItems(
   orderId: string,
   branchId: string | null,
-  items: OrderItemInput[]
+  items: OrderItemInput[],
+  client: SupabaseClient = supabase
 ): Promise<{ inserted: number; error: string | null }> {
   if (items.length === 0) return { inserted: 0, error: null };
 
@@ -113,7 +119,7 @@ export async function insertOrderItems(
     image_paths: it.imagePaths ?? [],
   }));
 
-  const res = await supabase.from("order_items").insert(payload);
+  const res = await client.from("order_items").insert(payload);
   if (res.error) {
     if (isMissingRelation(res.error.message)) {
       return { inserted: 0, error: null };
@@ -121,6 +127,49 @@ export async function insertOrderItems(
     return { inserted: 0, error: res.error.message };
   }
   return { inserted: payload.length, error: null };
+}
+
+/**
+ * Persist line-items for a freshly-created order via the server route
+ * POST /api/orders/items. The route inserts with the service-role
+ * client, so the write succeeds even though public.order_items has
+ * RLS enabled in production and the browser client is unauthenticated.
+ *
+ * The intake form uses this instead of calling insertOrderItems
+ * directly (a browser insert trips the order_items RLS policy). On
+ * failure the caller rolls the order header back so a ticket is never
+ * left half-saved.
+ */
+export async function saveOrderItemsViaRoute(
+  orderId: string,
+  branchId: string | null,
+  items: OrderItemInput[]
+): Promise<{ inserted: number; error: string | null }> {
+  if (items.length === 0) return { inserted: 0, error: null };
+  try {
+    const res = await fetch("/api/orders/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ orderId, branchId, items }),
+    });
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; inserted?: number; error?: string | null }
+      | null;
+    if (res.ok && data?.ok) {
+      return { inserted: data.inserted ?? items.length, error: null };
+    }
+    return {
+      inserted: 0,
+      error: data?.error ?? `บันทึกรายการไม่สำเร็จ (HTTP ${res.status})`,
+    };
+  } catch (err) {
+    return {
+      inserted: 0,
+      error:
+        err instanceof Error ? err.message : "เรียกบริการบันทึกรายการไม่สำเร็จ",
+    };
+  }
 }
 
 /**
