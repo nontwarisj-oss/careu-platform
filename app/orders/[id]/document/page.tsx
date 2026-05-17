@@ -229,7 +229,7 @@ export default function OrderDocumentPage({
 
   const handleCopyMessage = async () => {
     if (!order) return;
-    const text = buildCustomerMessage(order, branch);
+    const text = buildCustomerMessage(order, branch, orderJobId);
     try {
       await navigator.clipboard.writeText(text);
       setToast("คัดลอกข้อความเรียบร้อย พร้อมส่งให้ลูกค้า");
@@ -241,7 +241,7 @@ export default function OrderDocumentPage({
 
   const handleSendLine = async () => {
     if (!order) return;
-    const text = buildCustomerMessage(order, branch);
+    const text = buildCustomerMessage(order, branch, orderJobId);
     const res = await sendToLineOA(order.id, text);
     setToast(res.ok ? "ส่งเข้า LINE OA สำเร็จ" : res.reason ?? "ส่งไม่สำเร็จ");
     setTimeout(() => setToast(null), 4500);

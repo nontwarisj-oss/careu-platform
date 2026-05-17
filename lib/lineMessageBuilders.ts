@@ -136,6 +136,6 @@ export function buildPickupReminderMessage(input: MessageBuildInput): BuiltMessa
 export function buildReceiptMessage(input: MessageBuildInput): BuiltMessage {
   return {
     kind: "receipt",
-    text: buildCustomerMessage(input.order, input.branch),
+    text: buildCustomerMessage(input.order, input.branch, input.jobId),
   };
 }

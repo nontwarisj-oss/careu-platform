@@ -29,6 +29,8 @@ export type OrderDetailInput = {
   price: number;
   status: string;
   created_at: string;
+  /** Manual Job ID (orders.job_id). Optional — legacy callers omit it. */
+  job_id?: string | null;
 };
 
 type Attachment = {
@@ -267,8 +269,11 @@ export function OrderDetailModal({ order, onClose }: OrderDetailModalProps) {
             <p className="text-[11px] uppercase tracking-widest text-yellow-200 font-semibold">
               ใบงานซ่อม
             </p>
-            <p className="font-mono text-sm">
-              #{order.id.slice(0, 8).toUpperCase()}
+            <p className="font-mono text-base font-bold leading-tight">
+              Job ID: {order.job_id ? order.job_id : "ยังไม่มีรหัสงาน"}
+            </p>
+            <p className="font-mono text-[11px] text-white/80">
+              เลขระบบ: #{order.id.slice(0, 8).toUpperCase()}
             </p>
           </div>
           <div className="flex items-center gap-2">

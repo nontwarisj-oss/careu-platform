@@ -45,8 +45,11 @@ export function ReceiptMobile({ receipt, rootId = "careu-receipt-card" }: Props)
             <p className="text-[10px] uppercase tracking-widest opacity-90">
               ใบรับงาน
             </p>
-            <p className="font-mono text-sm">
-              {meta.jobId ? meta.jobId : `#${meta.refId}`}
+            <p className="font-mono text-base font-bold leading-tight">
+              Job ID: {meta.jobId ? meta.jobId : "ยังไม่มีรหัสงาน"}
+            </p>
+            <p className="font-mono text-[11px] text-white/80">
+              เลขระบบ: #{meta.refId}
             </p>
           </div>
           <p className="text-[11px] text-white/80">{meta.createdAtLabel}</p>

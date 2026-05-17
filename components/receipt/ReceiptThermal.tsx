@@ -38,7 +38,8 @@ export function ReceiptThermal({ receipt, rootId = "careu-receipt-card" }: Props
         {`${centerLine(branch.address, 32)}\n`}
         {HR}
         {`\nใบรับงาน / ใบเสนอราคา\n`}
-        {`${padPair("Job ID", meta.jobId ?? `#${meta.refId}`, 32)}\n`}
+        {`${padPair("Job ID", meta.jobId ?? "ยังไม่มีรหัสงาน", 32)}\n`}
+        {`${padPair("เลขระบบ", `#${meta.refId}`, 32)}\n`}
         {`${padPair("วันที่", meta.createdAtLabel, 32)}\n`}
         {meta.dueDate ? `${padPair("นัดรับ", meta.dueDate, 32)}\n` : ""}
         {`${padPair("สถานะ", meta.jobStatusLabel, 32)}\n`}

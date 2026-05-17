@@ -64,7 +64,8 @@ export function promotionLabelFor(order: DocumentOrder): string | null {
  */
 export function buildCustomerMessage(
   order: DocumentOrder,
-  branch: BranchConfig
+  branch: BranchConfig,
+  jobId?: string | null
 ): string {
   const refId = order.id.slice(0, 8).toUpperCase();
   const dateLabel = new Date(order.created_at).toLocaleDateString("th-TH", {
@@ -81,7 +82,9 @@ export function buildCustomerMessage(
 
   const lines: string[] = [];
   lines.push(`${branch.receiptName}`);
-  lines.push(`ใบรับงาน / ใบเสนอราคา #${refId}`);
+  lines.push(`ใบรับงาน / ใบเสนอราคา`);
+  lines.push(`Job ID: ${jobId ? jobId : "ยังไม่มีรหัสงาน"}`);
+  lines.push(`เลขระบบ: #${refId}`);
   lines.push(`วันที่: ${dateLabel}`);
   lines.push("");
   lines.push(`ลูกค้า: ${order.customer_name || "-"}`);

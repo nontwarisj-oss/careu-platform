@@ -56,8 +56,11 @@ export function ReceiptA4({ receipt, rootId = "careu-receipt-card" }: Props) {
             <p className="text-[10px] uppercase tracking-widest opacity-90">
               ใบรับงาน / ใบเสนอราคา
             </p>
-            <p className="font-mono text-sm">
-              {meta.jobId ? meta.jobId : `#${meta.refId}`}
+            <p className="font-mono text-base font-bold leading-tight">
+              Job ID: {meta.jobId ? meta.jobId : "ยังไม่มีรหัสงาน"}
+            </p>
+            <p className="font-mono text-[11px] text-white/80">
+              เลขระบบ: #{meta.refId}
             </p>
             <p className="text-[11px] text-white/80 mt-0.5">
               {meta.createdAtLabel}
