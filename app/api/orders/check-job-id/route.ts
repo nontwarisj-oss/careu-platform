@@ -40,6 +40,14 @@ export const runtime = "nodejs";
 // Roles permitted to run intake — mirrors canCreateOrder().
 const INTAKE_ROLES = ["owner", "hq_admin", "branch_manager", "front_staff"];
 
+// A Care U Job ID counts as a "duplicate" only when the same id was
+// used in this branch within this many days — an id used longer ago
+// is free to reuse (a Care U job normally finishes inside the
+// window). Enforced here in app logic: a rolling window cannot be a
+// DB constraint (a partial index predicate must be IMMUTABLE, so it
+// cannot reference now()). See migration 20260556.
+const JOB_ID_DUPLICATE_WINDOW_DAYS = 45;
+
 type CheckState = "idle" | "available" | "duplicate" | "error";
 
 type CheckResponse = {
@@ -124,8 +132,10 @@ export async function POST(req: Request) {
     return reply({ ok: true, state: "idle" });
   }
 
-  // 4. Service-role lookup — bypasses RLS, scoped to the same triple
-  //    as the unique index (branch_id, business_type, job_id).
+  // 4. Service-role lookup — bypasses RLS. Scoped to (branch_id,
+  //    business_type, job_id) AND a 45-day rolling window on
+  //    created_at: an id last used longer ago than that is free to
+  //    reuse, so it does NOT count as a duplicate.
   const admin = getSupabaseAdmin();
   if (!admin) {
     console.error("[check-job-id] SUPABASE_SERVICE_ROLE_KEY not configured");
@@ -140,12 +150,17 @@ export async function POST(req: Request) {
     );
   }
 
+  const windowStart = new Date(
+    Date.now() - JOB_ID_DUPLICATE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+
   const res = await admin
     .from("orders")
     .select("id", { head: true, count: "exact" })
     .eq("job_id", normalizedJobId)
     .eq("branch_id", branchId)
-    .eq("business_type", businessType);
+    .eq("business_type", businessType)
+    .gte("created_at", windowStart);
 
   if (res.error) {
     // A genuine server-side query failure — log the FULL error

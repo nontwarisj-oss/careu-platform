@@ -78,8 +78,8 @@ const isDuplicateJobId = (msg: string | undefined): boolean =>
  * The lookup runs SERVER-SIDE via POST /api/orders/check-job-id: the
  * browser Supabase client cannot SELECT `orders` under RLS, which is
  * why a direct browser query failed in production. The route uses the
- * service-role client (scoped to branch_id + business_type + job_id,
- * matching the unique index) behind a best-effort session check —
+ * service-role client (scoped to branch_id + business_type + job_id
+ * within a 45-day rolling window) behind a best-effort session check —
  * intake role + branch are enforced when a session cookie is present,
  * and the route never 401s. A failed lookup resolves to "error" —
  * NEVER "duplicate":
@@ -186,7 +186,7 @@ async function resolveJobId(
   if (dup.exists) {
     return {
       jobId: null,
-      error: `Job ID "${manual}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`,
+      error: `Job ID "${manual}" ถูกใช้แล้วในสาขานี้ภายใน 45 วัน — ลองอันใหม่`,
     };
   }
   return { jobId: manual, error: null };

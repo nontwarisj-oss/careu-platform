@@ -691,7 +691,7 @@ export function IntakeOrderForm({
             {jobIdCheck === "checking" &&
               "กำลังตรวจสอบ Job ID — รอสักครู่"}
             {jobIdCheck === "duplicate" &&
-              `❌ Job ID "${careUJobId}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`}
+              `❌ Job ID "${careUJobId}" ถูกใช้แล้วในสาขานี้ภายใน 45 วัน — ลองอันใหม่`}
             {jobIdCheck === "available" &&
               `✓ Job ID "${careUJobId}" ใช้งานได้`}
             {jobIdCheck === "error" && JOB_ID_CHECK_ERROR_MESSAGE}
