@@ -23,7 +23,13 @@ import {
   type ServiceItem,
 } from "@/lib/pricing";
 import { fetchPricingCatalog } from "@/lib/pricingDb";
-import { createSmartOrder, type BusinessType } from "@/lib/orderCreate";
+import {
+  createSmartOrder,
+  checkJobIdAvailability,
+  JOB_ID_CHECK_ERROR_MESSAGE,
+  type BusinessType,
+  type JobIdCheckState,
+} from "@/lib/orderCreate";
 import {
   insertOrderItems,
   computeLineTotal,
@@ -153,12 +159,12 @@ export function IntakeOrderForm({
     setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
   }, [branch.brand, businessTypeTouched]);
 
-  // Live Job ID duplicate check (Care U only). Debounced ~400ms so a
-  // duplicate is flagged as staff type — they never hit save blind.
-  // Ezy Repair generates its Job ID server-side, so no check there.
-  const [jobIdCheck, setJobIdCheck] = useState<
-    "idle" | "checking" | "unique" | "duplicate"
-  >("idle");
+  // Live Job ID duplicate check (Care U only). Debounced 400ms via the
+  // SAME shared helper the save-time guard uses, so the live result
+  // and the save decision can never disagree. A failed probe resolves
+  // to "error" (amber) — never a misleading "duplicate". Ezy Repair
+  // auto-generates its Job ID server-side, so it is never checked.
+  const [jobIdCheck, setJobIdCheck] = useState<JobIdCheckState>("idle");
   useEffect(() => {
     if (businessType !== "care_u") {
       setJobIdCheck("idle");
@@ -166,29 +172,21 @@ export function IntakeOrderForm({
     }
     const normalized = normalizeJobId(careUJobId);
     if (!normalized) {
-      // Empty Job ID → idle (not duplicate, not yet valid). Bail
-      // before the probe so an empty field never flickers through
-      // "checking" or lands on a misleading green "valid" state.
+      // Empty/invalid Job ID → idle. Bail before the probe so the
+      // field never flickers through "checking" or lands on a stale
+      // green state.
       setJobIdCheck("idle");
       return;
     }
     setJobIdCheck("checking");
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const res = await supabase
-        .from("orders")
-        .select("id", { head: true, count: "exact" })
-        .eq("job_id", normalized)
-        .eq("branch_id", branch.id)
-        .eq("business_type", "care_u");
-      if (cancelled) return;
-      // If the probe itself errors, don't block — createSmartOrder's
-      // server-side duplicate guard still catches it on save.
-      if (res.error) {
-        setJobIdCheck("idle");
-        return;
-      }
-      setJobIdCheck((res.count ?? 0) > 0 ? "duplicate" : "unique");
+      const state = await checkJobIdAvailability(
+        normalized,
+        branch.id,
+        "care_u"
+      );
+      if (!cancelled) setJobIdCheck(state);
     }, 400);
     return () => {
       cancelled = true;
@@ -349,9 +347,18 @@ export function IntakeOrderForm({
       setErrorMessage("กรอก Job ID ก่อนบันทึก (Care U)");
       return;
     }
-    if (businessType === "care_u" && jobIdCheck === "duplicate") {
+    // Care U saves only once the live check has CONFIRMED the Job ID
+    // is available — never while it is checking / duplicate / error /
+    // idle. The message names the actual blocking state.
+    if (businessType === "care_u" && jobIdCheck !== "available") {
       setErrorMessage(
-        "Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนบันทึก"
+        jobIdCheck === "duplicate"
+          ? "Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนบันทึก"
+          : jobIdCheck === "error"
+            ? JOB_ID_CHECK_ERROR_MESSAGE
+            : jobIdCheck === "checking"
+              ? "กำลังตรวจสอบ Job ID — รอผลตรวจก่อนบันทึก"
+              : "กรอก Job ID ที่ใช้งานได้ก่อนบันทึก"
       );
       return;
     }
@@ -508,14 +515,22 @@ export function IntakeOrderForm({
   const card =
     "bg-white rounded-2xl border border-gray-200 shadow-sm p-4";
 
-  // Save is hard-blocked only by a known duplicate Job ID or an
-  // in-flight submit — everything else is checked on click and the
-  // reason is shown right next to the button (no silent failure).
-  const blockReason =
-    jobIdCheck === "duplicate"
+  // Care U cannot save until the live check CONFIRMS the Job ID is
+  // available — checking / duplicate / error / idle all block save,
+  // with the reason shown next to the button. Ezy Repair auto-makes
+  // its Job ID, so jobIdCheck never gates it.
+  const jobIdBlocksSave =
+    businessType === "care_u" && jobIdCheck !== "available";
+  const blockReason = !jobIdBlocksSave
+    ? null
+    : jobIdCheck === "duplicate"
       ? "Job ID ซ้ำ — แก้ Job ID ก่อนจึงจะบันทึกได้"
-      : null;
-  const saveDisabled = isSubmitting || jobIdCheck === "duplicate";
+      : jobIdCheck === "error"
+        ? JOB_ID_CHECK_ERROR_MESSAGE
+        : jobIdCheck === "checking"
+          ? "กำลังตรวจสอบ Job ID — รอสักครู่"
+          : "กรอก Job ID ที่ใช้งานได้ก่อนบันทึก";
+  const saveDisabled = isSubmitting || jobIdBlocksSave;
 
   return (
     // Tablet-first: capture column on the left, sticky summary + save
@@ -612,9 +627,11 @@ export function IntakeOrderForm({
             className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
               jobIdCheck === "duplicate"
                 ? "border-red-400 bg-red-50 focus:ring-red-500"
-                : jobIdCheck === "unique"
+                : jobIdCheck === "available"
                   ? "border-green-500 bg-green-50/60 focus:ring-green-500"
-                  : "border-gray-300 focus:ring-green-500"
+                  : jobIdCheck === "error"
+                    ? "border-amber-400 bg-amber-50 focus:ring-amber-500"
+                    : "border-gray-300 focus:ring-green-500"
             }`}
           />
         ) : (
@@ -633,9 +650,11 @@ export function IntakeOrderForm({
         className={`${card} ${
           businessType === "care_u" && jobIdCheck === "duplicate"
             ? "ring-2 ring-red-300"
-            : businessType === "care_u" && jobIdCheck === "unique"
+            : businessType === "care_u" && jobIdCheck === "available"
               ? "ring-2 ring-green-300"
-              : ""
+              : businessType === "care_u" && jobIdCheck === "error"
+                ? "ring-2 ring-amber-300"
+                : ""
         }`}
       >
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -649,16 +668,19 @@ export function IntakeOrderForm({
             className={`text-sm font-medium ${
               jobIdCheck === "duplicate"
                 ? "text-red-600"
-                : jobIdCheck === "unique"
+                : jobIdCheck === "available"
                   ? "text-green-700"
-                  : "text-gray-500"
+                  : jobIdCheck === "error"
+                    ? "text-amber-600"
+                    : "text-gray-500"
             }`}
           >
             {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
             {jobIdCheck === "duplicate" &&
-              "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนกรอกลูกค้า"}
-            {jobIdCheck === "unique" &&
-              "✓ Job ID นี้ใช้ได้ — กรอกข้อมูลลูกค้าต่อได้เลย"}
+              `❌ Job ID "${normalizeJobId(careUJobId) ?? ""}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`}
+            {jobIdCheck === "available" &&
+              `✓ Job ID "${normalizeJobId(careUJobId) ?? ""}" ใช้งานได้`}
+            {jobIdCheck === "error" && `⚠ ${JOB_ID_CHECK_ERROR_MESSAGE}`}
             {jobIdCheck === "idle" &&
               "กรอก Job ID ด้านบนก่อน — ระบบตรวจซ้ำให้อัตโนมัติก่อนรับลูกค้า"}
           </p>
@@ -1098,24 +1120,24 @@ function ItemCard({
 // Compact Job ID status pill — mirrors the live duplicate check in
 // the section header so staff get the result at a glance, before
 // they ever touch the customer section.
-function JobIdBadge({
-  state,
-}: {
-  state: "idle" | "checking" | "unique" | "duplicate";
-}) {
+function JobIdBadge({ state }: { state: JobIdCheckState }) {
   if (state === "idle") return null;
   const style =
     state === "duplicate"
       ? "bg-red-100 text-red-700"
-      : state === "unique"
+      : state === "available"
         ? "bg-green-100 text-green-700"
-        : "bg-gray-100 text-gray-600";
+        : state === "error"
+          ? "bg-amber-100 text-amber-700"
+          : "bg-gray-100 text-gray-600";
   const label =
     state === "duplicate"
       ? "✕ Job ID ซ้ำ"
-      : state === "unique"
-        ? "✓ ใช้ได้"
-        : "กำลังตรวจสอบ…";
+      : state === "available"
+        ? "✓ ใช้งานได้"
+        : state === "error"
+          ? "⚠ ตรวจสอบไม่สำเร็จ"
+          : "กำลังตรวจสอบ…";
   return (
     <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${style}`}>
       {label}

@@ -3,6 +3,23 @@ import { normalizeJobId } from "@/lib/jobId";
 
 export type BusinessType = "care_u" | "ezy_repair";
 
+/**
+ * Job ID availability — one shared vocabulary for the live check in
+ * the intake form and the save-time guard, so the two can never
+ * disagree. A failed lookup is "error" — NEVER "duplicate".
+ * ("checking" is a UI-transient the caller sets while awaiting.)
+ */
+export type JobIdCheckState =
+  | "idle"
+  | "checking"
+  | "available"
+  | "duplicate"
+  | "error";
+
+/** Shown inline (and on save) when the duplicate lookup itself fails. */
+export const JOB_ID_CHECK_ERROR_MESSAGE =
+  "ยังตรวจสอบ Job ID ไม่สำเร็จ กรุณาลองใหม่";
+
 export type SmartOrderInput = {
   customerId: string;
   customerName: string;
@@ -53,36 +70,76 @@ const isDuplicateJobId = (msg: string | undefined): boolean =>
   !!msg &&
   /duplicate key|orders_job_id_unique_idx|already exists/i.test(msg);
 
+/**
+ * Single source of truth for Job ID duplicate checking — used by the
+ * live check in IntakeOrderForm AND the save-time guard below, so the
+ * UI and the save path can never disagree.
+ *
+ * Scoped to (branch_id, business_type, job_id), matching the scoped
+ * unique index. A query failure resolves to "error" — NEVER
+ * "duplicate": staff must not be told an id is taken just because the
+ * probe broke. Only a confirmed count > 0 is a "duplicate".
+ */
+export async function checkJobIdAvailability(
+  jobId: string | null | undefined,
+  branchId: string,
+  businessType: BusinessType
+): Promise<JobIdCheckState> {
+  const normalized = normalizeJobId(jobId);
+  // Empty/invalid id, or an auto-id business type → nothing to check.
+  if (!normalized || businessType !== "care_u") return "idle";
+
+  const res = await supabase
+    .from("orders")
+    .select("id", { head: true, count: "exact" })
+    .eq("job_id", normalized)
+    .eq("branch_id", branchId)
+    .eq("business_type", businessType);
+
+  if (!res.error) {
+    return (res.count ?? 0) > 0 ? "duplicate" : "available";
+  }
+
+  // business_type column not migrated yet → fall back to a global
+  // job_id lookup so real duplicates are still caught.
+  if (isMissingColumn(res.error.message)) {
+    const legacy = await supabase
+      .from("orders")
+      .select("id", { head: true, count: "exact" })
+      .eq("job_id", normalized);
+    if (!legacy.error) {
+      return (legacy.count ?? 0) > 0 ? "duplicate" : "available";
+    }
+    // Whole orders table/columns absent (un-migrated DB) → nothing we
+    // can check; "idle" leaves the DB unique index as the final guard
+    // rather than blocking every Care U save.
+    if (isMissingColumn(legacy.error.message)) return "idle";
+    // A genuine query failure — surface as "error", never "duplicate".
+    return "error";
+  }
+
+  // A genuine query failure — surface as "error", never "duplicate".
+  return "error";
+}
+
+/**
+ * Save-time guard. Structured so a failed lookup ({exists:false} with
+ * an error) can never be misreported as a duplicate ({exists:true}).
+ * Wraps the shared checkJobIdAvailability so save and the live check
+ * stay in lock-step.
+ */
 async function jobIdExistsScoped(
   candidate: string,
   branchId: string,
   businessType: BusinessType
-): Promise<boolean> {
-  // The new scoped unique index is on (branch_id, business_type, job_id);
-  // check the same triple so manual Care U ids can collide with Ezy ids in
-  // different branches without false positives.
-  const res = await supabase
-    .from("orders")
-    .select("id", { head: true, count: "exact" })
-    .eq("job_id", candidate)
-    .eq("branch_id", branchId)
-    .eq("business_type", businessType);
-  if (res.error) {
-    if (isMissingColumn(res.error.message)) {
-      // Fall back to a global check when business_type isn't migrated yet.
-      const legacy = await supabase
-        .from("orders")
-        .select("id", { head: true, count: "exact" })
-        .eq("job_id", candidate);
-      if (legacy.error) {
-        if (isMissingColumn(legacy.error.message)) return false;
-        return true;
-      }
-      return (legacy.count ?? 0) > 0;
-    }
-    return true;
+): Promise<{ exists: boolean; error: string | null }> {
+  const state = await checkJobIdAvailability(candidate, branchId, businessType);
+  if (state === "duplicate") return { exists: true, error: null };
+  if (state === "error") {
+    return { exists: false, error: JOB_ID_CHECK_ERROR_MESSAGE };
   }
-  return (res.count ?? 0) > 0;
+  // "available" or "idle" → not a confirmed duplicate.
+  return { exists: false, error: null };
 }
 
 /**
@@ -118,7 +175,13 @@ async function resolveJobId(
       error: "Care U ต้องกรอก Job ID เอง (ไม่ใช้การสร้างอัตโนมัติ)",
     };
   }
-  if (await jobIdExistsScoped(manual, input.branchId, businessType)) {
+  const dup = await jobIdExistsScoped(manual, input.branchId, businessType);
+  if (dup.error) {
+    // The lookup itself failed — block the save, but DON'T tell staff
+    // the id is taken when we never confirmed that.
+    return { jobId: null, error: dup.error };
+  }
+  if (dup.exists) {
     return {
       jobId: null,
       error: `Job ID "${manual}" ถูกใช้แล้วในสาขานี้ — ลองอันใหม่`,
