@@ -133,9 +133,11 @@ export async function POST(req: Request) {
   }
 
   // 4. Service-role lookup — bypasses RLS. Scoped to (branch_id,
-  //    business_type, job_id) AND a 45-day rolling window on
-  //    created_at: an id last used longer ago than that is free to
-  //    reuse, so it does NOT count as a duplicate.
+  //    job_id) AND a 45-day rolling window on created_at: an id last
+  //    used longer ago than that is free to reuse, so it does NOT
+  //    count as a duplicate. public.orders has no business_type
+  //    column, so the lookup does not (and cannot) filter by it —
+  //    businessType only decides care_u-vs-ezy above, not the query.
   const admin = getSupabaseAdmin();
   if (!admin) {
     console.error("[check-job-id] SUPABASE_SERVICE_ROLE_KEY not configured");
@@ -159,7 +161,6 @@ export async function POST(req: Request) {
     .select("id", { head: true, count: "exact" })
     .eq("job_id", normalizedJobId)
     .eq("branch_id", branchId)
-    .eq("business_type", businessType)
     .gte("created_at", windowStart);
 
   if (res.error) {

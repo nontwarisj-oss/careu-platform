@@ -12,8 +12,14 @@
 --
 -- Decision: Job ID uniqueness is enforced by APPLICATION LOGIC within
 -- a 45-day rolling window — see app/api/orders/check-job-id/route.ts
--- and lib/orderCreate.ts (both scope the lookup by branch_id +
--- business_type + job_id AND created_at >= now() - 45 days).
+-- and lib/orderCreate.ts (both scope the lookup by branch_id + job_id
+-- AND created_at >= now() - 45 days).
+--
+-- NOTE: public.orders has NO business_type column, so neither the
+-- lookup index nor the duplicate check keys on it — the duplicate
+-- key is (branch_id, job_id) within the rolling window. care_u vs
+-- ezy_repair is decided in app logic only (Ezy auto-generates its
+-- Job ID and is never checked against the orders table).
 --
 -- The previous scoped-unique index (orders_job_id_scoped_idx) blocked
 -- reuse forever, so it is dropped here and replaced with a plain,
@@ -23,5 +29,5 @@ drop index if exists orders_job_id_unique_idx;   -- legacy global-unique (alread
 drop index if exists orders_job_id_scoped_idx;    -- scoped-unique — blocked 45-day reuse
 
 create index if not exists orders_job_id_lookup_idx
-  on public.orders (branch_id, business_type, job_id, created_at)
+  on public.orders (branch_id, job_id, created_at)
   where job_id is not null;
