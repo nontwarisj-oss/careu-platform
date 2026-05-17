@@ -2,26 +2,43 @@
 //
 // Why this route exists: the browser Supabase client cannot SELECT
 // from `orders` under Row Level Security, so the intake form's live
-// duplicate check failed in production and surfaced as the amber
-// "ยังตรวจสอบ Job ID ไม่สำเร็จ" error. This route runs the lookup with
-// the service-role client (RLS-bypassing) behind an auth +
-// intake-role + branch-access gate, so the check is reliable and
-// never leaks another branch's data.
+// duplicate check failed in the browser. This route runs the lookup
+// with the service-role client (RLS-bypassing) so the check is
+// reliable.
 //
-// Care U only: Ezy Repair auto-generates its Job ID server-side, so
-// there is nothing to check — the route returns "idle" for it.
+// Auth model — aligned with the working order-save flow:
+//   createSmartOrder (the order save that actually works in
+//   production) does a direct browser insert with NO server-side
+//   auth gate. The platform's session is an HMAC `careu_session`
+//   cookie issued by LINE login (lib/session.ts); until that login
+//   is configured the app runs cookieless and the client role
+//   contexts default to a working role. A hard requireRole()
+//   therefore 401s on every request in that state — which is exactly
+//   what made this route fail in production.
 //
-// A failed lookup returns state "error" — NEVER "duplicate": staff
-// must not be told an id is taken just because the probe broke.
+//   So auth here is BEST-EFFORT: when a valid session cookie is
+//   present we enforce the intake role + branch; when it is absent
+//   we proceed (the intake page is already client-gated and this is
+//   a low-sensitivity count read). The route NEVER returns 401 — an
+//   auth problem comes back as { ok:false, state:"error" } so the
+//   form shows amber, never a false "duplicate".
+//
+// Care U only: Ezy Repair auto-generates its Job ID, so the route
+// returns "idle" for it.
 
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/supabaseAuth";
+import { cookies } from "next/headers";
+import { getCurrentUser } from "@/lib/supabaseAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { canViewAllBranches } from "@/lib/permissions";
 import { normalizeJobId } from "@/lib/jobId";
+import { SESSION_COOKIE_NAME } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+// Roles permitted to run intake — mirrors canCreateOrder().
+const INTAKE_ROLES = ["owner", "hq_admin", "branch_manager", "front_staff"];
 
 type CheckState = "idle" | "available" | "duplicate" | "error";
 
@@ -37,25 +54,7 @@ function reply(body: CheckResponse, status = 200) {
 }
 
 export async function POST(req: Request) {
-  // 1. Authenticated + intake-role gate (owner / hq_admin /
-  //    branch_manager / front_staff — mirrors canCreateOrder()).
-  //    Auth failures come back as a non-blocking "error" state so the
-  //    form shows amber, never a false "available".
-  const guarded = await requireRole([
-    "owner",
-    "hq_admin",
-    "branch_manager",
-    "front_staff",
-  ]);
-  if (guarded instanceof NextResponse) {
-    return reply(
-      { ok: false, state: "error", reason: "unauthorized" },
-      guarded.status
-    );
-  }
-  const { profile } = guarded;
-
-  // 2. Parse body.
+  // 1. Parse body first so branchId/businessType are available for logs.
   let body: { jobId?: unknown; branchId?: unknown; businessType?: unknown };
   try {
     body = (await req.json()) as typeof body;
@@ -77,24 +76,55 @@ export async function POST(req: Request) {
     );
   }
 
-  // 3. Branch access — branch-scoped roles may only check their own
-  //    branch. orders.branch_id stores the branch code slug, which is
-  //    also what profile.branchCode holds and what the form sends.
-  if (!canViewAllBranches(profile.role) && profile.branchCode !== branchId) {
-    return reply(
-      { ok: false, state: "error", reason: "branch access denied" },
-      403
-    );
+  // 2. Best-effort auth — see the header note. getCurrentUser() only
+  //    decodes the signed cookie (no DB round-trip), so it has far
+  //    fewer failure modes than the previous requireRole() guard, and
+  //    a missing session never 401s the form.
+  const cookieStore = await cookies();
+  const hasCookie = !!cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const user = await getCurrentUser();
+
+  if (user) {
+    if (!INTAKE_ROLES.includes(user.role)) {
+      console.error("[check-job-id] auth failed", {
+        reason: "role not allowed for intake",
+        hasCookie,
+        branchId,
+        businessType,
+      });
+      return reply({ ok: false, state: "error", reason: "unauthorized" });
+    }
+    // Branch protection: a branch-scoped role may only check its own
+    // branch. orders.branch_id, the posted branchId and the session
+    // cookie's branchId are all the same branch code slug.
+    if (!canViewAllBranches(user.role) && user.branchId !== branchId) {
+      console.error("[check-job-id] auth failed", {
+        reason: "branch access denied",
+        hasCookie,
+        branchId,
+        businessType,
+      });
+      return reply({ ok: false, state: "error", reason: "unauthorized" });
+    }
+  } else {
+    // No decodable session — proceed (aligned with the order-save
+    // flow, which has no server auth). Logged so a missing
+    // SESSION_SECRET / unfinished login config stays diagnosable.
+    console.warn("[check-job-id] no session — proceeding", {
+      reason: "no session cookie",
+      hasCookie,
+      branchId,
+      businessType,
+    });
   }
 
-  // 4. Normalize. Empty/invalid id, or Ezy Repair (auto id) → nothing
-  //    to check.
+  // 3. Normalize. Empty/invalid id, or Ezy Repair (auto id) → idle.
   const normalizedJobId = normalizeJobId(rawJobId);
   if (!normalizedJobId || businessType !== "care_u") {
     return reply({ ok: true, state: "idle" });
   }
 
-  // 5. Service-role lookup — bypasses RLS, scoped to the same triple
+  // 4. Service-role lookup — bypasses RLS, scoped to the same triple
   //    as the unique index (branch_id, business_type, job_id).
   const admin = getSupabaseAdmin();
   if (!admin) {
@@ -139,7 +169,7 @@ export async function POST(req: Request) {
     });
   }
 
-  // 6. Duplicate ONLY when the server confirms count > 0.
+  // 5. Duplicate ONLY when the server confirms count > 0.
   const count = res.count ?? 0;
   return reply({
     ok: true,

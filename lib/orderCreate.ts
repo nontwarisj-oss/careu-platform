@@ -79,8 +79,10 @@ const isDuplicateJobId = (msg: string | undefined): boolean =>
  * browser Supabase client cannot SELECT `orders` under RLS, which is
  * why a direct browser query failed in production. The route uses the
  * service-role client (scoped to branch_id + business_type + job_id,
- * matching the unique index) behind an auth + intake-role + branch
- * gate. A failed lookup resolves to "error" — NEVER "duplicate":
+ * matching the unique index) behind a best-effort session check —
+ * intake role + branch are enforced when a session cookie is present,
+ * and the route never 401s. A failed lookup resolves to "error" —
+ * NEVER "duplicate":
  * staff must not be told an id is taken just because the probe broke.
  * ("checking" is a UI-transient the caller sets while awaiting.)
  */
@@ -98,6 +100,9 @@ export async function checkJobIdAvailability(
     const res = await fetch("/api/orders/check-job-id", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Same-origin: send the careu_session cookie so the route can
+      // best-effort identify the user (it does not hard-require it).
+      credentials: "same-origin",
       body: JSON.stringify({ jobId: normalized, branchId, businessType }),
     });
     const data = (await res.json().catch(() => null)) as {
