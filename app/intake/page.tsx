@@ -19,7 +19,7 @@ export default function IntakePage() {
             รับงานหน้าร้าน
           </h1>
           <p className="text-xs text-gray-500 mt-1">
-            สาขา → ประเภทงาน → Job ID → ลูกค้า → รายการ — ระบบคำนวณยอดและออกใบรับงานให้
+            สาขา → ประเภทงาน → Job ID → ตรวจซ้ำ → ลูกค้า → รายการ → สรุป
           </p>
         </div>
 

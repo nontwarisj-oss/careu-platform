@@ -518,11 +518,12 @@ export function IntakeOrderForm({
   const saveDisabled = isSubmitting || jobIdCheck === "duplicate";
 
   return (
-    // Tablet-first: form on the left, sticky summary + save on the
-    // right. Collapses to a single column on phones.
-    <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
+    // Tablet-first: capture column on the left, sticky summary + save
+    // on the right. 2:1 on lg, widening to 3:1 on xl so the capture
+    // column uses the horizontal space. Single column on phones.
+    <div className="grid gap-4 lg:grid-cols-3 xl:grid-cols-4 lg:items-start">
       {/* ---------- LEFT — capture ---------- */}
-      <div className="space-y-4 lg:col-span-2">
+      <div className="space-y-4 lg:col-span-2 xl:col-span-3">
       {/* 1 — Branch · 2 — Job type. Two quick selectors share one row
           on tablet/desktop so the gated steps below keep the vertical
           space. Branch is step 1, job type step 2 — the workflow order
@@ -590,11 +591,44 @@ export function IntakeOrderForm({
         </section>
       </div>
 
-      {/* 3 — Job ID — the ticket gate. The live duplicate check runs
-          as staff type, so a clash surfaces here BEFORE the customer
-          and items are entered — never a blind failure at save time.
-          The whole card rings red/green so the result is visible
-          even when the input is scrolled off the top of a tablet. */}
+      {/* 3 — Job ID. Manual entry for Care U; Ezy Repair auto-generates
+          it server-side on save. Comes right after job type. */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          3 • Job ID
+        </p>
+        {businessType === "care_u" ? (
+          <input
+            type="text"
+            value={careUJobId}
+            autoFocus
+            onChange={(e) => {
+              setCareUJobId(e.target.value);
+              // Editing invalidates any stale duplicate error.
+              if (errorMessage) setErrorMessage(null);
+            }}
+            placeholder="เช่น CARE-001"
+            maxLength={32}
+            className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
+              jobIdCheck === "duplicate"
+                ? "border-red-400 bg-red-50 focus:ring-red-500"
+                : jobIdCheck === "unique"
+                  ? "border-green-500 bg-green-50/60 focus:ring-green-500"
+                  : "border-gray-300 focus:ring-green-500"
+            }`}
+          />
+        ) : (
+          <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
+            Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
+          </p>
+        )}
+      </section>
+
+      {/* 4 — Live duplicate check — its own gate, BEFORE the customer
+          section. Runs (debounced) as staff type, so a clash surfaces
+          here and never as a blind failure at save time. The card
+          rings red/green so the result reads at a glance even when the
+          Job ID input is scrolled off the top of a tablet. */}
       <section
         className={`${card} ${
           businessType === "care_u" && jobIdCheck === "duplicate"
@@ -604,62 +638,42 @@ export function IntakeOrderForm({
               : ""
         }`}
       >
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            3 • Job ID
+            4 • ตรวจสอบ Job ID ซ้ำ
           </p>
           {businessType === "care_u" && <JobIdBadge state={jobIdCheck} />}
         </div>
         {businessType === "care_u" ? (
-          <>
-            <input
-              type="text"
-              value={careUJobId}
-              autoFocus
-              onChange={(e) => {
-                setCareUJobId(e.target.value);
-                // Editing invalidates any stale duplicate error.
-                if (errorMessage) setErrorMessage(null);
-              }}
-              placeholder="เช่น CARE-001"
-              maxLength={32}
-              className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
-                jobIdCheck === "duplicate"
-                  ? "border-red-400 bg-red-50 focus:ring-red-500"
-                  : jobIdCheck === "unique"
-                    ? "border-green-500 bg-green-50/60 focus:ring-green-500"
-                    : "border-gray-300 focus:ring-green-500"
-              }`}
-            />
-            <p
-              className={`mt-2 text-sm font-medium ${
-                jobIdCheck === "duplicate"
-                  ? "text-red-600"
-                  : jobIdCheck === "unique"
-                    ? "text-green-700"
-                    : "text-gray-500"
-              }`}
-            >
-              {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
-              {jobIdCheck === "duplicate" &&
-                "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนกรอกลูกค้า"}
-              {jobIdCheck === "unique" &&
-                "✓ Job ID นี้ใช้ได้ — กรอกข้อมูลลูกค้าต่อได้เลย"}
-              {jobIdCheck === "idle" &&
-                "กรอก Job ID ก่อน — ระบบตรวจซ้ำให้อัตโนมัติก่อนรับลูกค้า"}
-            </p>
-          </>
+          <p
+            className={`text-sm font-medium ${
+              jobIdCheck === "duplicate"
+                ? "text-red-600"
+                : jobIdCheck === "unique"
+                  ? "text-green-700"
+                  : "text-gray-500"
+            }`}
+          >
+            {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
+            {jobIdCheck === "duplicate" &&
+              "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนกรอกลูกค้า"}
+            {jobIdCheck === "unique" &&
+              "✓ Job ID นี้ใช้ได้ — กรอกข้อมูลลูกค้าต่อได้เลย"}
+            {jobIdCheck === "idle" &&
+              "กรอก Job ID ด้านบนก่อน — ระบบตรวจซ้ำให้อัตโนมัติก่อนรับลูกค้า"}
+          </p>
         ) : (
-          <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
-            Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
+          <p className="text-sm text-gray-500">
+            Ezy Repair ใช้ Job ID อัตโนมัติ — ไม่ต้องตรวจซ้ำ
           </p>
         )}
       </section>
 
-      {/* 4 — Customer — reached only after the Job ID gate above. */}
+      {/* 5 — Customer — reached only after the Job ID + duplicate-check
+          gate above. */}
       <section className={card}>
         <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          4 • ลูกค้า
+          5 • ลูกค้า
         </p>
         {selectedCustomer ? (
           <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
@@ -775,11 +789,11 @@ export function IntakeOrderForm({
         </div>
       </section>
 
-      {/* 5 — Items */}
+      {/* 6 — Services / items */}
       <section className={card}>
         <div className="flex items-center justify-between mb-3">
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            5 • รายการรับซ่อม ({items.length})
+            6 • รายการรับซ่อม ({items.length})
           </p>
           {/* Running total here too — on a phone the sticky summary
               is far below, so staff see the net without scrolling. */}
@@ -819,7 +833,7 @@ export function IntakeOrderForm({
         <div className="space-y-3 lg:sticky lg:top-4">
           <section className={card}>
             <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-              สรุปยอด
+              7 • สรุปยอด
             </p>
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm space-y-1.5">
               <div className="flex justify-between">
