@@ -153,6 +153,46 @@ export function IntakeOrderForm({
     setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
   }, [branch.brand, businessTypeTouched]);
 
+  // Live Job ID duplicate check (Care U only). Debounced ~400ms so a
+  // duplicate is flagged as staff type — they never hit save blind.
+  // Ezy Repair generates its Job ID server-side, so no check there.
+  const [jobIdCheck, setJobIdCheck] = useState<
+    "idle" | "checking" | "unique" | "duplicate"
+  >("idle");
+  useEffect(() => {
+    if (businessType !== "care_u") {
+      setJobIdCheck("idle");
+      return;
+    }
+    const normalized = normalizeJobId(careUJobId);
+    if (!normalized) {
+      setJobIdCheck("idle");
+      return;
+    }
+    setJobIdCheck("checking");
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const res = await supabase
+        .from("orders")
+        .select("id", { head: true, count: "exact" })
+        .eq("job_id", normalized)
+        .eq("branch_id", branch.id)
+        .eq("business_type", "care_u");
+      if (cancelled) return;
+      // If the probe itself errors, don't block — createSmartOrder's
+      // server-side duplicate guard still catches it on save.
+      if (res.error) {
+        setJobIdCheck("idle");
+        return;
+      }
+      setJobIdCheck((res.count ?? 0) > 0 ? "duplicate" : "unique");
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [careUJobId, businessType, branch.id]);
+
   // ---- Items -------------------------------------------------------------
   const [items, setItems] = useState<DraftItem[]>([makeEmptyItem()]);
   const [orderNote, setOrderNote] = useState("");
@@ -303,7 +343,13 @@ export function IntakeOrderForm({
       }
     }
     if (businessType === "care_u" && !normalizeJobId(careUJobId)) {
-      setErrorMessage("Care U ต้องกรอก Job ID เอง");
+      setErrorMessage("กรอก Job ID ก่อนบันทึก (Care U)");
+      return;
+    }
+    if (businessType === "care_u" && jobIdCheck === "duplicate") {
+      setErrorMessage(
+        "Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนบันทึก"
+      );
       return;
     }
 
@@ -455,21 +501,29 @@ export function IntakeOrderForm({
   };
 
   // ----- Render -----------------------------------------------------------
+  // Section card — no bottom margin; the columns space with `space-y`.
   const card =
-    "bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4";
+    "bg-white rounded-2xl border border-gray-200 shadow-sm p-4";
+
+  // Save is hard-blocked only by a known duplicate Job ID or an
+  // in-flight submit — everything else is checked on click and the
+  // reason is shown right next to the button (no silent failure).
+  const blockReason =
+    jobIdCheck === "duplicate"
+      ? "Job ID ซ้ำ — แก้ Job ID ก่อนจึงจะบันทึกได้"
+      : null;
+  const saveDisabled = isSubmitting || jobIdCheck === "duplicate";
 
   return (
-    <div className="space-y-0">
-      {errorMessage && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {errorMessage}
-        </div>
-      )}
-
-      {/* 0 — Business type + branch */}
+    // Tablet-first: form on the left, sticky summary + save on the
+    // right. Collapses to a single column on phones.
+    <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
+      {/* ---------- LEFT — capture ---------- */}
+      <div className="space-y-4 lg:col-span-2">
+      {/* 1 — Business type + branch */}
       <section className={card}>
         <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          0 • ประเภทงาน
+          1 • ประเภทงาน + สาขา
         </p>
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -528,10 +582,60 @@ export function IntakeOrderForm({
         )}
       </section>
 
-      {/* 1 — Customer */}
+      {/* 2 — Job ID (moved up: lock the ticket id first; the live
+          duplicate check then runs while staff fill the rest). */}
       <section className={card}>
         <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          1 • ลูกค้า
+          2 • Job ID
+        </p>
+        {businessType === "care_u" ? (
+          <>
+            <input
+              type="text"
+              value={careUJobId}
+              onChange={(e) => {
+                setCareUJobId(e.target.value);
+                // Editing invalidates any stale duplicate error.
+                if (errorMessage) setErrorMessage(null);
+              }}
+              placeholder="เช่น CARE-001"
+              maxLength={32}
+              className={`w-full rounded-xl border p-3 text-base font-mono outline-none focus:ring-2 ${
+                jobIdCheck === "duplicate"
+                  ? "border-red-400 bg-red-50 focus:ring-red-500"
+                  : jobIdCheck === "unique"
+                    ? "border-green-500 bg-green-50/50 focus:ring-green-500"
+                    : "border-gray-300 focus:ring-green-500"
+              }`}
+            />
+            <p
+              className={`mt-1.5 text-xs font-medium ${
+                jobIdCheck === "duplicate"
+                  ? "text-red-600"
+                  : jobIdCheck === "unique"
+                    ? "text-green-700"
+                    : "text-gray-400"
+              }`}
+            >
+              {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
+              {jobIdCheck === "duplicate" &&
+                "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยนใหม่"}
+              {jobIdCheck === "unique" && "✓ Job ID นี้ใช้ได้"}
+              {jobIdCheck === "idle" &&
+                "Care U: กรอก Job ID เอง — ระบบตรวจซ้ำให้อัตโนมัติ"}
+            </p>
+          </>
+        ) : (
+          <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
+            Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
+          </p>
+        )}
+      </section>
+
+      {/* 3 — Customer */}
+      <section className={card}>
+        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+          3 • ลูกค้า
         </p>
         {selectedCustomer ? (
           <div className="flex items-center justify-between border border-green-200 bg-green-50 rounded-xl p-3">
@@ -643,11 +747,11 @@ export function IntakeOrderForm({
         </div>
       </section>
 
-      {/* 2 — Items */}
+      {/* 4 — Items */}
       <section className={card}>
         <div className="flex items-center justify-between mb-3">
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
-            2 • รายการรับซ่อม ({items.length})
+            4 • รายการรับซ่อม ({items.length})
           </p>
         </div>
         <div className="space-y-3">
@@ -675,82 +779,72 @@ export function IntakeOrderForm({
         </button>
       </section>
 
-      {/* 3 — Job ID */}
-      <section className={card}>
-        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          3 • Job ID
-        </p>
-        {businessType === "care_u" ? (
-          <input
-            type="text"
-            value={careUJobId}
-            onChange={(e) => {
-              setCareUJobId(e.target.value);
-              // Editing the Job ID invalidates any stale "duplicate Job
-              // ID" error from a previous save attempt — clear it so the
-              // form no longer looks blocked. The real duplicate check
-              // re-runs server-side on the next save.
-              if (errorMessage) setErrorMessage(null);
-            }}
-            placeholder="เช่น CARE-001"
-            maxLength={32}
-            className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
-          />
-        ) : (
-          <p className="rounded-xl border border-dashed border-green-300 bg-green-50/40 p-3 text-sm text-green-800">
-            Ezy Repair: ระบบสร้าง Job ID อัตโนมัติเมื่อบันทึก
-          </p>
-        )}
-      </section>
+      </div>
 
-      {/* 4 — Summary */}
-      <section className={card}>
-        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          4 • สรุปยอด
-        </p>
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm space-y-1.5">
-          <div className="flex justify-between">
-            <span className="text-gray-600">ยอดรวมรายการ</span>
-            <span className="text-gray-800">{formatCurrency(subtotal)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-600">คิวงานด่วน</span>
-            <span className="text-gray-800">{formatCurrency(urgentTotal)}</span>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-gray-600">ส่วนลด</span>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={discountInput}
-              onChange={(e) => setDiscountInput(e.target.value)}
-              placeholder="0"
-              className="w-28 rounded-lg border border-gray-300 p-1.5 text-right text-sm outline-none focus:ring-2 focus:ring-green-500"
+      {/* ---------- RIGHT — sticky summary + save ---------- */}
+      <aside className="lg:col-span-1">
+        <div className="space-y-3 lg:sticky lg:top-4">
+          <section className={card}>
+            <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
+              สรุปยอด
+            </p>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-gray-600">ยอดรวมรายการ</span>
+                <span className="text-gray-800">
+                  {formatCurrency(subtotal)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">คิวงานด่วน</span>
+                <span className="text-gray-800">
+                  {formatCurrency(urgentTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-gray-600">ส่วนลด</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(e.target.value)}
+                  placeholder="0"
+                  className="w-28 rounded-lg border border-gray-300 p-1.5 text-right text-sm outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-gray-200">
+                <span className="text-gray-700 font-medium">ยอดรวมสุทธิ</span>
+                <span className="text-2xl font-bold text-green-700">
+                  {formatCurrency(grandTotal)}
+                </span>
+              </div>
+            </div>
+            <textarea
+              value={orderNote}
+              onChange={(e) => setOrderNote(e.target.value)}
+              rows={2}
+              placeholder="บันทึกภายในร้าน (ทั้งใบงาน)"
+              className="mt-3 w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
             />
-          </div>
-          <div className="flex justify-between items-center pt-1 border-t border-gray-200">
-            <span className="text-gray-700 font-medium">ยอดรวมสุทธิ</span>
-            <span className="text-2xl font-bold text-green-700">
-              {formatCurrency(grandTotal)}
-            </span>
-          </div>
-        </div>
-        <textarea
-          value={orderNote}
-          onChange={(e) => setOrderNote(e.target.value)}
-          rows={2}
-          placeholder="บันทึกภายในร้าน (ทั้งใบงาน)"
-          className="mt-3 w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
-        />
-      </section>
+          </section>
 
-      <button
-        onClick={() => void handleSubmit()}
-        disabled={isSubmitting}
-        className="w-full bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white font-semibold py-3.5 rounded-xl shadow-sm"
-      >
-        {isSubmitting ? "กำลังบันทึก..." : "บันทึกใบงาน"}
-      </button>
+          {/* Reason shown right next to the save button — staff always
+              see why a save is blocked; never a silent failure. */}
+          {(blockReason || errorMessage) && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              {blockReason ?? errorMessage}
+            </div>
+          )}
+
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={saveDisabled}
+            className="w-full rounded-xl bg-green-700 py-4 text-base font-bold text-white shadow-sm hover:bg-green-800 disabled:opacity-50"
+          >
+            {isSubmitting ? "กำลังบันทึก…" : "บันทึกใบงาน"}
+          </button>
+        </div>
+      </aside>
     </div>
   );
 }
