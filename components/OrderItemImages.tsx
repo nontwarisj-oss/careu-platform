@@ -229,8 +229,11 @@ export function OrderItemImages({
       </div>
 
       {!readOnly && total < MAX_FILES && (
-        <label className="mt-2 inline-block cursor-pointer rounded-lg border border-dashed border-green-400 px-3 py-1.5 text-xs font-semibold text-green-700 hover:bg-green-50">
-          + เพิ่มรูป
+        <label className="mt-2 flex min-h-[44px] w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-green-500 bg-green-50 px-4 py-2.5 text-sm font-bold text-green-700 hover:bg-green-100">
+          <span aria-hidden="true" className="text-base">
+            📷
+          </span>
+          + เพิ่มรูป / ถ่ายรูป
           <input
             ref={inputRef}
             type="file"

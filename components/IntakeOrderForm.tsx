@@ -307,138 +307,146 @@ export function IntakeOrderForm({
       return;
     }
 
+    // From here a network call may throw — `finally` guarantees the
+    // submit lock is released so the "บันทึกใบงาน" button can never get
+    // stuck disabled showing "กำลังบันทึก...".
     setIsSubmitting(true);
-
-    // Create the customer row if needed.
-    if (!resolved && isCreatingNewCustomer) {
-      const { data: branchRows } = await supabase
-        .from("branches")
-        .select("id")
-        .limit(1);
-      const firstBranch = branchRows?.[0] as { id: string } | undefined;
-      if (!firstBranch) {
-        setErrorMessage("ยังไม่มีสาขาในระบบ");
-        setIsSubmitting(false);
+    try {
+      // Create the customer row if needed.
+      if (!resolved && isCreatingNewCustomer) {
+        const { data: branchRows } = await supabase
+          .from("branches")
+          .select("id")
+          .limit(1);
+        const firstBranch = branchRows?.[0] as { id: string } | undefined;
+        if (!firstBranch) {
+          setErrorMessage("ยังไม่มีสาขาในระบบ");
+          return;
+        }
+        const insert = await supabase
+          .from("customers")
+          .insert({
+            branch_id: firstBranch.id,
+            name: newCustomerName.trim(),
+            phone: newCustomerPhone.trim(),
+            normalized_phone: normalizePhone(newCustomerPhone),
+            email: "N/A",
+            address: "N/A",
+            notes: null,
+          })
+          .select("id, name, phone")
+          .single();
+        if (insert.error || !insert.data) {
+          setErrorMessage(insert.error?.message ?? "บันทึกลูกค้าใหม่ไม่สำเร็จ");
+          return;
+        }
+        resolved = insert.data as Customer;
+      }
+      if (!resolved) {
+        setErrorMessage("ไม่พบลูกค้า");
         return;
       }
-      const insert = await supabase
-        .from("customers")
-        .insert({
-          branch_id: firstBranch.id,
-          name: newCustomerName.trim(),
-          phone: newCustomerPhone.trim(),
-          normalized_phone: normalizePhone(newCustomerPhone),
-          email: "N/A",
-          address: "N/A",
-          notes: null,
-        })
-        .select("id, name, phone")
-        .single();
-      if (insert.error || !insert.data) {
-        setErrorMessage(insert.error?.message ?? "บันทึกลูกค้าใหม่ไม่สำเร็จ");
-        setIsSubmitting(false);
+
+      // Build the order_items payload.
+      const itemInputs: OrderItemInput[] = items.map((it) => {
+        const svc = resolveService(it, catalog);
+        return {
+          category: svc.category || null,
+          serviceCode: svc.code,
+          serviceName: svc.name,
+          detail: it.detail.trim() || null,
+          quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
+          unitPrice: Math.max(0, Number(it.unitPrice) || 0),
+          urgent: it.urgent,
+          urgentFee: it.urgent ? Math.max(0, Number(it.urgentFee) || 0) : 0,
+          dueDate: it.dueDate || null,
+          assignedTechnicianId: it.technicianId || null,
+          technicianNote: it.technicianNote.trim() || null,
+          customerNote: it.customerNote.trim() || null,
+          imagePaths: it.imagePaths,
+        };
+      });
+
+      // Header summary — representative service + earliest due date.
+      const first = resolveService(items[0], catalog);
+      const headerName =
+        items.length > 1
+          ? `${first.name} +${items.length - 1} รายการ`
+          : first.name;
+      const dueDates = items
+        .map((it) => it.dueDate)
+        .filter((d): d is string => !!d)
+        .sort();
+      const anyUrgent = items.some((it) => it.urgent);
+
+      const { orderId, error } = await createSmartOrder({
+        customerId: resolved.id,
+        customerName: resolved.name,
+        customerType,
+        branchId: branch.id,
+        businessType,
+        serviceCategory: first.category || null,
+        serviceCode: first.code,
+        serviceName: headerName,
+        templateText:
+          items.length === 1 ? items[0].detail.trim() || null : headerName,
+        quantity: items.reduce(
+          (s, it) => s + Math.max(1, Math.floor(Number(it.quantity) || 1)),
+          0
+        ),
+        subtotal,
+        urgent: anyUrgent,
+        urgentFee: urgentTotal,
+        promotionCode: discount > 0 ? "MANUAL" : null,
+        discount,
+        total: grandTotal,
+        notes: orderNote.trim() || null,
+        status: "pending",
+        jobId: businessType === "care_u" ? careUJobId : null,
+        createdBy: user?.uid ?? null,
+        dueDate: dueDates[0] ?? null,
+      });
+
+      // A duplicate Job ID (Care U) lands here as a plain error string —
+      // shown to staff, who can edit the Job ID and save again.
+      if (error || !orderId) {
+        setErrorMessage(error ?? "บันทึกใบงานไม่สำเร็จ");
         return;
       }
-      resolved = insert.data as Customer;
-    }
-    if (!resolved) {
-      setErrorMessage("ไม่พบลูกค้า");
-      setIsSubmitting(false);
-      return;
-    }
 
-    // Build the order_items payload.
-    const itemInputs: OrderItemInput[] = items.map((it) => {
-      const svc = resolveService(it, catalog);
-      return {
-        category: svc.category || null,
-        serviceCode: svc.code,
-        serviceName: svc.name,
-        detail: it.detail.trim() || null,
-        quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
-        unitPrice: Math.max(0, Number(it.unitPrice) || 0),
-        urgent: it.urgent,
-        urgentFee: it.urgent ? Math.max(0, Number(it.urgentFee) || 0) : 0,
-        dueDate: it.dueDate || null,
-        assignedTechnicianId: it.technicianId || null,
-        technicianNote: it.technicianNote.trim() || null,
-        customerNote: it.customerNote.trim() || null,
-        imagePaths: it.imagePaths,
-      };
-    });
+      // Child line-items. A failure here is surfaced but the header is
+      // already saved — staff can re-open the order to fix items.
+      const itemsRes = await insertOrderItems(orderId, branch.id, itemInputs);
+      if (itemsRes.error) {
+        setErrorMessage(
+          `บันทึกใบงานแล้ว แต่บันทึกรายการไม่สำเร็จ: ${itemsRes.error}`
+        );
+        return;
+      }
 
-    // Header summary — representative service + earliest due date.
-    const first = resolveService(items[0], catalog);
-    const headerName =
-      items.length > 1
-        ? `${first.name} +${items.length - 1} รายการ`
-        : first.name;
-    const dueDates = items
-      .map((it) => it.dueDate)
-      .filter((d): d is string => !!d)
-      .sort();
-    const anyUrgent = items.some((it) => it.urgent);
+      // Fire-and-forget post-create hooks (sheet sync + lifecycle).
+      void fetch("/api/sync-order-to-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId }),
+      }).catch(() => {});
+      void triggerLifecycleEvent("order_created", orderId);
 
-    const { orderId, error } = await createSmartOrder({
-      customerId: resolved.id,
-      customerName: resolved.name,
-      customerType,
-      branchId: branch.id,
-      businessType,
-      serviceCategory: first.category || null,
-      serviceCode: first.code,
-      serviceName: headerName,
-      templateText:
-        items.length === 1 ? items[0].detail.trim() || null : headerName,
-      quantity: items.reduce(
-        (s, it) => s + Math.max(1, Math.floor(Number(it.quantity) || 1)),
-        0
-      ),
-      subtotal,
-      urgent: anyUrgent,
-      urgentFee: urgentTotal,
-      promotionCode: discount > 0 ? "MANUAL" : null,
-      discount,
-      total: grandTotal,
-      notes: orderNote.trim() || null,
-      status: "pending",
-      jobId: businessType === "care_u" ? careUJobId : null,
-      createdBy: user?.uid ?? null,
-      dueDate: dueDates[0] ?? null,
-    });
-
-    if (error || !orderId) {
-      setErrorMessage(error ?? "บันทึกใบงานไม่สำเร็จ");
-      setIsSubmitting(false);
-      return;
-    }
-
-    // Child line-items. A failure here is surfaced but the header is
-    // already saved — staff can re-open the order to fix items.
-    const itemsRes = await insertOrderItems(orderId, branch.id, itemInputs);
-    if (itemsRes.error) {
+      onCreated?.({
+        orderId,
+        itemCount: items.length,
+        total: grandTotal,
+        customerName: resolved.name,
+      });
+    } catch (err) {
       setErrorMessage(
-        `บันทึกใบงานแล้ว แต่บันทึกรายการไม่สำเร็จ: ${itemsRes.error}`
+        err instanceof Error
+          ? err.message
+          : "บันทึกใบงานไม่สำเร็จ — ลองอีกครั้ง"
       );
+    } finally {
       setIsSubmitting(false);
-      return;
     }
-
-    // Fire-and-forget post-create hooks (sheet sync + lifecycle).
-    void fetch("/api/sync-order-to-sheet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId }),
-    }).catch(() => {});
-    void triggerLifecycleEvent("order_created", orderId);
-
-    setIsSubmitting(false);
-    onCreated?.({
-      orderId,
-      itemCount: items.length,
-      total: grandTotal,
-      customerName: resolved.name,
-    });
   };
 
   const setBusinessType = (next: BusinessType) => {
@@ -676,7 +684,14 @@ export function IntakeOrderForm({
           <input
             type="text"
             value={careUJobId}
-            onChange={(e) => setCareUJobId(e.target.value)}
+            onChange={(e) => {
+              setCareUJobId(e.target.value);
+              // Editing the Job ID invalidates any stale "duplicate Job
+              // ID" error from a previous save attempt — clear it so the
+              // form no longer looks blocked. The real duplicate check
+              // re-runs server-side on the next save.
+              if (errorMessage) setErrorMessage(null);
+            }}
             placeholder="เช่น CARE-001"
             maxLength={32}
             className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
@@ -925,8 +940,8 @@ function ItemCard({
         />
       </div>
 
-      <div className="mt-2">
-        <p className="mb-1 text-[10px] uppercase tracking-wide text-gray-500">
+      <div className="mt-3 rounded-lg border border-gray-200 bg-white p-2.5">
+        <p className="mb-1.5 text-xs font-semibold text-gray-700">
           รูปงาน / จุดเสียหาย
         </p>
         <OrderItemImages
