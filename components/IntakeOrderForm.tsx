@@ -166,6 +166,9 @@ export function IntakeOrderForm({
     }
     const normalized = normalizeJobId(careUJobId);
     if (!normalized) {
+      // Empty Job ID → idle (not duplicate, not yet valid). Bail
+      // before the probe so an empty field never flickers through
+      // "checking" or lands on a misleading green "valid" state.
       setJobIdCheck("idle");
       return;
     }
@@ -582,17 +585,32 @@ export function IntakeOrderForm({
         )}
       </section>
 
-      {/* 2 — Job ID (moved up: lock the ticket id first; the live
-          duplicate check then runs while staff fill the rest). */}
-      <section className={card}>
-        <p className="text-xs font-bold uppercase tracking-widest text-green-700 mb-3">
-          2 • Job ID
-        </p>
+      {/* 2 — Job ID — the ticket gate. The live duplicate check runs
+          as staff type, so a clash surfaces here BEFORE the customer
+          and items are entered — never a blind failure at save time.
+          The whole card rings red/green so the result is visible
+          even when the input is scrolled off the top of a tablet. */}
+      <section
+        className={`${card} ${
+          businessType === "care_u" && jobIdCheck === "duplicate"
+            ? "ring-2 ring-red-300"
+            : businessType === "care_u" && jobIdCheck === "unique"
+              ? "ring-2 ring-green-300"
+              : ""
+        }`}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-xs font-bold uppercase tracking-widest text-green-700">
+            2 • Job ID
+          </p>
+          {businessType === "care_u" && <JobIdBadge state={jobIdCheck} />}
+        </div>
         {businessType === "care_u" ? (
           <>
             <input
               type="text"
               value={careUJobId}
+              autoFocus
               onChange={(e) => {
                 setCareUJobId(e.target.value);
                 // Editing invalidates any stale duplicate error.
@@ -604,25 +622,26 @@ export function IntakeOrderForm({
                 jobIdCheck === "duplicate"
                   ? "border-red-400 bg-red-50 focus:ring-red-500"
                   : jobIdCheck === "unique"
-                    ? "border-green-500 bg-green-50/50 focus:ring-green-500"
+                    ? "border-green-500 bg-green-50/60 focus:ring-green-500"
                     : "border-gray-300 focus:ring-green-500"
               }`}
             />
             <p
-              className={`mt-1.5 text-xs font-medium ${
+              className={`mt-2 text-sm font-medium ${
                 jobIdCheck === "duplicate"
                   ? "text-red-600"
                   : jobIdCheck === "unique"
                     ? "text-green-700"
-                    : "text-gray-400"
+                    : "text-gray-500"
               }`}
             >
               {jobIdCheck === "checking" && "กำลังตรวจสอบ Job ID…"}
               {jobIdCheck === "duplicate" &&
-                "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยนใหม่"}
-              {jobIdCheck === "unique" && "✓ Job ID นี้ใช้ได้"}
+                "❌ Job ID นี้ถูกใช้แล้วในสาขานี้ — เปลี่ยน Job ID ก่อนกรอกลูกค้า"}
+              {jobIdCheck === "unique" &&
+                "✓ Job ID นี้ใช้ได้ — กรอกข้อมูลลูกค้าต่อได้เลย"}
               {jobIdCheck === "idle" &&
-                "Care U: กรอก Job ID เอง — ระบบตรวจซ้ำให้อัตโนมัติ"}
+                "กรอก Job ID ก่อน — ระบบตรวจซ้ำให้อัตโนมัติก่อนรับลูกค้า"}
             </p>
           </>
         ) : (
@@ -658,21 +677,25 @@ export function IntakeOrderForm({
           </div>
         ) : isCreatingNewCustomer ? (
           <div className="space-y-3">
-            <input
-              type="text"
-              value={newCustomerName}
-              onChange={(e) => setNewCustomerName(e.target.value)}
-              placeholder="ชื่อลูกค้า"
-              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
-            />
-            <input
-              type="tel"
-              inputMode="tel"
-              value={newCustomerPhone}
-              onChange={(e) => setNewCustomerPhone(e.target.value)}
-              placeholder="เบอร์โทร"
-              className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
-            />
+            {/* Two-up on tablet/desktop — keeps the new-customer
+                form on a single row, less vertical scrolling. */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                type="text"
+                value={newCustomerName}
+                onChange={(e) => setNewCustomerName(e.target.value)}
+                placeholder="ชื่อลูกค้า"
+                className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+              />
+              <input
+                type="tel"
+                inputMode="tel"
+                value={newCustomerPhone}
+                onChange={(e) => setNewCustomerPhone(e.target.value)}
+                placeholder="เบอร์โทร"
+                className="w-full rounded-xl border border-gray-300 p-3 outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
             <button
               type="button"
               onClick={() => {
@@ -753,6 +776,11 @@ export function IntakeOrderForm({
           <p className="text-xs font-bold uppercase tracking-widest text-green-700">
             4 • รายการรับซ่อม ({items.length})
           </p>
+          {/* Running total here too — on a phone the sticky summary
+              is far below, so staff see the net without scrolling. */}
+          <span className="text-sm font-bold text-green-700">
+            {formatCurrency(grandTotal)}
+          </span>
         </div>
         <div className="space-y-3">
           {items.map((it, idx) => (
@@ -1045,6 +1073,34 @@ function ItemCard({
         />
       </div>
     </div>
+  );
+}
+
+// Compact Job ID status pill — mirrors the live duplicate check in
+// the section header so staff get the result at a glance, before
+// they ever touch the customer section.
+function JobIdBadge({
+  state,
+}: {
+  state: "idle" | "checking" | "unique" | "duplicate";
+}) {
+  if (state === "idle") return null;
+  const style =
+    state === "duplicate"
+      ? "bg-red-100 text-red-700"
+      : state === "unique"
+        ? "bg-green-100 text-green-700"
+        : "bg-gray-100 text-gray-600";
+  const label =
+    state === "duplicate"
+      ? "✕ Job ID ซ้ำ"
+      : state === "unique"
+        ? "✓ ใช้ได้"
+        : "กำลังตรวจสอบ…";
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${style}`}>
+      {label}
+    </span>
   );
 }
 

@@ -10,7 +10,7 @@ export default function IntakePage() {
     // Wide, tablet-first container — the intake form lays itself out in
     // two columns (capture left, sticky summary + save right) on lg+.
     <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-3 md:p-6 pt-20 md:pt-6">
-      <div className="mx-auto w-full max-w-5xl">
+      <div className="mx-auto w-full max-w-6xl">
         <div className="mb-4 border-l-4 border-yellow-400 pl-4">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-700">
             CareU OPS
