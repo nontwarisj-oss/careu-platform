@@ -159,11 +159,15 @@ export function IntakeOrderForm({
     setBusinessTypeState(branch.brand === "ezy" ? "ezy_repair" : "care_u");
   }, [branch.brand, businessTypeTouched]);
 
-  // Live Job ID duplicate check (Care U only). Debounced 400ms via the
-  // SAME shared helper the save-time guard uses, so the live result
-  // and the save decision can never disagree. A failed probe resolves
-  // to "error" (amber) — never a misleading "duplicate". Ezy Repair
-  // auto-generates its Job ID server-side, so it is never checked.
+  // Live Job ID duplicate check (Care U only). Debounced 400ms; the
+  // shared checkJobIdAvailability helper POSTs /api/orders/check-job-id
+  // so the lookup runs SERVER-SIDE with the service-role client — the
+  // browser Supabase client cannot SELECT `orders` under RLS, which
+  // was the production failure. The save-time guard uses the SAME
+  // helper, so the live result and the save decision can never
+  // disagree. A failed lookup resolves to "error" (amber) — never a
+  // misleading "duplicate". Ezy Repair auto-generates its Job ID, so
+  // it is skipped (no request).
   const [jobIdCheck, setJobIdCheck] = useState<JobIdCheckState>("idle");
   useEffect(() => {
     if (businessType !== "care_u") {

@@ -75,10 +75,14 @@ const isDuplicateJobId = (msg: string | undefined): boolean =>
  * live check in IntakeOrderForm AND the save-time guard below, so the
  * UI and the save path can never disagree.
  *
- * Scoped to (branch_id, business_type, job_id), matching the scoped
- * unique index. A query failure resolves to "error" — NEVER
- * "duplicate": staff must not be told an id is taken just because the
- * probe broke. Only a confirmed count > 0 is a "duplicate".
+ * The lookup runs SERVER-SIDE via POST /api/orders/check-job-id: the
+ * browser Supabase client cannot SELECT `orders` under RLS, which is
+ * why a direct browser query failed in production. The route uses the
+ * service-role client (scoped to branch_id + business_type + job_id,
+ * matching the unique index) behind an auth + intake-role + branch
+ * gate. A failed lookup resolves to "error" — NEVER "duplicate":
+ * staff must not be told an id is taken just because the probe broke.
+ * ("checking" is a UI-transient the caller sets while awaiting.)
  */
 export async function checkJobIdAvailability(
   jobId: string | null | undefined,
@@ -86,40 +90,33 @@ export async function checkJobIdAvailability(
   businessType: BusinessType
 ): Promise<JobIdCheckState> {
   const normalized = normalizeJobId(jobId);
-  // Empty/invalid id, or an auto-id business type → nothing to check.
+  // Empty/invalid id, or an auto-id business type → nothing to check;
+  // skip the network round-trip entirely.
   if (!normalized || businessType !== "care_u") return "idle";
 
-  const res = await supabase
-    .from("orders")
-    .select("id", { head: true, count: "exact" })
-    .eq("job_id", normalized)
-    .eq("branch_id", branchId)
-    .eq("business_type", businessType);
-
-  if (!res.error) {
-    return (res.count ?? 0) > 0 ? "duplicate" : "available";
-  }
-
-  // business_type column not migrated yet → fall back to a global
-  // job_id lookup so real duplicates are still caught.
-  if (isMissingColumn(res.error.message)) {
-    const legacy = await supabase
-      .from("orders")
-      .select("id", { head: true, count: "exact" })
-      .eq("job_id", normalized);
-    if (!legacy.error) {
-      return (legacy.count ?? 0) > 0 ? "duplicate" : "available";
+  try {
+    const res = await fetch("/api/orders/check-job-id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: normalized, branchId, businessType }),
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      state?: JobIdCheckState;
+    } | null;
+    if (res.ok && data?.ok) {
+      if (data.state === "available") return "available";
+      if (data.state === "duplicate") return "duplicate";
+      if (data.state === "idle") return "idle";
     }
-    // Whole orders table/columns absent (un-migrated DB) → nothing we
-    // can check; "idle" leaves the DB unique index as the final guard
-    // rather than blocking every Care U save.
-    if (isMissingColumn(legacy.error.message)) return "idle";
-    // A genuine query failure — surface as "error", never "duplicate".
+    // Non-2xx, missing/!ok body, or an explicit "error"/unknown state
+    // → "error": save stays blocked and the form shows amber. A
+    // broken probe is NEVER reported as a duplicate.
+    return "error";
+  } catch (err) {
+    console.error("[orderCreate] check-job-id request failed", err);
     return "error";
   }
-
-  // A genuine query failure — surface as "error", never "duplicate".
-  return "error";
 }
 
 /**
