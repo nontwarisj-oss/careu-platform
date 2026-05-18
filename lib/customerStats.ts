@@ -240,6 +240,39 @@ export function matchOrderToCustomer(
   return { customer: null, tier: null };
 }
 
+/** Why an order is not linked to a customer — surfaced by the resolver. */
+export type UnmatchedReason =
+  | "null_customer_id"
+  | "orphan_customer_id"
+  | "no_match"
+  | "ambiguous_match";
+
+/**
+ * Classify a single order against the customer index. Returns the matched
+ * customer when the ladder resolves it (`reason: null`), otherwise the
+ * reason it stays unlinked. Shared by the unmatched-orders route so the
+ * resolver modal and the /customers warning agree on one definition of
+ * "unmatched" — exactly the orders `aggregateOrdersToCustomers` cannot
+ * resolve either.
+ */
+export function classifyUnmatchedOrder(
+  index: CustomerMatchIndex,
+  order: OrderMatchInput
+): { matched: CustomerLite | null; reason: UnmatchedReason | null } {
+  const { customer } = matchOrderToCustomer(index, order);
+  if (customer) return { matched: customer, reason: null };
+  // No customer resolved → describe the most actionable cause.
+  const cid =
+    typeof order.customer_id === "string" ? order.customer_id.trim() : "";
+  if (cid) {
+    // customer_id is set but the index has no such customer — a valid id
+    // would have matched on tier 1, so this one is orphaned / stale.
+    return { matched: null, reason: "orphan_customer_id" };
+  }
+  const name = (order.customer_name ?? "").trim();
+  return { matched: null, reason: name ? "no_match" : "null_customer_id" };
+}
+
 /**
  * Build a `customerId → CustomerStats` map.
  *

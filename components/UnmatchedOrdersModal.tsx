@@ -2,14 +2,18 @@
 
 // Unmatched-order resolver — Store Ops Hardening (customer data integrity).
 //
-// Orders whose customer_id is NULL never count toward a customer's visit
-// count or spend. This modal lists those orphan tickets and lets a staff
-// member link each one to the right customer in a couple of taps. Each
-// row pre-seeds its search with the order's stored customer_name so the
-// likely match surfaces immediately.
+// Orders that are not linked to a customer never count toward that
+// customer's visit count or spend. This modal lists them and lets a staff
+// member link each one to the right customer in a couple of taps.
+//
+// Source of truth: GET /api/customers/unmatched-orders. That route runs
+// the SAME id → phone → name matcher the /customers warning uses, so the
+// modal and the warning always agree. (The old modal queried only
+// `customer_id IS NULL`, missing orphan/stale customer_id rows — which is
+// why the warning said "11 of 14" while this modal said "nothing to do".)
 //
 // Writes only orders.customer_id (orders runs with RLS disabled — same
-// path the operations board uses for status changes). No new API route.
+// path the operations board uses for status changes).
 
 import { useCallback, useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
@@ -18,13 +22,30 @@ import { normalizePhone } from "@/lib/phone";
 
 type CustomerLite = { id: string; name: string; phone: string };
 
+type UnmatchedReason =
+  | "null_customer_id"
+  | "orphan_customer_id"
+  | "no_match"
+  | "ambiguous_match";
+
 type UnlinkedOrder = {
   id: string;
+  job_id: string | null;
   customer_name: string;
+  customer_phone: string | null;
   item_name: string;
   price: number;
-  job_id: string | null;
   created_at: string;
+  branch_id: string | null;
+  reason: UnmatchedReason;
+};
+
+// Thai labels for the per-order reason chip.
+const REASON_LABELS: Record<UnmatchedReason, string> = {
+  null_customer_id: "ยังไม่ผูกรหัสลูกค้า",
+  orphan_customer_id: "รหัสลูกค้าไม่ถูกต้อง",
+  no_match: "หาลูกค้าที่ตรงกันไม่พบ",
+  ambiguous_match: "ตรงกับลูกค้าหลายราย",
 };
 
 export function UnmatchedOrdersModal({
@@ -47,26 +68,34 @@ export function UnmatchedOrdersModal({
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const res = await supabase
-      .from("orders")
-      .select("id, customer_name, item_name, price, job_id, created_at")
-      .is("customer_id", null)
-      .order("created_at", { ascending: false })
-      .limit(200);
-    if (res.error) {
-      setError(res.error.message);
+    try {
+      const res = await fetch("/api/customers/unmatched-orders");
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        orders?: UnlinkedOrder[];
+      };
+      if (!res.ok || !json.ok) {
+        setError(json.error ?? `โหลดข้อมูลไม่สำเร็จ (HTTP ${res.status})`);
+        setOrders([]);
+      } else {
+        setOrders(
+          (json.orders ?? []).map((o) => ({
+            id: String(o.id),
+            job_id: o.job_id ?? null,
+            customer_name: o.customer_name ?? "",
+            customer_phone: o.customer_phone ?? null,
+            item_name: o.item_name ?? "",
+            price: Number(o.price ?? 0),
+            created_at: o.created_at,
+            branch_id: o.branch_id ?? null,
+            reason: o.reason,
+          }))
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "โหลดข้อมูลไม่สำเร็จ");
       setOrders([]);
-    } else {
-      setOrders(
-        (res.data ?? []).map((r) => ({
-          id: String((r as { id: string }).id),
-          customer_name: (r as { customer_name: string }).customer_name ?? "",
-          item_name: (r as { item_name: string }).item_name ?? "",
-          price: Number((r as { price: number }).price ?? 0),
-          job_id: (r as { job_id: string | null }).job_id ?? null,
-          created_at: (r as { created_at: string }).created_at,
-        }))
-      );
     }
     setLoading(false);
   }, []);
@@ -164,9 +193,11 @@ function ResolverRow({
   customers: CustomerLite[];
   onLink: (customerId: string) => void;
 }) {
-  // Seed the search with the order's stored name — the likely match
-  // surfaces without the operator typing anything.
-  const [query, setQuery] = useState(order.customer_name ?? "");
+  // Seed the search with the order's phone (if any) then its stored name —
+  // the likely match surfaces without the operator typing anything.
+  const [query, setQuery] = useState(
+    order.customer_phone?.trim() || order.customer_name || ""
+  );
   const [picked, setPicked] = useState<CustomerLite | null>(null);
 
   const matches = (() => {
@@ -199,6 +230,9 @@ function ResolverRow({
             {new Date(order.created_at).toLocaleDateString("th-TH")}
           </p>
         </div>
+        <span className="shrink-0 rounded-full border border-yellow-300 bg-yellow-50 px-2 py-0.5 text-[10px] font-semibold text-yellow-800">
+          {REASON_LABELS[order.reason]}
+        </span>
       </div>
 
       {picked ? (

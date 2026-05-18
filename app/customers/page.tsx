@@ -225,7 +225,6 @@ export default function CustomersPage() {
           }
           setStatsError(res.error.message);
           setStatsByCustomer({});
-          setStatsMeta({ unmatchedOrders: 0, totalOrders: 0 });
           return;
         }
         const batch = (res.data ?? []) as unknown as OrderStatRow[];
@@ -235,7 +234,11 @@ export default function CustomersPage() {
 
       setStatsError(null);
 
-      const { stats, unmatchedOrders, totalOrders } = aggregateOrdersToCustomers(
+      // Per-customer visit/spend aggregation drives the table. The unmatched
+      // COUNT shown in the yellow warning no longer comes from here — it is
+      // fetched from /api/customers/unmatched-orders so it shares one source
+      // of truth with the resolver modal (see fetchUnmatchedMeta).
+      const { stats } = aggregateOrdersToCustomers(
         currentCustomers.map((c) => ({
           id: c.id,
           name: c.name,
@@ -254,10 +257,32 @@ export default function CustomersPage() {
         }))
       );
       setStatsByCustomer(stats);
-      setStatsMeta({ unmatchedOrders, totalOrders });
     },
     []
   );
+
+  // The unmatched-order COUNT for the yellow warning — fetched from the
+  // same server route the resolver modal reads, so the warning count and
+  // the modal's row count can never contradict each other. The route runs
+  // the shared id → phone → name matcher over the service-role view.
+  const fetchUnmatchedMeta = useCallback(async () => {
+    try {
+      const res = await fetch("/api/customers/unmatched-orders");
+      const json = (await res.json()) as {
+        ok?: boolean;
+        total_orders?: number;
+        unmatched_count?: number;
+      };
+      if (!res.ok || !json.ok) return;
+      setStatsMeta({
+        unmatchedOrders: json.unmatched_count ?? 0,
+        totalOrders: json.total_orders ?? 0,
+      });
+    } catch {
+      // Transient failure — keep the last known meta rather than flashing
+      // a misleading "0 unmatched".
+    }
+  }, []);
 
   useEffect(() => {
     void fetchCustomers();
@@ -269,10 +294,12 @@ export default function CustomersPage() {
   useEffect(() => {
     if (customers.length === 0) {
       setStatsByCustomer({});
+      setStatsMeta({ unmatchedOrders: 0, totalOrders: 0 });
       return;
     }
     void fetchCustomerStats(customers);
-  }, [customers, fetchCustomerStats]);
+    void fetchUnmatchedMeta();
+  }, [customers, fetchCustomerStats, fetchUnmatchedMeta]);
 
   const handleAddCustomer = async () => {
     if (!formData.name.trim() || !formData.phone.trim()) {
@@ -1059,7 +1086,10 @@ export default function CustomersPage() {
           phone: c.phone,
         }))}
         onClose={() => setResolverOpen(false)}
-        onResolved={() => void fetchCustomerStats(customers)}
+        onResolved={() => {
+          void fetchCustomerStats(customers);
+          void fetchUnmatchedMeta();
+        }}
       />
 
       <CustomerMergeModal
