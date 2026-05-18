@@ -49,9 +49,9 @@ export async function GET() {
 
   // ---- Active technicians + skills --------------------------------------
   const techRes = await admin
-    .from("technician_profiles")
+    .from("technicians")
     .select(
-      "id, branch_id, display_name, active, daily_wage, monthly_salary, target_multiplier, productivity_target, daily_capacity_items, skill_tags"
+      "id, branch_id, name, active, daily_wage, target_multiplier, daily_capacity_items"
     )
     .eq("active", true);
   const techRows = (techRes.data ?? []) as Array<Record<string, unknown>>;
@@ -77,13 +77,6 @@ export async function GET() {
       if (list) list.push(skill);
       else skillsByTech.set(key, [skill]);
     }
-  }
-
-  // branches.id (uuid) → branches.code (slug), to match orders.branch_id.
-  const brRes = await admin.from("branches").select("id, code");
-  const codeById = new Map<string, string>();
-  for (const b of (brRes.data ?? []) as Array<Record<string, unknown>>) {
-    codeById.set(String(b.id), String(b.code ?? ""));
   }
 
   // ---- Today's load per technician (work value + item count) ------------
@@ -128,25 +121,16 @@ export async function GET() {
     const load = loadByTech.get(String(t.id)) ?? { value: 0, count: 0 };
     return {
       id: String(t.id),
-      displayName: String(t.display_name ?? ""),
+      displayName: String(t.name ?? ""),
       branchId: t.branch_id ? String(t.branch_id) : null,
-      branchCode: t.branch_id
-        ? codeById.get(String(t.branch_id)) ?? null
-        : null,
       active: t.active !== false,
       dailyWage: t.daily_wage != null ? Number(t.daily_wage) : null,
-      monthlySalary: t.monthly_salary != null ? Number(t.monthly_salary) : null,
       targetMultiplier:
         t.target_multiplier != null ? Number(t.target_multiplier) : 3,
-      productivityTarget:
-        t.productivity_target != null ? Number(t.productivity_target) : null,
       dailyCapacityItems:
         t.daily_capacity_items != null
           ? Number(t.daily_capacity_items)
           : null,
-      skillTags: Array.isArray(t.skill_tags)
-        ? (t.skill_tags as unknown[]).map((s) => String(s))
-        : [],
       skills: skillsByTech.get(String(t.id)) ?? [],
       assignedValueToday: load.value,
       assignedCountToday: load.count,

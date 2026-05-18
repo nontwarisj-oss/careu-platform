@@ -1,13 +1,13 @@
 // Phase J — technician + skill management.
 //
-// GET  → list technicians (reuses public.technician_profiles) + their
-//        technician_skills + the branch options.
+// GET  → list technicians (public.technicians) + their technician_skills +
+//        the branch options.
 // POST → { action: "saveTechnician" | "addSkill" | "deleteSkill" }.
 //
-// Service-role: technician_profiles RLS only lets `authenticated` read, so
-// a cookieless browser sees nothing — the admin client is used so the page
-// works. Best-effort owner/hq_admin gate (the /admin/technicians page is
-// also RouteGuard-gated). Wage edits are owner/hq_admin only.
+// Service-role: the Phase J tables run RLS-on / no-policy, so a browser
+// client sees nothing — the admin client is used so the page works. Best-
+// effort owner/hq_admin gate (the /admin/technicians page is also
+// RouteGuard-gated). Wage edits are owner/hq_admin only.
 
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/supabaseAuth";
@@ -21,13 +21,13 @@ export const maxDuration = 60;
 const ADMIN_ROLES = ["owner", "hq_admin"];
 
 const TECH_COLUMNS =
-  "id, branch_id, display_name, phone, active, employment_type, daily_wage, monthly_salary, target_multiplier, productivity_target, daily_capacity_items, note, skill_tags, created_at, updated_at";
+  "id, branch_id, name, phone, active, employment_type, daily_wage, monthly_salary, target_multiplier, daily_capacity_items, note, created_at, updated_at";
 
 function rowToTechnician(row: Record<string, unknown>) {
   return {
     id: String(row.id),
     branchId: row.branch_id ? String(row.branch_id) : null,
-    displayName: String(row.display_name ?? ""),
+    displayName: String(row.name ?? ""),
     phone: row.phone ? String(row.phone) : null,
     active: row.active !== false,
     employmentType: row.employment_type ? String(row.employment_type) : null,
@@ -35,16 +35,11 @@ function rowToTechnician(row: Record<string, unknown>) {
     monthlySalary: row.monthly_salary != null ? Number(row.monthly_salary) : null,
     targetMultiplier:
       row.target_multiplier != null ? Number(row.target_multiplier) : 3,
-    productivityTarget:
-      row.productivity_target != null ? Number(row.productivity_target) : null,
     dailyCapacityItems:
       row.daily_capacity_items != null
         ? Number(row.daily_capacity_items)
         : null,
     note: row.note ? String(row.note) : null,
-    skillTags: Array.isArray(row.skill_tags)
-      ? (row.skill_tags as unknown[]).map((s) => String(s))
-      : [],
   };
 }
 
@@ -68,9 +63,9 @@ export async function GET() {
   }
 
   const techRes = await admin
-    .from("technician_profiles")
+    .from("technicians")
     .select(TECH_COLUMNS)
-    .order("display_name", { ascending: true });
+    .order("name", { ascending: true });
   if (techRes.error) {
     return NextResponse.json(
       { ok: false, error: techRes.error.message },
@@ -103,13 +98,13 @@ export async function GET() {
     }
   }
 
+  // Branch options — branches.code is the slug stored on technicians.branch_id.
   const branchRes = await admin
     .from("branches")
-    .select("id, code, name")
+    .select("code, name")
     .order("code", { ascending: true });
   const branches = ((branchRes.data ?? []) as Array<Record<string, unknown>>).map(
     (b) => ({
-      id: String(b.id),
       code: String(b.code ?? ""),
       name: String(b.name ?? b.code ?? ""),
     })
@@ -137,7 +132,6 @@ type PostBody = {
     targetMultiplier?: number | null;
     dailyCapacityItems?: number | null;
     note?: string | null;
-    skillTags?: string[];
   };
   skill?: {
     id?: string;
@@ -185,7 +179,7 @@ export async function POST(req: Request) {
       );
     }
     const row: Record<string, unknown> = {
-      display_name: name,
+      name,
       phone: t.phone?.trim() || null,
       branch_id: t.branchId || null,
       active: t.active !== false,
@@ -196,13 +190,9 @@ export async function POST(req: Request) {
       daily_capacity_items: t.dailyCapacityItems ?? null,
       note: t.note?.trim() || null,
     };
-    if (Array.isArray(t.skillTags)) row.skill_tags = t.skillTags;
 
     if (t.id) {
-      const res = await admin
-        .from("technician_profiles")
-        .update(row)
-        .eq("id", t.id);
+      const res = await admin.from("technicians").update(row).eq("id", t.id);
       if (res.error) {
         return NextResponse.json(
           { ok: false, error: res.error.message },
@@ -212,7 +202,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, id: t.id });
     }
     const res = await admin
-      .from("technician_profiles")
+      .from("technicians")
       .insert(row)
       .select("id")
       .single();

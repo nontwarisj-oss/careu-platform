@@ -106,11 +106,11 @@ export async function GET(req: Request) {
   const techById = new Map<string, string>();
   if (techIds.length > 0) {
     const tRes = await admin
-      .from("technician_profiles")
-      .select("id, display_name")
+      .from("technicians")
+      .select("id, name")
       .in("id", techIds);
     for (const t of (tRes.data ?? []) as Array<Record<string, unknown>>) {
-      techById.set(String(t.id), String(t.display_name ?? ""));
+      techById.set(String(t.id), String(t.name ?? ""));
     }
   }
 
@@ -152,12 +152,12 @@ export async function GET(req: Request) {
 
   // Active technicians — for the page's filter / technician selector.
   const allTechRes = await admin
-    .from("technician_profiles")
-    .select("id, display_name")
+    .from("technicians")
+    .select("id, name")
     .eq("active", true)
-    .order("display_name", { ascending: true });
+    .order("name", { ascending: true });
   const technicians = ((allTechRes.data ?? []) as Array<Record<string, unknown>>).map(
-    (t) => ({ id: String(t.id), displayName: String(t.display_name ?? "") })
+    (t) => ({ id: String(t.id), displayName: String(t.name ?? "") })
   );
 
   return NextResponse.json({
@@ -275,19 +275,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // Mirror onto orders.assigned_technician_id (keeps the legacy KPI view
-    // + the intake technician picker consistent). Best-effort.
-    const upd = await admin
-      .from("orders")
-      .update({ assigned_technician_id: technicianId })
-      .eq("id", orderId);
-    if (upd.error) {
-      console.warn(
-        "[assignments] orders.assigned_technician_id mirror failed",
-        upd.error.message
-      );
-    }
-
+    // work_assignments is the single source of truth for Phase J — the
+    // order's queue state is derived from it (no orders column written).
     return NextResponse.json({
       ok: true,
       assignmentId: (insertRes.data as { id: string }).id,
@@ -331,7 +320,7 @@ export async function POST(req: Request) {
       .from("work_assignments")
       .update(patch)
       .eq("id", assignmentId)
-      .select("order_id, status")
+      .select("id")
       .maybeSingle();
     if (res.error) {
       return NextResponse.json(
@@ -345,16 +334,8 @@ export async function POST(req: Request) {
         { status: 404 }
       );
     }
-
-    // A cancelled assignment frees the order for reassignment.
-    if (patch.status === "CANCELLED") {
-      const row = res.data as { order_id: string };
-      await admin
-        .from("orders")
-        .update({ assigned_technician_id: null })
-        .eq("id", row.order_id);
-    }
-
+    // A cancelled assignment frees the order automatically — the partial
+    // unique index only constrains rows with status <> 'CANCELLED'.
     return NextResponse.json({ ok: true });
   }
 

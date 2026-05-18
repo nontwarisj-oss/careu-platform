@@ -4,8 +4,8 @@
 //
 // TODO (technician auth mapping): there is no technician LINE login yet,
 // so this page is admin-accessible (RouteGuard page="admin") with a
-// technician picker. Once technician_profiles.user_id ↔ auth.uid() is
-// wired, drop the picker and scope to the signed-in technician.
+// technician picker. Once a technician → auth identity mapping is wired,
+// drop the picker and scope to the signed-in technician.
 
 import { useCallback, useEffect, useState } from "react";
 import { RouteGuard } from "@/components/RouteGuard";

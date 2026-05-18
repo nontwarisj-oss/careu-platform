@@ -1,7 +1,7 @@
 "use client";
 
-// Phase J — /admin/technicians. Manage technicians (reuses
-// technician_profiles) + their technician_skills. Owner / Admin only.
+// Phase J — /admin/technicians. Manage technicians (public.technicians)
+// and their technician_skills. Owner / Admin only.
 
 import { useCallback, useEffect, useState } from "react";
 import { RouteGuard } from "@/components/RouteGuard";
@@ -31,7 +31,7 @@ type Technician = {
   note: string | null;
   skills: Skill[];
 };
-type Branch = { id: string; code: string; name: string };
+type Branch = { code: string; name: string };
 
 type TechForm = {
   id?: string;
@@ -176,8 +176,8 @@ function TechniciansInner() {
     }
   };
 
-  const branchName = (id: string | null) =>
-    id ? branches.find((b) => b.id === id)?.name ?? id : "ทุกสาขา";
+  const branchName = (code: string | null) =>
+    code ? branches.find((b) => b.code === code)?.name ?? code : "ทุกสาขา";
 
   return (
     <div className="flex-1 min-h-screen bg-gradient-to-br from-green-50/50 via-white to-yellow-50/40 p-4 md:p-8 pt-20 md:pt-8">
@@ -272,7 +272,7 @@ function TechniciansInner() {
               >
                 <option value="">— ทุกสาขา —</option>
                 {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
+                  <option key={b.code} value={b.code}>
                     {b.name}
                   </option>
                 ))}

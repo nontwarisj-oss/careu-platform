@@ -4,8 +4,8 @@
 // pass the service-role admin client). No pricing/queue logic lives in a
 // React component — pages call the routes, routes call these functions.
 //
-// Reuses the existing public.technician_profiles as the technician table
-// and adds the Phase J tables technician_skills + work_assignments.
+// Backed by the Phase J tables: public.technicians, technician_skills, and
+// work_assignments (migration 20260560 — self-contained).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -98,15 +98,12 @@ export type TechnicianSkill = {
 export type TechnicianForRec = {
   id: string;
   displayName: string;
-  branchId: string | null; // technician_profiles.branch_id (uuid)
-  branchCode: string | null; // resolved branches.code (slug)
+  /** Branch code slug — matches orders.branch_id directly. */
+  branchId: string | null;
   active: boolean;
   dailyWage: number | null;
-  monthlySalary: number | null;
   targetMultiplier: number;
-  productivityTarget: number | null;
   dailyCapacityItems: number | null;
-  skillTags: string[];
   skills: TechnicianSkill[];
   assignedValueToday: number;
   assignedCountToday: number;
@@ -140,15 +137,11 @@ export function isPaidStatus(paymentStatus: string | null | undefined): boolean 
   return (paymentStatus ?? "").trim().toLowerCase() === "paid";
 }
 
-/** Effective daily production target (Baht). */
+/** Effective daily production target (Baht) — daily_wage × target_multiplier. */
 export function effectiveDailyTarget(tech: {
   dailyWage: number | null;
   targetMultiplier: number;
-  productivityTarget: number | null;
 }): number {
-  if (tech.productivityTarget != null && tech.productivityTarget > 0) {
-    return Number(tech.productivityTarget);
-  }
   if (tech.dailyWage != null && tech.dailyWage > 0) {
     return Number(tech.dailyWage) * Number(tech.targetMultiplier || 3);
   }
@@ -345,14 +338,6 @@ export function recommendTechniciansForOrder(
       } else if (catSkill) {
         score += 35;
         reasons.push(`ตรงหมวด (${order.serviceCategory})`);
-      } else if (
-        tech.skillTags.length > 0 &&
-        (tech.skillTags.includes("general") ||
-          (order.serviceCategory != null &&
-            tech.skillTags.includes(order.serviceCategory)))
-      ) {
-        score += 12;
-        reasons.push("ทักษะทั่วไปรองรับได้");
       } else {
         reasons.push("ไม่พบทักษะที่ตรง");
       }
@@ -372,12 +357,8 @@ export function recommendTechniciansForOrder(
         }
       }
 
-      // --- Same branch ---
-      if (
-        order.branchId &&
-        tech.branchCode &&
-        order.branchId === tech.branchCode
-      ) {
+      // --- Same branch (both are branch code slugs) ---
+      if (order.branchId && tech.branchId && order.branchId === tech.branchId) {
         score += 10;
         reasons.push("สาขาเดียวกัน");
       }
@@ -436,14 +417,13 @@ export async function calculateTechnicianDailyKpi(
   date: string
 ): Promise<TechnicianDailyKpi> {
   const techRes = await admin
-    .from("technician_profiles")
-    .select("daily_wage, target_multiplier, productivity_target")
+    .from("technicians")
+    .select("daily_wage, target_multiplier")
     .eq("id", technicianId)
     .maybeSingle();
   const tp = (techRes.data ?? {}) as {
     daily_wage?: number | string | null;
     target_multiplier?: number | string | null;
-    productivity_target?: number | string | null;
   };
   const dailyWage = tp.daily_wage != null ? num(tp.daily_wage) : 0;
   const targetMultiplier =
@@ -451,8 +431,6 @@ export async function calculateTechnicianDailyKpi(
   const targetWorkValue = effectiveDailyTarget({
     dailyWage: dailyWage || null,
     targetMultiplier,
-    productivityTarget:
-      tp.productivity_target != null ? num(tp.productivity_target) : null,
   });
 
   // Assignments for the technician on that date (cancelled excluded).
