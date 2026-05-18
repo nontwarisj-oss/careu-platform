@@ -115,21 +115,59 @@ export default function OrdersBoardPage() {
   const today = bangkokToday();
 
   const fetchBoard = useCallback(async () => {
-    const ordersRes = await supabase
-      .from("orders")
-      .select(
-        "id, customer_id, customer_name, item_name, job_id, status, payment_status, price, urgent, due_date, branch_id, business_type, created_at"
-      )
-      .order("created_at", { ascending: false })
-      .limit(500);
-    if (ordersRes.error) {
-      setErrorMessage(ordersRes.error.message);
+    // Resilient select — production `orders` may lack columns this
+    // board references (business_type was never added; payment_status
+    // predates migration 20260557). Try the widest set, then narrow on
+    // a column-missing error so the board — and the saved job_id —
+    // always render instead of failing the whole query.
+    const SELECT_TIERS = [
+      "id, customer_id, customer_name, item_name, job_id, status, payment_status, price, urgent, due_date, branch_id, created_at",
+      "id, customer_id, customer_name, item_name, job_id, status, price, urgent, due_date, branch_id, created_at",
+      "id, customer_id, customer_name, item_name, job_id, status, price, branch_id, created_at",
+      "id, customer_id, customer_name, item_name, job_id, status, price, created_at",
+      "id, customer_id, customer_name, item_name, status, price, created_at",
+    ];
+    let rawRows: Array<Record<string, unknown>> | null = null;
+    let lastError: string | null = null;
+    for (const cols of SELECT_TIERS) {
+      const res = await supabase
+        .from("orders")
+        .select(cols)
+        .order("created_at", { ascending: false })
+        .limit(500);
+      if (!res.error) {
+        rawRows = (res.data ?? []) as unknown as Array<
+          Record<string, unknown>
+        >;
+        break;
+      }
+      lastError = res.error.message;
+    }
+    if (!rawRows) {
+      setErrorMessage(lastError ?? "โหลดรายการใบงานไม่สำเร็จ");
       setOrders([]);
       return;
     }
-    const rows = (ordersRes.data ?? []) as Array<
+    // Normalize to a full BoardOrder shape — a narrower tier simply
+    // yields null/default for the columns it could not select. job_id
+    // is read straight from orders.job_id.
+    const rows: Array<
       Omit<BoardOrder, "phone" | "itemCount" | "technicianIds">
-    >;
+    > = rawRows.map((r) => ({
+      id: String(r.id),
+      customer_id: (r.customer_id as string | null) ?? null,
+      customer_name: (r.customer_name as string | null) ?? "",
+      item_name: (r.item_name as string | null) ?? "",
+      job_id: (r.job_id as string | null) ?? null,
+      status: (r.status as string | null) ?? "pending",
+      payment_status: (r.payment_status as string | null) ?? "unpaid",
+      price: Number(r.price ?? 0),
+      urgent: Boolean(r.urgent),
+      due_date: (r.due_date as string | null) ?? null,
+      branch_id: (r.branch_id as string | null) ?? null,
+      business_type: (r.business_type as string | null) ?? null,
+      created_at: (r.created_at as string | null) ?? new Date().toISOString(),
+    }));
     const orderIds = rows.map((r) => r.id);
 
     // Customer phones — only the customers referenced by these orders.
