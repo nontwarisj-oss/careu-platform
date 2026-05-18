@@ -13,6 +13,7 @@ import {
 
 type InvoiceRow = {
   id: string;
+  job_id: string | null;
   customer_name: string;
   item_name: string;
   price: number;
@@ -96,7 +97,7 @@ export default function InvoicesPage() {
       // Try the smart-order column set first; if any column is missing
       // (migration not yet applied), retry with the legacy projection.
       const wideCols =
-        "id, customer_name, item_name, price, status, created_at, subtotal, discount, urgent, urgent_fee, quantity, service_category, service_code, service_name, promotion_code, template_text";
+        "id, job_id, customer_name, item_name, price, status, created_at, subtotal, discount, urgent, urgent_fee, quantity, service_category, service_code, service_name, promotion_code, template_text";
       let rows: Array<Record<string, unknown>> | null = null;
       const wide = await supabase
         .from("orders")
@@ -107,7 +108,7 @@ export default function InvoicesPage() {
       } else {
         const narrow = await supabase
           .from("orders")
-          .select("id, customer_name, item_name, price, status, created_at")
+          .select("id, job_id, customer_name, item_name, price, status, created_at")
           .order("created_at", { ascending: false });
         if (narrow.error) {
           setErrorMessage(narrow.error.message);
@@ -121,6 +122,10 @@ export default function InvoicesPage() {
       setInvoices(
         rows.map((row) => ({
           id: String(row.id),
+          job_id:
+            row.job_id !== null && row.job_id !== undefined
+              ? String(row.job_id)
+              : null,
           customer_name: (row.customer_name as string) ?? "",
           item_name: (row.item_name as string) ?? "",
           price: Number(row.price ?? 0),
@@ -206,10 +211,13 @@ export default function InvoicesPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-[10px] uppercase tracking-widest opacity-90">
-                    Receipt
+                    Job ID
                   </div>
-                  <div className="font-mono text-sm">
-                    #{inv.id.slice(0, 8).toUpperCase()}
+                  <div className="font-mono text-sm font-bold leading-tight">
+                    {inv.job_id ? inv.job_id : "ยังไม่มีรหัสงาน"}
+                  </div>
+                  <div className="font-mono text-[11px] text-white/75 mt-0.5">
+                    เลขระบบ: #{inv.id.slice(0, 8).toUpperCase()}
                   </div>
                 </div>
               </div>
@@ -291,7 +299,7 @@ export default function InvoicesPage() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-500">ค่างานด่วน</span>
+                  <span className="text-gray-500">คิวงานด่วน</span>
                   <span className="text-gray-800">
                     {formatCurrency(getUrgentFee(inv))}
                   </span>
