@@ -54,6 +54,18 @@ const CARDS: AdminCard[] = [
     enabled: true,
   },
   {
+    href: "/admin/intake-drafts",
+    titleTh: "คิวงาน Mobile Intake",
+    titleEn: "Mobile intake queue",
+    descTh:
+      "งานที่หน้าร้านถ่ายรูปส่งเข้ามาทางมือถือ — ตรวจ อนุมัติ แล้วเปิดสร้างใบงานจริง",
+    descEn:
+      "Drafts captured from the mobile staff flow — review, approve, then build the real order.",
+    iconPath:
+      "M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z",
+    enabled: true,
+  },
+  {
     href: "/admin/recovery",
     titleTh: "ระบบกู้คืน Sync / LINE",
     titleEn: "Recovery & retries",
