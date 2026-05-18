@@ -12,7 +12,7 @@
 // service-role insert). Legacy single-item orders are unaffected —
 // this only changes how NEW orders are captured.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
 import { formatCurrency } from "@/lib/utils";
 import { useBranch } from "@/lib/branchContext";
@@ -66,6 +66,21 @@ export type IntakeCreatedSummary = {
   itemCount: number;
   total: number;
   customerName: string;
+};
+
+/**
+ * Optional prefill — supplied when /intake is opened from a mobile intake
+ * draft (`/intake?draftId=…`). Every field is optional; when the whole
+ * object is absent the form behaves exactly as the manual flow always has.
+ */
+export type IntakePrefill = {
+  customerName?: string | null;
+  customerPhone?: string | null;
+  orderNote?: string | null;
+  urgent?: boolean;
+  branchId?: string | null;
+  /** Storage paths of draft photos, carried onto the first repair item. */
+  imagePaths?: string[];
 };
 
 /** One garment/item being captured (pre-persistence form state). */
@@ -139,21 +154,35 @@ function draftLineTotal(draft: DraftItem): number {
 
 export function IntakeOrderForm({
   onCreated,
+  prefill,
 }: {
   onCreated?: (summary: IntakeCreatedSummary) => void;
+  /** Draft prefill — present only when opened from a mobile intake draft. */
+  prefill?: IntakePrefill;
 }) {
   const { branch, setBranchId } = useBranch();
   const { user } = useAuth();
   const { role } = useRole();
   const canOverrideBranch = canChooseAnotherBranch(role);
+  // Guards the one-shot branch prefill so it cannot loop on context updates.
+  const branchPrefillApplied = useRef(false);
 
   // ---- Customer ----------------------------------------------------------
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerId, setCustomerId] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
-  const [isCreatingNewCustomer, setIsCreatingNewCustomer] = useState(false);
-  const [newCustomerName, setNewCustomerName] = useState("");
-  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  // A draft carries a loose name/phone (no customer row yet), so prefill
+  // drops the form into "new customer" mode — the save path already
+  // dedupes by phone, so an existing customer still resolves correctly.
+  const [isCreatingNewCustomer, setIsCreatingNewCustomer] = useState(
+    Boolean(prefill?.customerName || prefill?.customerPhone)
+  );
+  const [newCustomerName, setNewCustomerName] = useState(
+    prefill?.customerName ?? ""
+  );
+  const [newCustomerPhone, setNewCustomerPhone] = useState(
+    prefill?.customerPhone ?? ""
+  );
   const [customerType, setCustomerType] = useState("general");
 
   // ---- Business type + job id -------------------------------------------
@@ -207,8 +236,15 @@ export function IntakeOrderForm({
   }, [careUJobId, businessType, branch.id]);
 
   // ---- Items -------------------------------------------------------------
-  const [items, setItems] = useState<DraftItem[]>([makeEmptyItem()]);
-  const [orderNote, setOrderNote] = useState("");
+  // The first item inherits the draft's urgent flag + captured photos.
+  const [items, setItems] = useState<DraftItem[]>(() => [
+    {
+      ...makeEmptyItem(),
+      urgent: prefill?.urgent ?? false,
+      imagePaths: prefill?.imagePaths ?? [],
+    },
+  ]);
+  const [orderNote, setOrderNote] = useState(prefill?.orderNote ?? "");
   const [discountInput, setDiscountInput] = useState("");
 
   // ---- Catalog + technicians --------------------------------------------
@@ -258,6 +294,19 @@ export function IntakeOrderForm({
       cancelled = true;
     };
   }, []);
+
+  // One-shot branch prefill from a draft. Only switches when the role may
+  // choose another branch and the draft branch is a real, known branch —
+  // i.e. it never does anything the user couldn't do via the selector.
+  useEffect(() => {
+    if (branchPrefillApplied.current) return;
+    branchPrefillApplied.current = true;
+    const target = prefill?.branchId;
+    if (!target || !canOverrideBranch) return;
+    if (branch.id === target) return;
+    if (!ALL_BRANCHES.some((b) => b.id === target)) return;
+    setBranchId(target);
+  }, [prefill, canOverrideBranch, branch.id, setBranchId]);
 
   useEffect(() => {
     let cancelled = false;

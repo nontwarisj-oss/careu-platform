@@ -344,9 +344,9 @@ function DraftCard({
         />
       </div>
 
-      {/* Prepare order — opens the existing /intake flow */}
+      {/* Prepare order — opens /intake with this draft prefilled */}
       <a
-        href="/intake"
+        href={`/intake?draftId=${encodeURIComponent(draft.id)}`}
         target="_blank"
         rel="noreferrer"
         className="mt-2 block rounded-lg bg-green-700 px-3 py-2 text-center text-sm font-bold text-white hover:bg-green-800"
@@ -354,8 +354,8 @@ function DraftCard({
         เปิด /intake เพื่อสร้างใบงานจริง →
       </a>
       <p className="mt-1 text-[11px] text-gray-400">
-        คัดลอกชื่อ/เบอร์/โน้ตจากด้านบนไปกรอกใน /intake แล้วกลับมากด
-        “สร้างใบงานแล้ว”
+        /intake จะกรอกชื่อ/เบอร์/โน้ต/รูป จาก Draft ให้อัตโนมัติ — กรอก Job ID
+        + บริการ/ราคา แล้วบันทึก ระบบจะทำเครื่องหมาย “สร้างใบงานแล้ว” ให้เอง
       </p>
     </div>
   );

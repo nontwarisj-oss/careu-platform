@@ -26,7 +26,7 @@ export const maxDuration = 60;
 
 const REVIEW_ROLES = ["owner", "hq_admin", "branch_manager"];
 
-export async function GET() {
+export async function GET(req: Request) {
   const user = await getCurrentUser();
   if (user && !REVIEW_ROLES.includes(user.role)) {
     return NextResponse.json(
@@ -34,6 +34,9 @@ export async function GET() {
       { status: 403 }
     );
   }
+
+  // Optional ?draftId=<uuid> — fetch a single draft (used by /intake prefill).
+  const draftIdParam = new URL(req.url).searchParams.get("draftId");
 
   const admin = getSupabaseAdmin();
   if (!admin) {
@@ -50,6 +53,9 @@ export async function GET() {
     .select("*")
     .order("created_at", { ascending: false })
     .limit(200);
+  if (draftIdParam) {
+    query = query.eq("id", draftIdParam);
+  }
   if (user && !canViewAllBranches(user.role) && user.branchId) {
     query = query.eq("branch_id", user.branchId);
   }
