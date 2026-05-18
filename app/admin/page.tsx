@@ -42,6 +42,18 @@ const CARDS: AdminCard[] = [
     enabled: true,
   },
   {
+    href: "/admin/pricing-master",
+    titleTh: "Pricing Master (เฟส 2)",
+    titleEn: "Pricing Master",
+    descTh:
+      "แคตตาล็อกราคาบริการ — แก้ที่ Google Sheet แล้วซิงค์เข้าระบบ · AUTO / GUIDED / MANUAL — Owner / CEO",
+    descEn:
+      "Service price catalog — edit in Google Sheet, sync into the system. AUTO / GUIDED / MANUAL quote modes.",
+    iconPath:
+      "M3 3h18v4H3V3zm0 6h18v4H3V9zm0 6h12v4H3v-4zm14 0h4v4h-4v-4z",
+    enabled: true,
+  },
+  {
     href: "/admin/recovery",
     titleTh: "ระบบกู้คืน Sync / LINE",
     titleEn: "Recovery & retries",

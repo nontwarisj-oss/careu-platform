@@ -307,6 +307,40 @@ function columnIndexToLetter(index: number): string {
   return result;
 }
 
+// ---------- read helpers -------------------------------------------------
+
+/**
+ * Read an entire tab as a row matrix (`string[][]`), row 0 being the header.
+ * Uses the service-account credentials — so the workbook does NOT need to be
+ * shared publicly. Reuses the same auth as the write helpers.
+ *
+ * Range is A:AZ (52 columns) — comfortably wider than any tab the platform
+ * syncs, and the caller maps columns by header name, not position.
+ */
+export async function readSheetTab(tabName: string): Promise<string[][]> {
+  const config = readGoogleSheetsConfig();
+  if (!config) {
+    throw new Error(
+      "Google Sheets sync ยังไม่ตั้งค่า — เพิ่ม GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY / GOOGLE_SHEET_ID ใน environment"
+    );
+  }
+  const token = await getAccessToken(config);
+  const range = `${tabName}!A:AZ`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${
+    config.sheetId
+  }/values/${encodeURIComponent(range)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Sheets values.get ${res.status}: ${body}`);
+  }
+  const json = (await res.json()) as { values?: string[][] };
+  return json.values ?? [];
+}
+
 // ---------- write helpers ------------------------------------------------
 
 export type SheetCellValue = string | number | boolean | null;

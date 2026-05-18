@@ -47,6 +47,14 @@ import { useRole } from "@/lib/roleContext";
 import { canChooseAnotherBranch } from "@/lib/permissions";
 import { branches as ALL_BRANCHES } from "@/lib/brandConfig";
 import { OrderItemImages } from "@/components/OrderItemImages";
+import {
+  ServicePriceQuickPick,
+  type ServicePriceApply,
+} from "@/components/ServicePriceQuickPick";
+import {
+  getActiveServicePrices,
+  type ServicePrice,
+} from "@/lib/servicePriceMaster";
 
 type Customer = { id: string; name: string; phone: string };
 
@@ -205,6 +213,9 @@ export function IntakeOrderForm({
 
   // ---- Catalog + technicians --------------------------------------------
   const [catalog, setCatalog] = useState<ServiceItem[]>([]);
+  // Pricing Master (Phase 2) catalog — drives the OPTIONAL service picker.
+  // Independent of `catalog`; never required to save an order.
+  const [priceMaster, setPriceMaster] = useState<ServicePrice[]>([]);
   const [technicians, setTechnicians] = useState<TechnicianProfile[]>([]);
 
   // ---- UI ----------------------------------------------------------------
@@ -234,6 +245,19 @@ export function IntakeOrderForm({
       cancelled = true;
     };
   }, [branch.id]);
+
+  // Pricing Master active catalog — best-effort. A failure leaves the
+  // picker hidden; manual item entry is unaffected.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await getActiveServicePrices();
+      if (!cancelled) setPriceMaster(res.services);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -860,6 +884,7 @@ export function IntakeOrderForm({
               index={idx}
               item={it}
               catalog={catalog}
+              priceMaster={priceMaster}
               technicians={technicians}
               branchCode={branch.branchCode}
               canRemove={items.length > 1}
@@ -954,6 +979,7 @@ function ItemCard({
   index,
   item,
   catalog,
+  priceMaster,
   technicians,
   branchCode,
   canRemove,
@@ -964,6 +990,7 @@ function ItemCard({
   index: number;
   item: DraftItem;
   catalog: ServiceItem[];
+  priceMaster: ServicePrice[];
   technicians: TechnicianProfile[];
   branchCode: string;
   canRemove: boolean;
@@ -983,6 +1010,18 @@ function ItemCard({
       detail: svc?.templateTh ?? item.detail,
       unitPrice:
         svc && svc.basePrice !== null ? String(svc.basePrice) : item.unitPrice,
+    });
+  };
+
+  // Picking a Pricing Master service maps onto the EXISTING draft fields
+  // (custom-name path) — the intake save path stays exactly as before.
+  const applyPriceMaster = (patch: ServicePriceApply) => {
+    onPatch({
+      serviceCode: OTHER_CODE,
+      customName: patch.serviceName,
+      unitPrice: patch.unitPrice,
+      urgentFee: patch.urgentFee,
+      detail: patch.detail ?? item.detail,
     });
   };
 
@@ -1007,6 +1046,14 @@ function ItemCard({
           )}
         </div>
       </div>
+
+      {/* Optional Pricing Master picker — staff may ignore it and fill the
+          fields below by hand exactly as before. */}
+      <ServicePriceQuickPick
+        services={priceMaster}
+        urgent={item.urgent}
+        onApply={applyPriceMaster}
+      />
 
       <div className="grid gap-2 sm:grid-cols-2">
         <select
