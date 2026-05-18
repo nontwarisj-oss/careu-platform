@@ -40,6 +40,8 @@ export type CustomerLite = {
   normalizedPhone?: string | null;
   /** Optional precomputed normalized name (customers.normalized_name). */
   normalizedName?: string | null;
+  /** Optional branch slug — lets the matcher break ties to the same branch. */
+  branchId?: string | null;
 };
 
 export type OrderLite = {
@@ -82,10 +84,160 @@ function emptyStats(): CustomerStats {
 }
 
 /** Collapse to lowercased letters/digits only — strips spaces, punctuation, honorifics' spacing. */
-function simpleName(value: string | null | undefined): string {
+export function simpleName(value: string | null | undefined): string {
   return (value ?? "")
     .toLowerCase()
     .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+// ---------- Reusable order → customer matching -----------------------------
+//
+// Extracted so the CRM "rebuild links" repair route can persist the SAME
+// match decision back to orders.customer_id that the display aggregator
+// already uses. One matcher → the database stores exactly what the UI shows.
+
+/** Match tiers, strongest signal first. */
+export type OrderMatchTier =
+  | "id"
+  | "order_phone"
+  | "embedded_phone"
+  | "name"
+  | "simple_name";
+
+/** O(1) lookup indexes covering every match dimension. */
+export type CustomerMatchIndex = {
+  byId: Map<string, CustomerLite>;
+  byPhone: Map<string, CustomerLite[]>;
+  byNameLower: Map<string, CustomerLite[]>;
+  bySimpleName: Map<string, CustomerLite[]>;
+};
+
+/** Minimal order shape the matcher needs. */
+export type OrderMatchInput = {
+  customer_id: string | null;
+  customer_name: string | null;
+  /** Optional dedicated phone column, when the order row carries one. */
+  customer_phone?: string | null;
+  /** Branch slug — used to break ties toward a same-branch customer. */
+  branch_id?: string | null;
+};
+
+export type OrderMatchResult = {
+  customer: CustomerLite | null;
+  tier: OrderMatchTier | null;
+};
+
+function pushCandidate(
+  map: Map<string, CustomerLite[]>,
+  key: string,
+  customer: CustomerLite
+): void {
+  const list = map.get(key);
+  if (list) {
+    if (!list.some((c) => c.id === customer.id)) list.push(customer);
+  } else {
+    map.set(key, [customer]);
+  }
+}
+
+/**
+ * Build the four lookup indexes once for a customer set. Reused by both
+ * `aggregateOrdersToCustomers` (display) and the rebuild-links route (DB
+ * repair) so a match never differs between what is shown and what is
+ * persisted.
+ */
+export function buildCustomerMatchIndex(
+  customers: CustomerLite[]
+): CustomerMatchIndex {
+  const byId = new Map<string, CustomerLite>();
+  const byPhone = new Map<string, CustomerLite[]>();
+  const byNameLower = new Map<string, CustomerLite[]>();
+  const bySimpleName = new Map<string, CustomerLite[]>();
+
+  for (const c of customers) {
+    byId.set(c.id, c);
+    const phone =
+      (c.normalizedPhone && c.normalizedPhone.trim()) ||
+      normalizePhone(c.phone);
+    if (phone) pushCandidate(byPhone, phone, c);
+    const nameLower = (c.name ?? "").trim().toLowerCase();
+    if (nameLower) pushCandidate(byNameLower, nameLower, c);
+    const compact = simpleName(c.normalizedName || c.name);
+    if (compact) pushCandidate(bySimpleName, compact, c);
+  }
+  return { byId, byPhone, byNameLower, bySimpleName };
+}
+
+/** Pick the best candidate from a key bucket, preferring a same-branch row. */
+function pickCandidate(
+  candidates: CustomerLite[] | undefined,
+  branchId: string | null | undefined
+): CustomerLite | undefined {
+  if (!candidates || candidates.length === 0) return undefined;
+  if (candidates.length === 1) return candidates[0];
+  if (branchId) {
+    const sameBranch = candidates.find((c) => c.branchId === branchId);
+    if (sameBranch) return sameBranch;
+  }
+  return candidates[0];
+}
+
+/**
+ * Resolve a single order to its customer using the match ladder:
+ *   1. customer_id FK            2. dedicated phone column
+ *   3. phone digits in the name  4. exact lowercased name
+ *   5. simple-name (whitespace + punctuation stripped)
+ * The first tier that hits wins; when several customers share a key, a
+ * same-branch candidate is preferred.
+ */
+export function matchOrderToCustomer(
+  index: CustomerMatchIndex,
+  order: OrderMatchInput
+): OrderMatchResult {
+  // 1. The real FK — strongest signal.
+  if (order.customer_id) {
+    const hit = index.byId.get(order.customer_id);
+    if (hit) return { customer: hit, tier: "id" };
+  }
+  // 2. Dedicated phone column on the order, when present.
+  if (order.customer_phone) {
+    const phone = normalizePhone(order.customer_phone);
+    if (phone.length >= 9) {
+      const hit = pickCandidate(index.byPhone.get(phone), order.branch_id);
+      if (hit) return { customer: hit, tier: "order_phone" };
+    }
+  }
+  // 3. Phone digits embedded in the name cell (legacy sheet rows).
+  if (order.customer_name) {
+    const embedded = normalizePhone(order.customer_name);
+    if (embedded.length >= 9) {
+      const hit = pickCandidate(index.byPhone.get(embedded), order.branch_id);
+      if (hit) return { customer: hit, tier: "embedded_phone" };
+    }
+  }
+  // 4. Exact lowercased name.
+  if (order.customer_name) {
+    const nameLower = order.customer_name.trim().toLowerCase();
+    if (nameLower) {
+      const hit = pickCandidate(
+        index.byNameLower.get(nameLower),
+        order.branch_id
+      );
+      if (hit) return { customer: hit, tier: "name" };
+    }
+  }
+  // 5. Simple-name fallback (whitespace + punctuation stripped).
+  if (order.customer_name) {
+    const compact = simpleName(order.customer_name);
+    if (compact) {
+      const hit = pickCandidate(
+        index.bySimpleName.get(compact),
+        order.branch_id
+      );
+      if (hit) return { customer: hit, tier: "simple_name" };
+    }
+  }
+  return { customer: null, tier: null };
 }
 
 /**
@@ -113,22 +265,7 @@ export function aggregateOrdersToCustomers(
     )
   );
 
-  const byId = new Map<string, CustomerLite>();
-  const byPhone = new Map<string, CustomerLite>();
-  const byNameLower = new Map<string, CustomerLite>();
-  const bySimpleName = new Map<string, CustomerLite>();
-
-  for (const c of customers) {
-    byId.set(c.id, c);
-    const phone =
-      (c.normalizedPhone && c.normalizedPhone.trim()) ||
-      normalizePhone(c.phone);
-    if (phone && !byPhone.has(phone)) byPhone.set(phone, c);
-    const nameLower = (c.name ?? "").trim().toLowerCase();
-    if (nameLower && !byNameLower.has(nameLower)) byNameLower.set(nameLower, c);
-    const compact = simpleName(c.normalizedName || c.name);
-    if (compact && !bySimpleName.has(compact)) bySimpleName.set(compact, c);
-  }
+  const index = buildCustomerMatchIndex(customers);
 
   const stats: Record<string, CustomerStats> = {};
   const branchTally: Record<string, Map<string, number>> = {};
@@ -142,29 +279,12 @@ export function aggregateOrdersToCustomers(
       continue;
     }
 
-    let target: CustomerLite | undefined;
-
-    // 1. The real FK.
-    if (order.customer_id) {
-      target = byId.get(order.customer_id);
-    }
-    // 2. Phone digits embedded in the name cell (legacy sheet rows).
-    if (!target && order.customer_name) {
-      const embeddedPhone = normalizePhone(order.customer_name);
-      if (embeddedPhone.length >= 9) {
-        target = byPhone.get(embeddedPhone);
-      }
-    }
-    // 3. Exact lowercased name.
-    if (!target && order.customer_name) {
-      const nameLower = order.customer_name.trim().toLowerCase();
-      if (nameLower) target = byNameLower.get(nameLower);
-    }
-    // 4. Simple-name fallback (whitespace + punctuation stripped).
-    if (!target && order.customer_name) {
-      const compact = simpleName(order.customer_name);
-      if (compact) target = bySimpleName.get(compact);
-    }
+    // Resolve via the shared match ladder (id → phone → name → simple-name).
+    const { customer: target } = matchOrderToCustomer(index, {
+      customer_id: order.customer_id,
+      customer_name: order.customer_name,
+      branch_id: order.branch_id ?? null,
+    });
     if (!target) {
       unmatchedOrders += 1;
       continue;

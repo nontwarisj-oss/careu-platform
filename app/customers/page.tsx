@@ -118,6 +118,8 @@ export default function CustomersPage() {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [isRebuilding, setIsRebuilding] = useState(false);
+  const [rebuildMessage, setRebuildMessage] = useState<string | null>(null);
   const [statsByCustomer, setStatsByCustomer] = useState<
     Record<string, CustomerStats>
   >({});
@@ -427,6 +429,52 @@ export default function CustomersPage() {
     setIsSyncing(false);
   };
 
+  // Repair pass: re-link orphan orders to their customer (id → phone →
+  // name ladder) and recompute visit/spend totals server-side. Fixes the
+  // "imported customers show 0 visits / ฿0" symptom — customer sync only
+  // touches the customers table, never the orders that feed CRM stats.
+  const handleRebuildLinks = async () => {
+    setIsRebuilding(true);
+    setRebuildMessage(null);
+    try {
+      const res = await fetch("/api/customers/rebuild-links", {
+        method: "POST",
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        total_orders?: number;
+        linked_orders?: number;
+        unmatched_orders?: number;
+        customers_updated?: number;
+      };
+      if (!res.ok || json.error || !json.ok) {
+        setRebuildMessage(
+          language === "th"
+            ? `สร้างข้อมูล CRM ใหม่ไม่สำเร็จ: ${json.error ?? `HTTP ${res.status}`}`
+            : `CRM rebuild failed: ${json.error ?? `HTTP ${res.status}`}`
+        );
+      } else {
+        const linked = json.linked_orders ?? 0;
+        const unmatched = json.unmatched_orders ?? 0;
+        const updated = json.customers_updated ?? 0;
+        setRebuildMessage(
+          language === "th"
+            ? `สร้างข้อมูล CRM ใหม่แล้ว — เชื่อม ${linked} ใบงาน, ยังจับคู่ไม่ได้ ${unmatched} ใบงาน, อัปเดตลูกค้า ${updated} ราย`
+            : `CRM rebuilt: linked ${linked} orders, unmatched ${unmatched} orders, updated ${updated} customers`
+        );
+        // Refreshes the customer list, which re-runs the stats aggregation
+        // effect so visits + spend reflect the freshly repaired links.
+        await fetchCustomers();
+      }
+    } catch (err) {
+      setRebuildMessage(
+        err instanceof Error ? err.message : "Rebuild failed"
+      );
+    }
+    setIsRebuilding(false);
+  };
+
   const handleRefreshTiers = async () => {
     if (!canRefreshTiers) return;
     setIsRefreshingTiers(true);
@@ -639,6 +687,24 @@ export default function CustomersPage() {
               ? "ซิงค์จาก Google Sheet"
               : "Sync from Google Sheet"}
           </button>
+          <button
+            onClick={() => void handleRebuildLinks()}
+            disabled={isSubmitting || isSyncing || isRebuilding}
+            className="border border-indigo-500 text-indigo-700 hover:bg-indigo-50 px-5 py-2 rounded-lg transition font-medium disabled:opacity-50"
+            title={
+              language === "th"
+                ? "จับคู่ใบงานกับลูกค้าใหม่ แล้วคำนวณยอด CRM (ครั้ง/ยอดใช้จ่าย) ใหม่"
+                : "Re-link orders to customers and recompute CRM visit/spend totals"
+            }
+          >
+            {isRebuilding
+              ? language === "th"
+                ? "กำลังสร้าง CRM..."
+                : "Rebuilding CRM..."
+              : language === "th"
+              ? "สร้าง CRM ใหม่"
+              : "Rebuild CRM"}
+          </button>
           {canRefreshTiers && (
             <button
               onClick={() => void handleRefreshTiers()}
@@ -757,6 +823,19 @@ export default function CustomersPage() {
             type="button"
             onClick={() => setTierMessage(null)}
             className="text-blue-700 hover:text-blue-900 -mt-0.5"
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {rebuildMessage && (
+        <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 flex items-start justify-between gap-3">
+          <span className="whitespace-pre-line leading-relaxed">{rebuildMessage}</span>
+          <button
+            type="button"
+            onClick={() => setRebuildMessage(null)}
+            className="text-indigo-700 hover:text-indigo-900 -mt-0.5"
             aria-label="dismiss"
           >
             ✕
