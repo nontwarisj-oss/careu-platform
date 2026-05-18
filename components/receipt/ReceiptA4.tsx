@@ -14,7 +14,7 @@ import { formatReceiptCurrency, type ReceiptData } from "@/lib/receiptData";
 import {
   JobStatusBadge,
   PaymentStatusBadge,
-  QrPlaceholder,
+  ReceiptNotesAndPayment,
 } from "@/components/receipt/ReceiptCommon";
 
 type Props = {
@@ -198,56 +198,30 @@ export function ReceiptA4({ receipt, rootId = "careu-receipt-card" }: Props) {
         </div>
       </section>
 
-      {/* Payment */}
+      {/* Payment status */}
       <section className="px-6 mt-4">
-        <div className="rounded-xl border border-yellow-200 bg-yellow-50/40 p-4">
-          <p className="text-[10px] uppercase tracking-widest text-yellow-700 font-semibold mb-3">
-            ช่องชำระเงิน
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="rounded-lg border border-yellow-300 bg-white p-3 flex items-center gap-3">
-              <QrPlaceholder size={96} />
-              <div className="text-xs text-gray-600">
-                <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
-                <p>สแกนเพื่อชำระ — รูป QR จะอัปโหลดต่อสาขาในเฟสถัดไป</p>
-              </div>
-            </div>
-            <div className="rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700">
-              <p className="font-medium text-gray-800">โอนผ่านบัญชีธนาคาร</p>
-              <p className="mt-1 text-gray-500">
-                เลขที่บัญชี:{" "}
-                <span className="text-gray-700">
-                  {payment.accountNumber ?? "ระบุภายหลัง"}
-                </span>
-              </p>
-              <p className="text-gray-500">
-                ชื่อบัญชี:{" "}
-                <span className="text-gray-700">{payment.accountName}</span>
-              </p>
-              <p className="text-gray-500">
-                สาขา: <span className="text-gray-700">{branch.shortLabel}</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                สถานะการชำระ
-              </p>
-              <PaymentStatusBadge
-                status={payment.status}
-                label={payment.statusLabel}
-              />
-            </div>
-            <p className="text-sm text-gray-700">
-              ยอดที่ต้องชำระ:{" "}
-              <span className="font-bold text-green-700">
-                {formatReceiptCurrency(payment.amountDue)}
-              </span>
+        <div className="rounded-xl border border-yellow-200 bg-yellow-50/40 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-gray-500">
+              สถานะการชำระ
             </p>
+            <PaymentStatusBadge
+              status={payment.status}
+              label={payment.statusLabel}
+            />
           </div>
+          <p className="text-sm text-gray-700">
+            ยอดที่ต้องชำระ:{" "}
+            <span className="font-bold text-green-700">
+              {formatReceiptCurrency(payment.amountDue)}
+            </span>
+          </p>
         </div>
+      </section>
+
+      {/* Quotation notes + shop contact + payment QR / bank */}
+      <section className="px-6 mt-4">
+        <ReceiptNotesAndPayment />
       </section>
 
       {/* Next steps */}

@@ -13,6 +13,11 @@
 
 import React from "react";
 import { formatReceiptCurrency, type ReceiptData } from "@/lib/receiptData";
+import {
+  QUOTATION_NOTES,
+  SHOP_BANK,
+  SHOP_CONTACT_PHONES,
+} from "@/components/receipt/ReceiptCommon";
 
 type Props = {
   receipt: ReceiptData;
@@ -76,6 +81,15 @@ export function ReceiptThermal({ receipt, rootId = "careu-receipt-card" }: Props
         {payment.amountDue > 0
           ? `${padPair("ยอดต้องชำระ", formatReceiptCurrency(payment.amountDue), 32)}\n`
           : ""}
+        {HR}
+        {`\nหมายเหตุ\n`}
+        {QUOTATION_NOTES.map((note, i) => `${i + 1}. ${note}\n`).join("")}
+        {`\nเบอร์โทรร้าน:\n${SHOP_CONTACT_PHONES}\n`}
+        {`\nชำระเงิน\n`}
+        {`ชื่อบัญชี: ${SHOP_BANK.accountName}\n`}
+        {`ธนาคาร: ${SHOP_BANK.bankName}\n`}
+        {`เลขที่บัญชี: ${SHOP_BANK.accountNumber}\n`}
+        {HR}
         {`\n${centerLine(branch.tagline || "ขอบคุณที่ใช้บริการ", 32)}\n`}
         {`${centerLine(`รับประกันซ่อม 7 วัน`, 32)}\n`}
       </pre>

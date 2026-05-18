@@ -9,7 +9,7 @@ import { formatReceiptCurrency, type ReceiptData } from "@/lib/receiptData";
 import {
   JobStatusBadge,
   PaymentStatusBadge,
-  QrPlaceholder,
+  ReceiptNotesAndPayment,
 } from "@/components/receipt/ReceiptCommon";
 
 type Props = {
@@ -155,22 +155,7 @@ export function ReceiptMobile({ receipt, rootId = "careu-receipt-card" }: Props)
       </section>
 
       <section className="px-4 py-3 border-b border-gray-100">
-        <div className="flex items-center gap-3">
-          <QrPlaceholder size={72} />
-          <div className="text-xs text-gray-600 space-y-1">
-            <p className="font-medium text-gray-700">ชำระผ่าน QR</p>
-            <p>
-              บัญชี: <span className="text-gray-800">{payment.accountName}</span>
-            </p>
-            <p>
-              เลขที่บัญชี:{" "}
-              <span className="text-gray-800">
-                {payment.accountNumber ?? "ระบุภายหลัง"}
-              </span>
-            </p>
-          </div>
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2">
           <PaymentStatusBadge
             status={payment.status}
             label={payment.statusLabel}
@@ -182,6 +167,11 @@ export function ReceiptMobile({ receipt, rootId = "careu-receipt-card" }: Props)
             </span>
           </p>
         </div>
+      </section>
+
+      {/* Quotation notes + shop contact + payment QR / bank */}
+      <section className="px-4 py-3 border-b border-gray-100">
+        <ReceiptNotesAndPayment />
       </section>
 
       <footer className="bg-yellow-50 border-t border-yellow-200 px-4 py-3 text-center">
