@@ -106,15 +106,64 @@ export async function saveReceiptAsImage(opts: {
   const card = document.getElementById(rootId);
   if (!card) return { ok: false, reason: `Receipt #${rootId} not found` };
 
+  // The live card sits inside `max-w-3xl mx-auto` within a flex/padded
+  // page layout — capturing it directly made html-to-image mis-measure
+  // the node and clip the left side. Instead capture a CLONE placed in
+  // a clean, fixed, offscreen wrapper with no centering / transform /
+  // overflow clipping, sized to the card's real width, so the whole
+  // receipt is exported exactly as shown on screen.
+  const exportWidth = card.offsetWidth || card.scrollWidth || 800;
+
+  const wrapper = document.createElement("div");
+  // Offscreen (-100000px) so there is no visible flash. html-to-image
+  // re-renders the node into an SVG, so the wrapper's screen position
+  // does not affect the captured pixels — only its clean box does.
+  wrapper.style.position = "fixed";
+  wrapper.style.top = "0";
+  wrapper.style.left = "-100000px";
+  wrapper.style.margin = "0";
+  wrapper.style.padding = "0";
+  wrapper.style.transform = "none";
+  wrapper.style.overflow = "visible";
+  wrapper.style.background = "#ffffff";
+  wrapper.style.width = `${exportWidth}px`;
+  wrapper.style.pointerEvents = "none";
+  wrapper.style.zIndex = "-1";
+
+  const clone = card.cloneNode(true) as HTMLElement;
+  // Force export-stable styles on the clone.
+  clone.style.margin = "0";
+  clone.style.transform = "none";
+  clone.style.position = "static";
+  clone.style.left = "0";
+  clone.style.top = "0";
+  clone.style.overflow = "visible";
+  clone.style.maxWidth = "none";
+  clone.style.width = `${exportWidth}px`;
+
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+
   try {
+    // Real, untruncated dimensions of the clone — not the viewport's.
+    const width = clone.scrollWidth;
+    const height = clone.scrollHeight;
+    const fileName = `careu-${opts.receipt.meta.refId}.jpg`;
+    console.log("[printService] export receipt image", {
+      width,
+      height,
+      fileName,
+    });
+
     const { toJpeg } = await import("html-to-image");
-    const dataUrl = await toJpeg(card as HTMLElement, {
+    const dataUrl = await toJpeg(clone, {
       pixelRatio: opts.pixelRatio ?? 2,
       quality: 0.95,
       backgroundColor: "#ffffff",
       cacheBust: true,
+      width,
+      height,
     });
-    const fileName = `careu-${opts.receipt.meta.refId}.jpg`;
     const link = document.createElement("a");
     link.download = fileName;
     link.href = dataUrl;
@@ -127,6 +176,9 @@ export async function saveReceiptAsImage(opts: {
       ok: false,
       reason: err instanceof Error ? err.message : "unknown image error",
     };
+  } finally {
+    // Always remove the temporary clone wrapper.
+    document.body.removeChild(wrapper);
   }
 }
 
