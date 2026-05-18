@@ -16,6 +16,7 @@ import { formatReceiptCurrency, type ReceiptData } from "@/lib/receiptData";
 import {
   QUOTATION_NOTES,
   SHOP_BANK,
+  SHOP_BUSINESS_HOURS,
   SHOP_CONTACT_PHONES,
 } from "@/components/receipt/ReceiptCommon";
 
@@ -92,6 +93,7 @@ export function ReceiptThermal({ receipt, rootId = "careu-receipt-card" }: Props
         {HR}
         {`\n${centerLine(branch.tagline || "ขอบคุณที่ใช้บริการ", 32)}\n`}
         {`${centerLine(`รับประกันซ่อม 7 วัน`, 32)}\n`}
+        {`\n${SHOP_BUSINESS_HOURS}\n`}
       </pre>
     </div>
   );

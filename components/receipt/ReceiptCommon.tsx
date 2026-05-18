@@ -1,7 +1,9 @@
+"use client";
+
 // Shared receipt fragments used by every template (A4, thermal, mobile).
 // Pure presentation — no business logic, no DB.
 
-import React from "react";
+import React, { useState } from "react";
 import type { OrderJobStatus, PaymentStatus } from "@/lib/receiptData";
 
 export const JOB_STATUS_BADGE: Record<OrderJobStatus, string> = {
@@ -80,12 +82,50 @@ export const QUOTATION_NOTES: string[] = [
 /** Shop contact phone numbers. */
 export const SHOP_CONTACT_PHONES = "094-978-2624 , 0642713052";
 
+/** Shop business hours — printed in every receipt footer. */
+export const SHOP_BUSINESS_HOURS =
+  "เปิดบริการทุกวัน 08:30–17:30 (สอบถามเวลาก่อนทุกครั้ง)";
+
 /** Shop bank account for QR / transfer payment. */
 export const SHOP_BANK = {
   accountName: "นนท์วริศ เจตปิยะวัฒน์",
   bankName: "กสิกรไทย",
   accountNumber: "743-2-52142-3",
 } as const;
+
+// Drop the shop's payment QR here (public/payment-qr.png) and it appears
+// automatically; until the file exists, the receipt shows a neutral
+// placeholder instead of a broken image.
+const QR_IMAGE_SRC = "/payment-qr.png";
+
+/**
+ * Payment QR. Renders public/payment-qr.png when present; while it loads,
+ * or if it is missing (404), it falls back to the QR placeholder — so the
+ * receipt never shows a broken image in print or save-as-image.
+ */
+function PaymentQr() {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed) return <QrPlaceholder size={108} />;
+  return (
+    <>
+      {!loaded && <QrPlaceholder size={108} />}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={QR_IMAGE_SRC}
+        alt="QR Code สำหรับชำระเงิน"
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+        className="rounded-md border border-gray-200"
+        style={{
+          width: 132,
+          height: "auto",
+          display: loaded ? "block" : "none",
+        }}
+      />
+    </>
+  );
+}
 
 /**
  * Bottom document box: quotation notes + shop contact (left) and the
@@ -122,7 +162,7 @@ export function ReceiptNotesAndPayment() {
             ชำระเงิน
           </p>
           <div className="mt-2 flex items-start gap-3">
-            <QrPlaceholder size={104} />
+            <PaymentQr />
             <div className="text-xs text-gray-600">
               <p className="font-medium text-gray-800">
                 QR Code สำหรับชำระเงิน

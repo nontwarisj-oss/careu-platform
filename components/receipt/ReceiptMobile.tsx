@@ -10,6 +10,7 @@ import {
   JobStatusBadge,
   PaymentStatusBadge,
   ReceiptNotesAndPayment,
+  SHOP_BUSINESS_HOURS,
 } from "@/components/receipt/ReceiptCommon";
 
 type Props = {
@@ -179,6 +180,9 @@ export function ReceiptMobile({ receipt, rootId = "careu-receipt-card" }: Props)
           {branch.receiptName}
         </p>
         <p className="text-[11px] text-gray-600">{branch.address}</p>
+        <p className="text-[10px] text-gray-500 mt-0.5">
+          {SHOP_BUSINESS_HOURS}
+        </p>
         {branch.tagline && (
           <p className="text-[11px] text-green-700 mt-1 italic">
             {branch.tagline}
