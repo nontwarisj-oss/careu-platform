@@ -439,6 +439,15 @@ export function IntakeOrderForm({
         .sort();
       const anyUrgent = items.some((it) => it.urgent);
 
+      // Normalize once, log it, and reuse the exact same value for the
+      // save. The duplicate guard inside createSmartOrder normalizes
+      // again (idempotent), so the guard and the persisted job_id match.
+      const normalizedJobId =
+        businessType === "care_u" ? normalizeJobId(careUJobId) : null;
+      console.log("[intake-save] normalized job id", {
+        jobId: normalizedJobId,
+      });
+
       const { orderId, error } = await createSmartOrder({
         customerId: resolved.id,
         customerName: resolved.name,
@@ -462,7 +471,7 @@ export function IntakeOrderForm({
         total: grandTotal,
         notes: orderNote.trim() || null,
         status: "pending",
-        jobId: businessType === "care_u" ? normalizeJobId(careUJobId) : null,
+        jobId: normalizedJobId,
         createdBy: user?.uid ?? null,
         dueDate: dueDates[0] ?? null,
       });

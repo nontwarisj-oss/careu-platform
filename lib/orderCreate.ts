@@ -227,6 +227,29 @@ async function writeAuditCreated(
 }
 
 /**
+ * Persist the manual Job ID after the header insert. createSmartOrder's
+ * tiered fallback bundles job_id into the v4 payload alongside columns
+ * (business_type, created_by, …) that may not exist on every DB; when
+ * v4 falls back to a lower tier the job_id is dropped from the insert.
+ * This targeted UPDATE writes it to orders.job_id regardless of which
+ * tier created the row. Best-effort — a missing job_id column (very
+ * old schema) is swallowed.
+ */
+async function persistJobId(
+  orderId: string,
+  jobId: string | null
+): Promise<void> {
+  if (!jobId) return;
+  const res = await supabase
+    .from("orders")
+    .update({ job_id: jobId })
+    .eq("id", orderId);
+  if (res.error && !isMissingColumn(res.error.message)) {
+    console.warn("[orderCreate] job_id persist failed", res.error.message);
+  }
+}
+
+/**
  * Phase 20: attribute this fresh order to the customer's most recent
  * campaign send (if any). Best-effort — failures must NEVER block
  * order creation. Denormalises the campaign source onto the orders
@@ -353,11 +376,13 @@ export async function createSmartOrder(
     return { ...result, jobId };
   }
 
-  // Tier 3 — full smart schema (no job_id)
+  // Tier 3 — full smart schema. job_id is not in this payload, so it
+  // is written with a targeted UPDATE once the insert succeeds.
   result = await attempt(v3);
   if (!isMissingColumn(result.error ?? undefined)) {
     if (result.orderId) {
-      await writeAuditCreated(result.orderId, null, input.createdBy);
+      await persistJobId(result.orderId, jobId);
+      await writeAuditCreated(result.orderId, jobId, input.createdBy);
       void attributeOrderBestEffort(
         result.orderId,
         input.customerId,
@@ -365,14 +390,15 @@ export async function createSmartOrder(
         input.branchId
       );
     }
-    return { ...result, jobId: null };
+    return { ...result, jobId };
   }
 
-  // Tier 2 — intake-extension schema
+  // Tier 2 — intake-extension schema. job_id persisted via UPDATE.
   result = await attempt(v2);
   if (!isMissingColumn(result.error ?? undefined)) {
     if (result.orderId) {
-      await writeAuditCreated(result.orderId, null, input.createdBy);
+      await persistJobId(result.orderId, jobId);
+      await writeAuditCreated(result.orderId, jobId, input.createdBy);
       void attributeOrderBestEffort(
         result.orderId,
         input.customerId,
@@ -380,7 +406,7 @@ export async function createSmartOrder(
         input.branchId
       );
     }
-    return { ...result, jobId: null };
+    return { ...result, jobId };
   }
 
   // Tier 1 — legacy schema. Preserve urgent intent in the item name.
@@ -390,7 +416,8 @@ export async function createSmartOrder(
   };
   const final = await attempt(legacyWithUrgent);
   if (final.orderId) {
-    await writeAuditCreated(final.orderId, null, input.createdBy);
+    await persistJobId(final.orderId, jobId);
+    await writeAuditCreated(final.orderId, jobId, input.createdBy);
     void attributeOrderBestEffort(
       final.orderId,
       input.customerId,
@@ -398,5 +425,5 @@ export async function createSmartOrder(
       input.branchId
     );
   }
-  return { ...final, jobId: null };
+  return { ...final, jobId };
 }
