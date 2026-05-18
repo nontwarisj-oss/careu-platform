@@ -104,15 +104,18 @@ export default function OrderDocumentPage({
           .eq("id", orderId)
           .maybeSingle();
 
+      // Every tier that can carry job_id keeps it (only the legacy
+      // floor predates the column). The dedicated job_id fetch below
+      // is the real source of truth — these just avoid losing it.
       const tries = [
         wide,
-        // drop assignment + job_id fields (pre 20260520/20260521/20260524)
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost",
-        // drop payment_* and document_type
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code",
-        // drop smart cols
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id",
-        // legacy
+        // drop assignment fields (due_date, tech); keep job_id
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost, job_id",
+        // drop payment_* and document_type; keep job_id
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, job_id",
+        // drop smart cols; keep job_id
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, job_id",
+        // legacy floor — pre-20260520 schema, no job_id column
         "id, customer_id, customer_name, item_name, price, status, created_at",
       ];
       for (const cols of tries) {
@@ -143,7 +146,27 @@ export default function OrderDocumentPage({
       }
 
       setOrderBranchId((raw.branch_id as string | null) ?? null);
-      setOrderJobId((raw.job_id as string | null) ?? null);
+
+      // Job ID — fetched INDEPENDENTLY of the tiered select above. That
+      // select can fail on an unrelated missing column and fall back to
+      // a narrower tier that omits job_id, losing a Job ID that is
+      // actually saved. This dedicated minimal select("job_id") is the
+      // source of truth; only a genuine null here shows "ยังไม่มีรหัสงาน".
+      const jobIdRes = await supabase
+        .from("orders")
+        .select("job_id")
+        .eq("id", orderId)
+        .maybeSingle();
+      const directJobId =
+        (jobIdRes.data as unknown as { job_id: string | null } | null)
+          ?.job_id ?? null;
+      // The direct query is authoritative. raw.job_id (kept by the
+      // tiered select when its tier carries the column) is only a
+      // secondary fallback — used solely if the direct query is null.
+      const resolvedJobId =
+        directJobId ?? (raw.job_id as string | null) ?? null;
+      setOrderJobId(resolvedJobId);
+
       setOrderDueDate((raw.due_date as string | null) ?? null);
       setOrderTech((raw.tech as string | null) ?? null);
       const labor =
