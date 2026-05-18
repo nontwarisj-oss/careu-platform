@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useLanguage } from "@/lib/languageContext";
 import { useBranch } from "@/lib/branchContext";
@@ -178,6 +179,49 @@ export default function Dashboard() {
               </p>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Pilot quick access — big, obvious jumps to the new pilot flows.
+          Mobile-first: full-width stacked on a phone, 3-up on tablet+. */}
+      <div className="mb-5">
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-green-700">
+          {language === "th" ? "เข้าใช้งานด่วน (Pilot)" : "Quick access (Pilot)"}
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Link
+            href="/mobile-intake"
+            className="flex min-h-[60px] items-center gap-3 rounded-2xl bg-green-700 px-5 py-4 text-white shadow-sm transition hover:bg-green-800 active:bg-green-800"
+          >
+            <span className="text-2xl" aria-hidden>
+              📱
+            </span>
+            <span className="text-base font-bold leading-tight">
+              รับงานด้วยมือถือ
+            </span>
+          </Link>
+          <Link
+            href="/admin/intake-drafts"
+            className="flex min-h-[60px] items-center gap-3 rounded-2xl border-2 border-green-600 bg-white px-5 py-4 text-green-800 shadow-sm transition hover:bg-green-50 active:bg-green-50"
+          >
+            <span className="text-2xl" aria-hidden>
+              🗂️
+            </span>
+            <span className="text-base font-bold leading-tight">
+              คิวงานจากมือถือ
+            </span>
+          </Link>
+          <Link
+            href="/admin/pricing-master"
+            className="flex min-h-[60px] items-center gap-3 rounded-2xl border-2 border-green-600 bg-white px-5 py-4 text-green-800 shadow-sm transition hover:bg-green-50 active:bg-green-50"
+          >
+            <span className="text-2xl" aria-hidden>
+              💲
+            </span>
+            <span className="text-base font-bold leading-tight">
+              Pricing Master
+            </span>
+          </Link>
         </div>
       </div>
 
