@@ -93,10 +93,10 @@ export const SHOP_BANK = {
   accountNumber: "743-2-52142-3",
 } as const;
 
-// Drop the shop's payment QR here (public/payment-qr.png) and it appears
-// automatically; until the file exists, the receipt shows a neutral
-// placeholder instead of a broken image.
-const QR_IMAGE_SRC = "/payment-qr.png";
+// The shop's real payment QR. The image file lives at
+// public/payment/careu-payment-qr.jpg; until that file exists the receipt
+// shows a neutral placeholder instead of a broken image.
+const QR_IMAGE_SRC = "/payment/careu-payment-qr.jpg";
 
 /**
  * Payment QR. Renders public/payment-qr.png when present; while it loads,
