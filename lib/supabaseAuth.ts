@@ -81,7 +81,21 @@ export async function getCurrentProfile(): Promise<CurrentProfile | null> {
     .select("id, full_name, phone, role, branch_id, is_active, branches:branch_id (code)")
     .eq("id", user.uid)
     .maybeSingle();
-  if (res.error || !res.data) return null;
+  if (res.error || !res.data) {
+    // No matching profiles row — e.g. an internal staff_accounts session
+    // (employee_code login) that was never mirrored into public.profiles.
+    // The HMAC session cookie is signed + authoritative, so fall back to it
+    // rather than locking the operator out of requireRole-gated routes.
+    return {
+      id: user.uid,
+      role: user.role,
+      branchId: null,
+      branchCode: user.branchId,
+      fullName: user.name,
+      phone: null,
+      active: true,
+    };
+  }
   // Supabase types embedded relations as an array — collapse to first row.
   const row = res.data as unknown as {
     id: string;

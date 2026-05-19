@@ -1,6 +1,11 @@
 // Reports current auth state to the client. The frontend's AuthProvider
 // hits this on mount to decide preview-mode vs strict-mode and to hydrate
 // role / branch from the cookie.
+//
+// The session uid is resolved against EITHER identity store:
+//   • public.users          — LINE login
+//   • public.staff_accounts  — internal employee_code / password login
+// whichever the signed cookie's uid belongs to.
 
 import { NextResponse } from "next/server";
 import {
@@ -18,88 +23,117 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+type ResolvedAccount = {
+  id: string;
+  name: string;
+  role: string;
+  branchId: string | null;
+  pictureUrl: string | null;
+  active: boolean;
+};
+
 export async function GET() {
   const sessionConfigured = isSessionConfigured();
   const lineConfigured = isLineLoginConfigured();
   const jwtBridgeConfigured = isSupabaseJwtConfigured();
-  // Strict mode kicks in once the operator has done both: set SESSION_SECRET
-  // and wired LINE Login. Until then the platform behaves as before (preview
-  // mode, role/branch from localStorage).
-  const authRequired = sessionConfigured && lineConfigured;
+  // Strict mode is now driven by the internal staff login: once SESSION_SECRET
+  // is set, employee_code / password sign-in is available, so auth is
+  // required. LINE Login remains an optional extra sign-in method.
+  const authRequired = sessionConfigured;
+
+  const baseFlags = {
+    authRequired,
+    sessionConfigured,
+    lineConfigured,
+    jwtBridgeConfigured,
+  };
 
   const session = await readSessionFromCookies();
   if (!session) {
-    return NextResponse.json({
-      authRequired,
-      sessionConfigured,
-      lineConfigured,
-      jwtBridgeConfigured,
-      session: null,
-    });
+    return NextResponse.json({ ...baseFlags, session: null });
   }
 
-  // Refresh allowed-branches list from the users row so disabling a user
-  // takes effect on their next /me call without waiting for cookie expiry.
-  // Uses the service-role client when available so RLS on profiles (next
-  // phase) cannot lock us out of our own session lookup.
-  const dbClient = getSupabaseAdmin() ?? supabase;
+  const admin = getSupabaseAdmin();
+  const dbClient = admin ?? supabase;
+
+  let resolved: ResolvedAccount | null = null;
+
+  // LINE-login / public.users account.
   const userRes = await dbClient
     .from("users")
     .select("id, display_name, role, branch_id, active, picture_url")
     .eq("id", session.uid)
     .maybeSingle();
-
-  if (userRes.error || !userRes.data) {
-    return NextResponse.json({
-      authRequired,
-      sessionConfigured,
-      lineConfigured,
-      jwtBridgeConfigured,
-      session: null,
-    });
+  if (!userRes.error && userRes.data) {
+    const u = userRes.data as {
+      id: string;
+      display_name: string | null;
+      role: string | null;
+      branch_id: string | null;
+      active: boolean | null;
+      picture_url: string | null;
+    };
+    resolved = {
+      id: u.id,
+      name: u.display_name ?? session.name,
+      role: u.role ?? session.role,
+      branchId: u.branch_id ?? session.branchId,
+      pictureUrl: u.picture_url ?? null,
+      active: u.active !== false,
+    };
   }
 
-  const user = userRes.data as {
-    id: string;
-    display_name: string;
-    role: string | null;
-    branch_id: string | null;
-    active: boolean;
-    picture_url: string | null;
-  };
+  // Internal staff_accounts login. The table is RLS-on / no-policy, so only
+  // the service-role client can read it.
+  if (!resolved && admin) {
+    const staffRes = await admin
+      .from("staff_accounts")
+      .select("id, full_name, role, branch_id, active")
+      .eq("id", session.uid)
+      .maybeSingle();
+    if (!staffRes.error && staffRes.data) {
+      const s = staffRes.data as {
+        id: string;
+        full_name: string | null;
+        role: string | null;
+        branch_id: string | null;
+        active: boolean | null;
+      };
+      resolved = {
+        id: s.id,
+        name: s.full_name ?? session.name,
+        role: s.role ?? session.role,
+        branchId: s.branch_id ?? session.branchId,
+        pictureUrl: null,
+        active: s.active !== false,
+      };
+    }
+  }
 
-  if (!user.active) {
+  if (!resolved) {
+    return NextResponse.json({ ...baseFlags, session: null });
+  }
+  if (!resolved.active) {
     return NextResponse.json({
-      authRequired,
-      sessionConfigured,
-      lineConfigured,
-      jwtBridgeConfigured,
+      ...baseFlags,
       session: null,
       reason: "account_disabled",
     });
   }
 
   // Mint a short-lived PostgREST-compatible JWT so the browser supabase
-  // client can satisfy RLS (auth.uid() = profiles.id). When the JWT secret
-  // is unset, supabaseAccessToken comes back null and queries run as anon —
-  // RLS-protected tables will return 0 rows, which is the correct (locked)
-  // behaviour until the operator configures the bridge.
-  const minted = mintSupabaseJwt({
-    profileId: user.id,
-    email: null,
-  });
+  // client can satisfy RLS. When SUPABASE_JWT_SECRET is unset this is null
+  // and queries run as anon — the correct (locked) behaviour for RLS tables.
+  const minted = mintSupabaseJwt({ profileId: resolved.id, email: null });
 
   return NextResponse.json({
-    authRequired,
-    sessionConfigured,
-    lineConfigured,
-    jwtBridgeConfigured,
+    ...baseFlags,
     session: {
-      uid: user.id,
-      name: user.display_name,
-      role: user.role ?? session.role,
-      branchId: user.branch_id ?? session.branchId,
-      pictureUrl: user.picture_url ?? null,
+      uid: resolved.id,
+      name: resolved.name,
+      role: resolved.role,
+      branchId: resolved.branchId,
+      pictureUrl: resolved.pictureUrl,
       supabaseAccessToken: minted?.token ?? null,
       supabaseExpiresAt: minted?.expiresAt ?? null,
       supabaseExpiresIn: minted?.expiresIn ?? null,
