@@ -162,6 +162,23 @@ export default function OrderDocumentPage({
         directJobId ?? (raw.job_id as string | null) ?? null;
       setOrderJobId(resolvedJobId);
 
+      // Payment status — fetched INDEPENDENTLY of the tiered select, for the
+      // same reason as job_id above: that select can fall back to a narrow
+      // tier that omits payment_status, which would wrongly render every
+      // order as "ยังไม่ชำระ" regardless of the real value. This dedicated
+      // select("payment_status") against public.orders is the source of truth.
+      const paymentRes = await supabase
+        .from("orders")
+        .select("payment_status")
+        .eq("id", orderId)
+        .maybeSingle();
+      const resolvedPaymentStatus =
+        (paymentRes.data as unknown as {
+          payment_status: string | null;
+        } | null)?.payment_status ??
+        (raw.payment_status as string | null) ??
+        "unpaid";
+
       setOrderDueDate((raw.due_date as string | null) ?? null);
       setOrderTech((raw.tech as string | null) ?? null);
 
@@ -187,7 +204,7 @@ export default function OrderDocumentPage({
         template_text: (raw.template_text as string) ?? null,
         customer_type: (raw.customer_type as string) ?? null,
         promotion_code: (raw.promotion_code as string) ?? null,
-        payment_status: (raw.payment_status as string) ?? "unpaid",
+        payment_status: resolvedPaymentStatus,
         created_at: (raw.created_at as string) ?? new Date().toISOString(),
       });
 
