@@ -19,6 +19,7 @@ import {
   getSimpleStaffSession,
   clearSimpleStaffSession,
 } from "@/lib/simpleStaffSession";
+import { canAccessRoute } from "@/lib/staffAccess";
 
 export type AuthUser = {
   uid: string;
@@ -222,6 +223,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const after = pathname ?? "/";
     router.replace(`/login?after=${encodeURIComponent(after)}`);
   }, [state.authRequired, state.isLoading, state.user, pathname, router]);
+
+  // Signed in, but the staff role is not allowed on this route → send back to
+  // the dashboard. This is the global role guard: it covers every page,
+  // including those without a per-page <RouteGuard> (e.g. /reports, /invoices).
+  useEffect(() => {
+    if (state.isLoading) return;
+    if (!state.user) return;
+    if (isPublicPath(pathname)) return;
+    const path = pathname ?? "/";
+    if (path === "/") return;
+    if (canAccessRoute(path, state.user.role)) return;
+    router.replace("/");
+  }, [state.isLoading, state.user, pathname, router]);
 
   const signOut = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
