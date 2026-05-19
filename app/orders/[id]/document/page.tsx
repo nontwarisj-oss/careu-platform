@@ -342,25 +342,26 @@ export default function OrderDocumentPage({
     setPaymentSaving(true);
     const previous = order.payment_status;
     setOrder({ ...order, payment_status: next });
-    const { error } = await supabase
-      .from("orders")
-      .update({ payment_status: next })
-      .eq("id", order.id);
-    if (error) {
+    const res = await fetch(`/api/orders/${order.id}/payment-status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paymentStatus: next }),
+    });
+    const json = (await res.json()) as {
+      ok?: boolean;
+      reason?: string;
+      paymentStatus?: string;
+    };
+    if (!res.ok || !json.ok) {
       setOrder({ ...order, payment_status: previous });
-      setToast(
-        /column .* does not exist|schema cache/i.test(error.message)
-          ? "ต้องรันไฟล์ supabase/migrations/20260515_payment_columns.sql ก่อน"
-          : error.message
-      );
+      setToast(json.reason ?? `HTTP ${res.status}`);
       setTimeout(() => setToast(null), 5000);
     } else {
       setToast("บันทึกสถานะการชำระเรียบร้อย");
-      void writeAudit("payment_changed", previous, next);
       if (next === "paid") {
         void triggerLifecycleEvent("payment_received", order.id);
       }
-      setTimeout(() => setToast(null), 2500);
+      setTimeout(() => window.location.reload(), 300);
     }
     setPaymentSaving(false);
   };
