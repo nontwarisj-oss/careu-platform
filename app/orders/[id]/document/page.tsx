@@ -106,10 +106,11 @@ export default function OrderDocumentPage({
         wide,
         // drop assignment fields (due_date, tech); keep job_id
         "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, job_id",
-        // drop payment_* and document_type; keep job_id
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, job_id",
-        // drop smart cols; keep job_id
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, job_id",
+        // drop payment_method + document_type only; KEEP payment_status so
+        // the tiered fallback never silently loses it (job_id kept too)
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, job_id",
+        // drop smart cols; keep payment_status + job_id
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, payment_status, job_id",
         // legacy floor — pre-20260520 schema, no job_id column
         "id, customer_id, customer_name, item_name, price, status, created_at",
       ];
@@ -172,10 +173,16 @@ export default function OrderDocumentPage({
         .select("payment_status")
         .eq("id", orderId)
         .maybeSingle();
-      const resolvedPaymentStatus =
+      // authoritativePaymentStatus = the value from the dedicated query above.
+      // It is the source of truth. raw.payment_status (carried by the tiered
+      // select only when its tier keeps the column) is a secondary fallback,
+      // used solely when the dedicated query returns null.
+      const authoritativePaymentStatus =
         (paymentRes.data as unknown as {
           payment_status: string | null;
-        } | null)?.payment_status ??
+        } | null)?.payment_status ?? null;
+      const resolvedPaymentStatus =
+        authoritativePaymentStatus ??
         (raw.payment_status as string | null) ??
         "unpaid";
 
