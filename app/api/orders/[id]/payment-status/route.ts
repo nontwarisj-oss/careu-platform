@@ -7,13 +7,15 @@
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { requireBranchAccess, requireRole } from "@/lib/supabaseAuth";
+import { getCurrentUser } from "@/lib/supabaseAuth";
+import { canViewAllBranches } from "@/lib/permissions";
 import type { PaymentStatus } from "@/lib/statusBadges";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const PAYMENT_STATUSES = new Set<PaymentStatus>(["unpaid", "deposit", "paid"]);
+const PAYMENT_ROLES = ["owner", "hq_admin", "branch_manager", "front_staff"];
 
 type Body = {
   paymentStatus?: unknown;
@@ -23,13 +25,19 @@ export async function PATCH(
   req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const guarded = await requireRole([
-    "owner",
-    "hq_admin",
-    "branch_manager",
-    "front_staff",
-  ]);
-  if (guarded instanceof NextResponse) return guarded;
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json(
+      { ok: false, reason: "Not authenticated" },
+      { status: 401 }
+    );
+  }
+  if (!PAYMENT_ROLES.includes(user.role)) {
+    return NextResponse.json(
+      { ok: false, reason: `Role "${user.role}" cannot update payment_status` },
+      { status: 403 }
+    );
+  }
 
   let body: Body;
   try {
@@ -84,9 +92,20 @@ export async function PATCH(
     payment_status: string | null;
   };
 
-  if (order.branch_id) {
-    const branchGuard = await requireBranchAccess(order.branch_id);
-    if (branchGuard instanceof NextResponse) return branchGuard;
+  if (
+    order.branch_id &&
+    !canViewAllBranches(user.role) &&
+    user.branchId !== order.branch_id
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: "Branch access denied",
+        requestedBranch: order.branch_id,
+        userBranch: user.branchId,
+      },
+      { status: 403 }
+    );
   }
 
   const previous = order.payment_status ?? "unpaid";
@@ -115,7 +134,7 @@ export async function PATCH(
     action: "payment_changed",
     before_value: previous,
     after_value: paymentStatus,
-    changed_by: guarded.profile.id,
+    changed_by: user.uid,
   });
   if (
     auditRes.error &&

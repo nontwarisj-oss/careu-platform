@@ -3,7 +3,6 @@
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import supabase from "@/lib/supabase";
-import { formatCurrency } from "@/lib/utils";
 import { useBranch } from "@/lib/branchContext";
 import { getBranchById } from "@/lib/brandConfig";
 import {
@@ -44,7 +43,7 @@ export default function OrderDocumentPage({
   const { user } = useAuth();
 
   const writeAudit = async (
-    action: "status_changed" | "payment_changed" | "cost_updated" | "sync_pushed",
+    action: "status_changed" | "payment_changed" | "sync_pushed",
     before: string | null,
     after: string | null
   ) => {
@@ -75,11 +74,6 @@ export default function OrderDocumentPage({
   const [orderTech, setOrderTech] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
-  const [laborCost, setLaborCost] = useState<number | null>(null);
-  const [materialCost, setMaterialCost] = useState<number | null>(null);
-  const [laborInput, setLaborInput] = useState<string>("");
-  const [materialInput, setMaterialInput] = useState<string>("");
-  const [costSaving, setCostSaving] = useState(false);
   const [sheetSyncStatus, setSheetSyncStatus] = useState<
     "idle" | "syncing" | "success" | "failed"
   >("idle");
@@ -94,7 +88,7 @@ export default function OrderDocumentPage({
       // Try the widest column set, then narrow on column-missing errors so the
       // page renders on any migration state.
       const wide =
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost, job_id, due_date, tech";
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, job_id, due_date, tech";
       let raw: Record<string, unknown> | null = null;
 
       const tryFetch = async (cols: string) =>
@@ -110,7 +104,7 @@ export default function OrderDocumentPage({
       const tries = [
         wide,
         // drop assignment fields (due_date, tech); keep job_id
-        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, labor_cost, material_cost, job_id",
+        "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, payment_status, payment_method, job_id",
         // drop payment_* and document_type; keep job_id
         "id, customer_id, customer_name, item_name, price, status, created_at, notes, urgent, urgent_fee, branch_id, subtotal, discount, quantity, service_category, service_code, service_name, template_text, customer_type, promotion_code, job_id",
         // drop smart cols; keep job_id
@@ -169,18 +163,6 @@ export default function OrderDocumentPage({
 
       setOrderDueDate((raw.due_date as string | null) ?? null);
       setOrderTech((raw.tech as string | null) ?? null);
-      const labor =
-        raw.labor_cost !== null && raw.labor_cost !== undefined
-          ? Number(raw.labor_cost)
-          : null;
-      const material =
-        raw.material_cost !== null && raw.material_cost !== undefined
-          ? Number(raw.material_cost)
-          : null;
-      setLaborCost(labor);
-      setMaterialCost(material);
-      setLaborInput(labor !== null ? String(labor) : "");
-      setMaterialInput(material !== null ? String(material) : "");
 
       setOrder({
         id: String(raw.id),
@@ -270,45 +252,6 @@ export default function OrderDocumentPage({
     setTimeout(() => setToast(null), 4500);
   };
 
-  const handleSaveCosts = async () => {
-    if (!order) return;
-    const labor = laborInput.trim() === "" ? null : Number(laborInput);
-    const material = materialInput.trim() === "" ? null : Number(materialInput);
-    if (labor !== null && (!Number.isFinite(labor) || labor < 0)) {
-      setToast("ค่าแรงต้องเป็นตัวเลขมากกว่าหรือเท่ากับ 0");
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    if (material !== null && (!Number.isFinite(material) || material < 0)) {
-      setToast("ค่าวัสดุต้องเป็นตัวเลขมากกว่าหรือเท่ากับ 0");
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    setCostSaving(true);
-    const { error } = await supabase
-      .from("orders")
-      .update({ labor_cost: labor, material_cost: material })
-      .eq("id", order.id);
-    if (error) {
-      setToast(
-        /column .* does not exist|schema cache/i.test(error.message)
-          ? "ต้องรัน migration 20260516_rbac_finance.sql ก่อน"
-          : error.message
-      );
-    } else {
-      setLaborCost(labor);
-      setMaterialCost(material);
-      setToast("บันทึกต้นทุนเรียบร้อย");
-      void writeAudit(
-        "cost_updated",
-        `labor=${laborCost ?? "-"} material=${materialCost ?? "-"}`,
-        `labor=${labor ?? "-"} material=${material ?? "-"}`
-      );
-    }
-    setCostSaving(false);
-    setTimeout(() => setToast(null), 3000);
-  };
-
   const handleSyncToSheet = async () => {
     if (!order) return;
     setSheetSyncStatus("syncing");
@@ -342,28 +285,41 @@ export default function OrderDocumentPage({
     setPaymentSaving(true);
     const previous = order.payment_status;
     setOrder({ ...order, payment_status: next });
-    const res = await fetch(`/api/orders/${order.id}/payment-status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paymentStatus: next }),
-    });
-    const json = (await res.json()) as {
-      ok?: boolean;
-      reason?: string;
-      paymentStatus?: string;
-    };
-    if (!res.ok || !json.ok) {
-      setOrder({ ...order, payment_status: previous });
-      setToast(json.reason ?? `HTTP ${res.status}`);
-      setTimeout(() => setToast(null), 5000);
-    } else {
+    try {
+      const res = await fetch(`/api/orders/${order.id}/payment-status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentStatus: next }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        reason?: string;
+        paymentStatus?: string;
+      };
+      if (!res.ok || !json.ok) {
+        console.error(
+          "[order-document] payment status update failed",
+          json.reason ?? `HTTP ${res.status}`
+        );
+        setOrder({ ...order, payment_status: previous });
+        setToast(json.reason ?? `HTTP ${res.status}`);
+        setTimeout(() => setToast(null), 5000);
+        return;
+      }
       setToast("บันทึกสถานะการชำระเรียบร้อย");
       if (next === "paid") {
         void triggerLifecycleEvent("payment_received", order.id);
       }
       setTimeout(() => window.location.reload(), 300);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Network error";
+      console.error("[order-document] payment status update failed", err);
+      setOrder({ ...order, payment_status: previous });
+      setToast(message);
+      setTimeout(() => setToast(null), 5000);
+    } finally {
+      setPaymentSaving(false);
     }
-    setPaymentSaving(false);
   };
 
   // ---- Render ------------------------------------------------------------
@@ -478,64 +434,6 @@ export default function OrderDocumentPage({
         <div className="mt-4 space-y-4 print:hidden">
           {/* Order-wide repair photo gallery */}
           <OrderPhotoGallery items={orderItems} />
-
-          {/* Cost panel */}
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-gray-500 font-semibold">
-                  ต้นทุนภายใน (ไม่แสดงในเอกสารลูกค้า)
-                </p>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  บันทึกค่าแรงและค่าวัสดุเพื่อให้แดชบอร์ดคำนวณกำไรรายงานนี้
-                </p>
-              </div>
-              {laborCost !== null && materialCost !== null && (
-                <p className="text-sm font-semibold text-green-700 whitespace-nowrap">
-                  กำไรงานนี้:{" "}
-                  {formatCurrency(
-                    order.price - (laborCost ?? 0) - (materialCost ?? 0)
-                  )}
-                </p>
-              )}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <label className="block">
-                <span className="block text-[11px] text-gray-500 mb-1">
-                  ค่าแรงช่าง
-                </span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  value={laborInput}
-                  onChange={(e) => setLaborInput(e.target.value)}
-                  placeholder="0"
-                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-[11px] text-gray-500 mb-1">
-                  ค่าวัสดุ
-                </span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  value={materialInput}
-                  onChange={(e) => setMaterialInput(e.target.value)}
-                  placeholder="0"
-                  className="w-full rounded-lg border border-gray-300 p-2 text-sm outline-none focus:ring-2 focus:ring-green-500"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void handleSaveCosts()}
-                disabled={costSaving}
-                className="rounded-lg bg-green-700 hover:bg-green-800 disabled:opacity-50 text-white text-sm font-semibold py-2"
-              >
-                {costSaving ? "กำลังบันทึก..." : "บันทึกต้นทุน"}
-              </button>
-            </div>
-          </div>
 
           {/* Payment status selector (data persisted on the order) */}
           <div className="rounded-xl border border-gray-200 bg-white p-4">
