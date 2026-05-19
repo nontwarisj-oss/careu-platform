@@ -12,6 +12,7 @@ import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
 import { ROLE_DEFINITIONS, type Role } from "@/lib/roles";
 import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
+import { PasswordInput } from "@/components/PasswordInput";
 
 type Account = {
   id: string;
@@ -80,6 +81,7 @@ function StaffAccountsInner() {
   const [editBranch, setEditBranch] = useState("");
   const [editActive, setEditActive] = useState(true);
   const [editPassword, setEditPassword] = useState("");
+  const [editPasswordConfirm, setEditPasswordConfirm] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Re-load used by the create / edit handlers (called post-await from an
@@ -188,10 +190,22 @@ function StaffAccountsInner() {
     setEditBranch(acc.branch_id ?? "");
     setEditActive(acc.active);
     setEditPassword("");
+    setEditPasswordConfirm("");
   };
 
   const handleSaveEdit = async () => {
     if (!editing) return;
+    // Password reset is optional; when set, validate it before saving.
+    if (editPassword) {
+      if (editPassword.length < 8) {
+        setError("รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร");
+        return;
+      }
+      if (editPassword !== editPasswordConfirm) {
+        setError("รหัสผ่านใหม่และการยืนยันไม่ตรงกัน");
+        return;
+      }
+    }
     setSaving(true);
     setMessage(null);
     setError(null);
@@ -300,10 +314,9 @@ function StaffAccountsInner() {
               <label className="block text-xs font-semibold text-gray-700 mb-1">
                 รหัสผ่าน (อย่างน้อย 8 ตัวอักษร)
               </label>
-              <input
-                type="text"
+              <PasswordInput
                 value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
+                onChange={setNewPassword}
                 className={inputClass}
                 placeholder="ตั้งรหัสผ่านเริ่มต้นให้พนักงาน"
               />
@@ -510,12 +523,22 @@ function StaffAccountsInner() {
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
                   รีเซ็ตรหัสผ่าน (เว้นว่างหากไม่เปลี่ยน)
                 </label>
-                <input
-                  type="text"
+                <PasswordInput
                   value={editPassword}
-                  onChange={(e) => setEditPassword(e.target.value)}
+                  onChange={setEditPassword}
                   className={inputClass}
                   placeholder="รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  ยืนยันรหัสผ่านใหม่
+                </label>
+                <PasswordInput
+                  value={editPasswordConfirm}
+                  onChange={setEditPasswordConfirm}
+                  className={inputClass}
+                  placeholder="พิมพ์รหัสผ่านใหม่อีกครั้ง"
                 />
               </div>
             </div>

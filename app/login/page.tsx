@@ -11,6 +11,7 @@ import { Suspense, useCallback, useEffect, useState, type FormEvent } from "reac
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
+import { PasswordInput } from "@/components/PasswordInput";
 import { useAuth } from "@/lib/authContext";
 import { useLanguage } from "@/lib/languageContext";
 import {
@@ -209,10 +210,9 @@ function LoginInner() {
               <label className="block text-xs font-semibold text-gray-700 mb-1">
                 {th ? "รหัสผ่าน (อย่างน้อย 8 ตัวอักษร)" : "Password (≥8 chars)"}
               </label>
-              <input
-                type="password"
+              <PasswordInput
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={setPassword}
                 className={inputClass}
                 autoComplete="new-password"
                 minLength={8}
@@ -252,10 +252,9 @@ function LoginInner() {
               <label className="block text-xs font-semibold text-gray-700 mb-1">
                 {th ? "รหัสผ่าน" : "Password"}
               </label>
-              <input
-                type="password"
+              <PasswordInput
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={setPassword}
                 className={inputClass}
                 autoComplete="current-password"
                 required

@@ -33,8 +33,8 @@ const CARDS: AdminCard[] = [
   },
   {
     href: "/admin/staff-accounts",
-    titleTh: "บัญชีเข้าสู่ระบบพนักงาน",
-    titleEn: "Staff login accounts",
+    titleTh: "บัญชีพนักงาน / รีเซ็ตรหัส",
+    titleEn: "Staff accounts / reset password",
     descTh:
       "สร้าง / แก้ไขบัญชีรหัสพนักงาน + รหัสผ่านสำหรับเข้าสู่ระบบ · เปิด-ปิดใช้งาน · รีเซ็ตรหัสผ่าน — Owner / Admin",
     descEn:
