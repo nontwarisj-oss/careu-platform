@@ -288,6 +288,7 @@ export default function OrderDocumentPage({
     try {
       const res = await fetch(`/api/orders/${order.id}/payment-status`, {
         method: "PATCH",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paymentStatus: next }),
       });
@@ -307,6 +308,8 @@ export default function OrderDocumentPage({
         return;
       }
       setToast("บันทึกสถานะการชำระเรียบร้อย");
+      const savedStatus = json.paymentStatus ?? next;
+      setOrder({ ...order, payment_status: savedStatus });
       if (next === "paid") {
         void triggerLifecycleEvent("payment_received", order.id);
       }
