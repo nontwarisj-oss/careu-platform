@@ -15,6 +15,10 @@ import { normalizeRole, type Role } from "@/lib/roles";
 import { useRole } from "@/lib/roleContext";
 import { useBranch } from "@/lib/branchContext";
 import { setBridgeJwt } from "@/lib/supabase";
+import {
+  getSimpleStaffSession,
+  clearSimpleStaffSession,
+} from "@/lib/simpleStaffSession";
 
 export type AuthUser = {
   uid: string;
@@ -121,11 +125,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
+    // Simple staff session (localStorage) — works with no SESSION_SECRET and
+    // no signed cookie. It is the fallback identity when /api/auth/me returns
+    // no server (cookie) session.
+    const simple = getSimpleStaffSession();
+    const simpleUser: AuthUser | null = simple
+      ? {
+          uid: simple.staffId,
+          name: simple.name,
+          role: normalizeRole(simple.role),
+          branchId: simple.branchId,
+          pictureUrl: null,
+        }
+      : null;
     try {
       const res = await fetch("/api/auth/me", { cache: "no-store" });
       if (!res.ok) throw new Error(`me ${res.status}`);
       const json = (await res.json()) as MeResponse;
-      const user: AuthUser | null = json.session
+      const cookieUser: AuthUser | null = json.session
         ? {
             uid: json.session.uid,
             name: json.session.name,
@@ -134,6 +151,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pictureUrl: json.session.pictureUrl,
           }
         : null;
+      // A signed cookie session wins when present; otherwise the simple
+      // localStorage staff session is the identity.
+      const user = cookieUser ?? simpleUser;
 
       // Install the bridge JWT into the supabase singleton so RLS-enabled
       // tables (orders, customers post-20260522) see auth.uid().
@@ -167,10 +187,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }, delayMs);
       }
     } catch {
-      // /me unreachable — stay in preview mode silently. AuthContext default
-      // values keep the platform usable while the API recovers.
+      // /me unreachable — keep any localStorage staff session usable so the
+      // platform still works while the API recovers.
       setBridgeJwt(null);
-      setState((prev) => ({ ...prev, isLoading: false }));
+      setState((prev) => ({
+        ...prev,
+        user: simpleUser,
+        authRequired: prev.authRequired || simpleUser !== null,
+        isLoading: false,
+      }));
+      if (simpleUser) {
+        setRole(simpleUser.role);
+        if (simpleUser.branchId) setBranchId(simpleUser.branchId);
+      }
     }
   }, [setRole, setBranchId]);
 
@@ -196,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
+    clearSimpleStaffSession();
     setBridgeJwt(null);
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);

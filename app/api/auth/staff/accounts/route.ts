@@ -5,12 +5,14 @@
 //        { action: "update" }  edit role / branch / active / reset password.
 //
 // staff_accounts is RLS-on / no-policy, so all access goes through the
-// service-role client. The operator session is required and gated to
+// service-role client. The acting operator is resolved via resolveStaffActor
+// (signed cookie, else the x-careu-staff-id simple-staff header) and gated to
 // owner / hq_admin.
 
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { getCurrentUser, type CurrentUser } from "@/lib/supabaseAuth";
+import { resolveStaffActor, type StaffActor } from "@/lib/staffActor";
 import { hashPassword } from "@/lib/passwords";
 import { normalizeRole } from "@/lib/roles";
 
@@ -27,11 +29,17 @@ const VALID_ROLES = new Set([
 ]);
 const MIN_PASSWORD = 8;
 
-type Guard = { ok: true; user: CurrentUser } | { ok: false; res: NextResponse };
+type Guard = { ok: true; actor: StaffActor } | { ok: false; res: NextResponse };
 
-async function requireManager(): Promise<Guard> {
-  const user = await getCurrentUser();
-  if (!user) {
+async function requireManager(
+  req: Request,
+  admin: SupabaseClient
+): Promise<Guard> {
+  const actor = await resolveStaffActor(
+    admin,
+    req.headers.get("x-careu-staff-id")
+  );
+  if (!actor) {
     return {
       ok: false,
       res: NextResponse.json(
@@ -40,7 +48,7 @@ async function requireManager(): Promise<Guard> {
       ),
     };
   }
-  if (!MANAGE_ROLES.includes(user.role)) {
+  if (!MANAGE_ROLES.includes(actor.role)) {
     return {
       ok: false,
       res: NextResponse.json(
@@ -49,13 +57,10 @@ async function requireManager(): Promise<Guard> {
       ),
     };
   }
-  return { ok: true, user };
+  return { ok: true, actor };
 }
 
-export async function GET() {
-  const guard = await requireManager();
-  if (!guard.ok) return guard.res;
-
+export async function GET(req: Request) {
   const admin = getSupabaseAdmin();
   if (!admin) {
     return NextResponse.json(
@@ -63,6 +68,8 @@ export async function GET() {
       { status: 503 }
     );
   }
+  const guard = await requireManager(req, admin);
+  if (!guard.ok) return guard.res;
 
   const accRes = await admin
     .from("staff_accounts")
@@ -108,10 +115,6 @@ type PostBody = {
 };
 
 export async function POST(req: Request) {
-  const guard = await requireManager();
-  if (!guard.ok) return guard.res;
-  const me = guard.user;
-
   const admin = getSupabaseAdmin();
   if (!admin) {
     return NextResponse.json(
@@ -119,6 +122,9 @@ export async function POST(req: Request) {
       { status: 503 }
     );
   }
+  const guard = await requireManager(req, admin);
+  if (!guard.ok) return guard.res;
+  const me = guard.actor;
 
   let body: PostBody;
   try {

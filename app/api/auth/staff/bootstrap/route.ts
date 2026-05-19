@@ -2,19 +2,14 @@
 //
 // GET  → { needed: boolean } — true while public.staff_accounts is empty, so
 //        /login can render the first-run setup form.
-// POST → creates the first account as `owner` and signs it straight in.
+// POST → creates the first account as `owner` and returns its session object
+//        (the browser stores it in localStorage and is signed in).
 //        Self-disabling: once any staff account exists it returns 403 forever.
 //
-// Mirrors the existing "first LINE user becomes owner" bootstrap in the LINE
-// callback — no password ships in git; the owner sets their own.
+// No SESSION_SECRET / signed cookie involved — localStorage session only.
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import {
-  encodeSession,
-  isSessionConfigured,
-  setSessionCookie,
-} from "@/lib/session";
 import { hashPassword } from "@/lib/passwords";
 
 export const dynamic = "force-dynamic";
@@ -52,12 +47,6 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  if (!isSessionConfigured()) {
-    return NextResponse.json(
-      { ok: false, reason: "SESSION_SECRET ยังไม่ได้ตั้งค่าใน environment" },
-      { status: 503 }
-    );
-  }
   const admin = getSupabaseAdmin();
   if (!admin) {
     return NextResponse.json(
@@ -121,7 +110,7 @@ export async function POST(req: Request) {
       branch_id: null,
       active: true,
     })
-    .select("id, full_name")
+    .select("id, employee_code, full_name")
     .single();
   if (insertRes.error || !insertRes.data) {
     // 23505 — a race created the first account between our count and insert.
@@ -136,17 +125,21 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-  const owner = insertRes.data as { id: string; full_name: string };
+  const owner = insertRes.data as {
+    id: string;
+    employee_code: string;
+    full_name: string;
+  };
 
-  // Sign the new owner straight in.
-  const encoded = encodeSession({
-    uid: owner.id,
-    sub: null,
-    role: "owner",
-    branchId: null,
-    name: owner.full_name,
+  return NextResponse.json({
+    ok: true,
+    session: {
+      staffId: owner.id,
+      employeeCode: owner.employee_code,
+      name: owner.full_name,
+      role: "owner",
+      branchId: null,
+      loggedInAt: new Date().toISOString(),
+    },
   });
-  if (encoded) await setSessionCookie(encoded);
-
-  return NextResponse.json({ ok: true, signedIn: !!encoded });
 }

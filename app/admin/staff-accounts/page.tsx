@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { RouteGuard } from "@/components/RouteGuard";
 import { ROLE_DEFINITIONS, type Role } from "@/lib/roles";
+import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
 
 type Account = {
   id: string;
@@ -87,6 +88,7 @@ function StaffAccountsInner() {
     try {
       const res = await fetch("/api/auth/staff/accounts", {
         cache: "no-store",
+        headers: getSimpleStaffAuthHeaders(),
       });
       const json = (await res.json()) as {
         ok?: boolean;
@@ -148,7 +150,10 @@ function StaffAccountsInner() {
     try {
       const res = await fetch("/api/auth/staff/accounts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getSimpleStaffAuthHeaders(),
+        },
         body: JSON.stringify({
           action: "create",
           employeeCode: newCode,
@@ -193,7 +198,10 @@ function StaffAccountsInner() {
     try {
       const res = await fetch("/api/auth/staff/accounts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getSimpleStaffAuthHeaders(),
+        },
         body: JSON.stringify({
           action: "update",
           id: editing.id,

@@ -12,6 +12,7 @@ import {
 import { sendToLineOA } from "@/lib/lineOA";
 import { triggerLifecycleEvent } from "@/lib/lifecycleClient";
 import { useAuth } from "@/lib/authContext";
+import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
 import { buildReceiptData, type ReceiptData } from "@/lib/receiptData";
 import { fetchOrderItems, type OrderItemRow } from "@/lib/orderItems";
 import { OrderPhotoGallery } from "@/components/OrderPhotoGallery";
@@ -289,7 +290,10 @@ export default function OrderDocumentPage({
       const res = await fetch(`/api/orders/${order.id}/payment-status`, {
         method: "PATCH",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getSimpleStaffAuthHeaders(),
+        },
         body: JSON.stringify({ paymentStatus: next }),
       });
       const json = (await res.json()) as {

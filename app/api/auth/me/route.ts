@@ -1,23 +1,17 @@
-// Reports current auth state to the client. The frontend's AuthProvider
-// hits this on mount to decide preview-mode vs strict-mode and to hydrate
-// role / branch from the cookie.
+// Reports auth state to the client.
 //
-// The session uid is resolved against EITHER identity store:
-//   • public.users          — LINE login
-//   • public.staff_accounts  — internal employee_code / password login
-// whichever the signed cookie's uid belongs to.
+// Internal staff login is now localStorage-based (lib/simpleStaffSession.ts).
+// The server cannot read localStorage, so this endpoint simply reports that
+// simple staff-auth mode is active — it is NOT gated on SESSION_SECRET and
+// never blocks the app. The client treats its localStorage session as the
+// identity.
 //
-// Includes safe (no secret value) diagnostics so a SESSION_SECRET
-// misconfiguration is debuggable straight from this endpoint.
+// A signed cookie session (LINE login, or staff login on a deployment where
+// SESSION_SECRET happens to be set) is still resolved + returned when present,
+// so that path keeps working untouched.
 
 import { NextResponse } from "next/server";
-import {
-  isSessionConfigured,
-  readSessionFromCookies,
-  resolveSessionSecret,
-  SESSION_SECRET_ENV_NAMES,
-  MIN_SESSION_SECRET_LENGTH,
-} from "@/lib/session";
+import { readSessionFromCookies } from "@/lib/session";
 import { isLineLoginConfigured } from "@/lib/lineLogin";
 import supabase from "@/lib/supabase";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
@@ -38,8 +32,7 @@ type ResolvedAccount = {
   active: boolean;
 };
 
-// Never cache — this response reflects live env + cookie state, and a stale
-// browser-cached copy is a classic false "still not configured" red herring.
+// Never cache — reflects live cookie state.
 function json(body: unknown) {
   return NextResponse.json(body, {
     headers: { "Cache-Control": "no-store, max-age=0" },
@@ -47,32 +40,23 @@ function json(body: unknown) {
 }
 
 export async function GET() {
-  // --- SESSION_SECRET runtime detection + safe diagnostics ----------------
-  // resolveSessionSecret() reads process.env at call time (SESSION_SECRET,
-  // then the STAFF_/INTERNAL_ aliases). Diagnostics expose only the env var
-  // NAMES and booleans — never the secret value itself.
-  const rawSecret = resolveSessionSecret();
-  const sessionSecretPresent = rawSecret !== null;
-  const sessionSecretLengthOk =
-    (rawSecret?.length ?? 0) >= MIN_SESSION_SECRET_LENGTH;
-  const sessionConfigured = isSessionConfigured();
-
   const lineConfigured = isLineLoginConfigured();
   const jwtBridgeConfigured = isSupabaseJwtConfigured();
-  // Strict mode is driven by the internal staff login: once SESSION_SECRET is
-  // set, employee_code / password sign-in is available, so auth is required.
-  const authRequired = sessionConfigured;
 
+  // Internal staff login is localStorage-based — always available, never
+  // blocked on SESSION_SECRET.
   const baseFlags = {
-    authRequired,
-    sessionConfigured,
+    authRequired: true,
+    sessionConfigured: true,
+    simpleStaffAuth: true,
+    sessionMode: "localStorage" as const,
     lineConfigured,
     jwtBridgeConfigured,
-    envChecked: [...SESSION_SECRET_ENV_NAMES],
-    sessionSecretPresent,
-    sessionSecretLengthOk,
   };
 
+  // A signed cookie session is optional. Resolve + return it when one exists
+  // (keeps LINE login working where SESSION_SECRET is configured); otherwise
+  // session is null and the client uses its localStorage staff session.
   const session = await readSessionFromCookies();
   if (!session) {
     return json({ ...baseFlags, session: null });
@@ -108,8 +92,7 @@ export async function GET() {
     };
   }
 
-  // Internal staff_accounts login. The table is RLS-on / no-policy, so only
-  // the service-role client can read it.
+  // Internal staff_accounts login (RLS-on / no-policy — service-role only).
   if (!resolved && admin) {
     const staffRes = await admin
       .from("staff_accounts")
@@ -139,16 +122,9 @@ export async function GET() {
     return json({ ...baseFlags, session: null });
   }
   if (!resolved.active) {
-    return json({
-      ...baseFlags,
-      session: null,
-      reason: "account_disabled",
-    });
+    return json({ ...baseFlags, session: null, reason: "account_disabled" });
   }
 
-  // Mint a short-lived PostgREST-compatible JWT so the browser supabase
-  // client can satisfy RLS. When SUPABASE_JWT_SECRET is unset this is null
-  // and queries run as anon — the correct (locked) behaviour for RLS tables.
   const minted = mintSupabaseJwt({ profileId: resolved.id, email: null });
 
   return json({

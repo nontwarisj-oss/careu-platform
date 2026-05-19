@@ -1,13 +1,16 @@
 // PATCH /api/orders/[id]/payment-status
 //
-// Server-side payment-status update for order documents. The browser
-// Supabase client can be blocked by orders RLS when the bridge JWT/profile
-// is missing, so this route performs the write with the service-role client
-// after operator role + branch checks.
+// Server-side payment-status update for order documents. Internal staff auth
+// is localStorage-based (no SESSION_SECRET, no signed cookie), so the acting
+// staff member is resolved via resolveStaffActor:
+//   • a signed session cookie when one exists, else
+//   • the x-careu-staff-id header, validated against staff_accounts (must be a
+//     real, active account with a payment-capable role).
+// The write itself uses the service-role client (orders RLS bypass).
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { getCurrentUser } from "@/lib/supabaseAuth";
+import { resolveStaffActor } from "@/lib/staffActor";
 import { canViewAllBranches } from "@/lib/permissions";
 import type { PaymentStatus } from "@/lib/statusBadges";
 
@@ -25,20 +28,6 @@ export async function PATCH(
   req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json(
-      { ok: false, reason: "Not authenticated" },
-      { status: 401 }
-    );
-  }
-  if (!PAYMENT_ROLES.includes(user.role)) {
-    return NextResponse.json(
-      { ok: false, reason: `Role "${user.role}" cannot update payment_status` },
-      { status: 403 }
-    );
-  }
-
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -64,6 +53,24 @@ export async function PATCH(
     return NextResponse.json(
       { ok: false, reason: "SERVICE_ROLE_KEY ยังไม่ได้ตั้งค่า" },
       { status: 503 }
+    );
+  }
+
+  // Identify the acting staff member (cookie session, else simple staff auth).
+  const actor = await resolveStaffActor(
+    admin,
+    req.headers.get("x-careu-staff-id")
+  );
+  if (!actor) {
+    return NextResponse.json(
+      { ok: false, reason: "ยังไม่ได้เข้าสู่ระบบ" },
+      { status: 401 }
+    );
+  }
+  if (!PAYMENT_ROLES.includes(actor.role)) {
+    return NextResponse.json(
+      { ok: false, reason: `Role "${actor.role}" cannot update payment_status` },
+      { status: 403 }
     );
   }
 
@@ -94,15 +101,15 @@ export async function PATCH(
 
   if (
     order.branch_id &&
-    !canViewAllBranches(user.role) &&
-    user.branchId !== order.branch_id
+    !canViewAllBranches(actor.role) &&
+    actor.branchId !== order.branch_id
   ) {
     return NextResponse.json(
       {
         ok: false,
         reason: "Branch access denied",
         requestedBranch: order.branch_id,
-        userBranch: user.branchId,
+        userBranch: actor.branchId,
       },
       { status: 403 }
     );
@@ -134,7 +141,7 @@ export async function PATCH(
     action: "payment_changed",
     before_value: previous,
     after_value: paymentStatus,
-    changed_by: user.uid,
+    changed_by: actor.uid,
   });
   if (
     auditRes.error &&
@@ -142,7 +149,10 @@ export async function PATCH(
       auditRes.error.message
     )
   ) {
-    console.warn("[orders/payment-status] audit write failed", auditRes.error.message);
+    console.warn(
+      "[orders/payment-status] audit write failed",
+      auditRes.error.message
+    );
   }
 
   return NextResponse.json({

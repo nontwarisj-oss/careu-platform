@@ -2,10 +2,10 @@
 
 // /login — internal staff sign-in (employee_code + password).
 //
-// The primary path is the staff login form, posting to /api/auth/staff/login.
-// While public.staff_accounts is empty the page renders a one-time owner
-// setup form instead (POST /api/auth/staff/bootstrap). LINE Login is kept as
-// an optional extra button, shown only when LINE is configured.
+// On success the server returns a staff session object; the browser stores it
+// in localStorage (lib/simpleStaffSession.ts). No SESSION_SECRET, no signed
+// cookie. While public.staff_accounts is empty the page shows a one-time owner
+// setup form. LINE Login is kept as an optional button when LINE is configured.
 
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
@@ -13,6 +13,10 @@ import { useSearchParams } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/lib/authContext";
 import { useLanguage } from "@/lib/languageContext";
+import {
+  setSimpleStaffSession,
+  type SimpleStaffSession,
+} from "@/lib/simpleStaffSession";
 
 const ERROR_MESSAGES_TH: Record<string, string> = {
   line_not_configured: "LINE Login ยังไม่ตั้งค่า",
@@ -23,7 +27,7 @@ const ERROR_MESSAGES_TH: Record<string, string> = {
   users_table_unreachable: "อ่านตาราง users ไม่ได้ — ยังไม่ได้รัน migration ใช่หรือไม่?",
   users_insert_failed: "สร้างผู้ใช้ใหม่ไม่สำเร็จ",
   account_disabled: "บัญชีนี้ถูกปิดใช้งาน ติดต่อผู้ดูแลระบบ",
-  session_encode_failed: "เซ็น session ไม่สำเร็จ — SESSION_SECRET อาจสั้นเกินไป",
+  session_encode_failed: "เซ็น session ไม่สำเร็จ",
 };
 
 const inputClass =
@@ -31,7 +35,7 @@ const inputClass =
 
 function LoginInner() {
   const { language } = useLanguage();
-  const { lineConfigured, sessionConfigured, isLoading, user } = useAuth();
+  const { lineConfigured, isLoading, user } = useAuth();
   const params = useSearchParams();
   const errorCode = params.get("error");
   const after = params.get("after") ?? "/";
@@ -79,15 +83,21 @@ function LoginInner() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const json = (await res.json()) as { ok?: boolean; reason?: string };
-        if (!res.ok || !json.ok) {
+        const json = (await res.json()) as {
+          ok?: boolean;
+          reason?: string;
+          session?: SimpleStaffSession;
+        };
+        if (!res.ok || !json.ok || !json.session) {
           setFormError(
             json.reason ?? `ดำเนินการไม่สำเร็จ (HTTP ${res.status})`
           );
           setBusy(false);
           return;
         }
-        // Full reload so AuthProvider re-runs /api/auth/me with the new cookie.
+        // Persist the staff session, then full-reload so AuthProvider picks
+        // it up from localStorage.
+        setSimpleStaffSession(json.session);
         window.location.assign(after);
       } catch (err) {
         setFormError(
@@ -158,20 +168,7 @@ function LoginInner() {
           </div>
         )}
 
-        {!sessionConfigured ? (
-          <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900">
-            <p className="font-semibold mb-1">
-              {th
-                ? "ระบบยังไม่ได้ตั้งค่า SESSION_SECRET"
-                : "SESSION_SECRET is not configured"}
-            </p>
-            <p className="text-yellow-800 text-[12px] leading-relaxed">
-              {th
-                ? "ตั้งค่า SESSION_SECRET (อย่างน้อย 32 ตัวอักษร) ใน environment แล้ว redeploy — ระบบจะเปิดให้เข้าสู่ระบบด้วยรหัสพนักงาน"
-                : "Set SESSION_SECRET (≥32 chars) and redeploy to enable staff login."}
-            </p>
-          </div>
-        ) : bootstrapNeeded === null ? (
+        {bootstrapNeeded === null ? (
           <p className="text-sm text-gray-500 text-center py-4">
             {th ? "กำลังตรวจสอบระบบ..." : "Checking system..."}
           </p>
@@ -280,7 +277,7 @@ function LoginInner() {
           </form>
         )}
 
-        {sessionConfigured && lineConfigured && !showBootstrap && (
+        {lineConfigured && !showBootstrap && (
           <>
             <div className="my-4 flex items-center gap-3 text-[11px] text-gray-400">
               <span className="h-px flex-1 bg-gray-200" />
