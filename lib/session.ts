@@ -10,7 +10,9 @@
 //   - sub       = users.line_user_id (provider subject)
 //   - exp       = epoch seconds; default 7 days
 //
-// Signing key:   process.env.SESSION_SECRET  (must be ≥ 32 chars in prod)
+// Signing key:   SESSION_SECRET — or the STAFF_SESSION_SECRET /
+//                INTERNAL_SESSION_SECRET aliases — read from the runtime
+//                environment at call time. Must be ≥ 32 chars.
 //
 // Server-only — never import from a "use client" file.
 
@@ -46,9 +48,36 @@ function base64urlDecode(value: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+// SESSION_SECRET is the canonical name; the aliases let a deployment that
+// named the variable differently still resolve. Checked in priority order.
+export const SESSION_SECRET_ENV_NAMES = [
+  "SESSION_SECRET",
+  "STAFF_SESSION_SECRET",
+  "INTERNAL_SESSION_SECRET",
+] as const;
+
+/** Minimum length for the signing secret to count as configured. */
+export const MIN_SESSION_SECRET_LENGTH = 32;
+
+/**
+ * Resolve the session signing secret from the runtime environment. Reads
+ * process.env directly at call time (server-only — never inlined at build)
+ * and returns the first non-empty alias, trimmed. null when none is set.
+ */
+export function resolveSessionSecret(): string | null {
+  for (const name of SESSION_SECRET_ENV_NAMES) {
+    const raw = process.env[name];
+    if (typeof raw === "string") {
+      const value = raw.trim();
+      if (value.length > 0) return value;
+    }
+  }
+  return null;
+}
+
 function readSecret(): string | null {
-  const secret = process.env.SESSION_SECRET ?? "";
-  if (!secret || secret.length < 16) return null;
+  const secret = resolveSessionSecret();
+  if (!secret || secret.length < MIN_SESSION_SECRET_LENGTH) return null;
   return secret;
 }
 
