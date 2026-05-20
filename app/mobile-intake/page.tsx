@@ -33,7 +33,7 @@ function newId(): string {
 }
 
 export default function MobileIntakePage() {
-  const { branch, source: branchSource } = useBranch();
+  const { branch } = useBranch();
 
   // Front-counter queue number — REQUIRED. Continues the shop's running
   // queue, gets written on the bag tag, and becomes orders.job_id on
@@ -51,74 +51,102 @@ export default function MobileIntakePage() {
   // writes on the bag. Falls back to draftCode for legacy submits.
   const [savedJobCode, setSavedJobCode] = useState<string | null>(null);
 
-  // Permanent branch resolution — independent of useBranch()'s in-memory
-  // value. We hit public.branches at mount and cache the real row's UUID,
-  // so the submit payload carries an identifier that survives any stale
-  // brandConfig.ts seed slug (e.g. "c24-thonburi-market"). The server's
-  // resolveBranchIdentity converts UUID -> canonical branches.code, and
-  // that canonical code is what lands in intake_drafts.branch_id.
+  // Permanent branch resolution — fetched from /api/public/branches-list
+  // (service-role, RLS-bypassing) rather than from the browser Supabase
+  // client, which RLS on public.branches can block in production. The
+  // page caches the active row's UUID; the submit payload carries that
+  // UUID and the server converts it to the canonical branches.code for
+  // intake_drafts.branch_id. This severs the static brandConfig.ts seed
+  // slug ("c24-thonburi-market") from ever landing in the DB.
+  type ApiBranch = {
+    id: string;
+    code: string;
+    short_code: string | null;
+    name: string;
+    label?: string | null;
+  };
+  const [apiBranches, setApiBranches] = useState<ApiBranch[]>([]);
   const [activeBranchUuid, setActiveBranchUuid] = useState<string | null>(
     null
   );
   const [branchResolveError, setBranchResolveError] = useState<string | null>(
     null
   );
+  const [needsBranchPick, setNeedsBranchPick] = useState<boolean>(false);
 
   useEffect(() => {
-    // Only resolve once the branchContext has DB-loaded rows. While the
-    // context is in "loading" / "fallback", the in-memory branch.id may
-    // be the static lib/brandConfig.ts seed — we want a real DB row.
-    if (branchSource !== "db") return;
     let cancelled = false;
     void (async () => {
-      const candidate = branch.id;
-      // Try branches.code (the canonical join key — branchContext
-      // already maps row.code into branch.id when source === "db").
-      let row = await supabase
-        .from("branches")
-        .select("id, code")
-        .eq("code", candidate)
-        .eq("is_active", true)
-        .limit(1)
-        .maybeSingle();
-      // Fall back to short_code — older operators sometimes type the
-      // human prefix ("B01") in places where code was historically used.
-      if (!row.data) {
-        row = await supabase
-          .from("branches")
-          .select("id, code")
-          .eq("short_code", candidate)
-          .eq("is_active", true)
-          .limit(1)
-          .maybeSingle();
-      }
-      // Last resort: first active branch. Keeps the form usable when the
-      // selected branch was deactivated or the slug is a legacy seed
-      // that doesn't exist in the DB anymore.
-      if (!row.data) {
-        row = await supabase
-          .from("branches")
-          .select("id, code")
-          .eq("is_active", true)
-          .order("code", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-      }
-      if (cancelled) return;
-      if (!row.data) {
+      try {
+        const res = await fetch("/api/public/branches-list", {
+          cache: "no-store",
+        });
+        const json = (await res.json()) as {
+          ok?: boolean;
+          branches?: ApiBranch[];
+        };
+        if (cancelled) return;
+        if (!res.ok || !json.ok || !json.branches) {
+          setBranchResolveError(
+            "ยังโหลดข้อมูลสาขาไม่สำเร็จ กรุณาลองรีเฟรชหน้านี้อีกครั้ง"
+          );
+          return;
+        }
+        const list = json.branches;
+        setApiBranches(list);
+
+        if (list.length === 0) {
+          setBranchResolveError(
+            "ไม่พบสาขาที่เปิดใช้งานในระบบ กรุณาแจ้งผู้ดูแลก่อนบันทึกงาน"
+          );
+          return;
+        }
+
+        // Match candidate from useBranch() against id, code, short_code,
+        // name. branchContext seeds branch.id from lib/brandConfig.ts
+        // before its DB list lands — that legacy slug will simply not
+        // match below, which is exactly what we want.
+        const candidate = (branch.id ?? "").trim();
+        const match = candidate
+          ? list.find(
+              (b) =>
+                b.id === candidate ||
+                b.code === candidate ||
+                b.short_code === candidate ||
+                b.name === candidate
+            )
+          : null;
+
+        if (match) {
+          setActiveBranchUuid(match.id);
+          setNeedsBranchPick(false);
+          setBranchResolveError(null);
+          return;
+        }
+        // Exactly one active branch: auto-pick it. Safe single-shop case.
+        if (list.length === 1) {
+          setActiveBranchUuid(list[0].id);
+          setNeedsBranchPick(false);
+          setBranchResolveError(null);
+          return;
+        }
+        // Multiple active branches and no candidate match: require the
+        // operator to choose. Avoids guessing a branch on multi-shop
+        // deployments where the wrong default could mis-route a job.
         setActiveBranchUuid(null);
+        setNeedsBranchPick(true);
+        setBranchResolveError(null);
+      } catch (err) {
+        if (cancelled) return;
         setBranchResolveError(
-          "ไม่พบสาขาที่เปิดใช้งานในระบบ กรุณาแจ้งผู้ดูแลก่อนบันทึกงาน"
+          err instanceof Error ? err.message : "โหลดข้อมูลสาขาไม่สำเร็จ"
         );
-        return;
       }
-      setActiveBranchUuid(String((row.data as { id: string }).id));
-      setBranchResolveError(null);
     })();
     return () => {
       cancelled = true;
     };
-  }, [branchSource, branch.id]);
+  }, [branch.id]);
 
   // One grouping token per capture session — clusters this draft's media.
   const groupingToken = useRef(newId());
@@ -243,31 +271,19 @@ export default function MobileIntakePage() {
       setErrorMessage("รอรูป/วิดีโออัปโหลดให้เสร็จก่อน");
       return;
     }
-    // Block submit until the branch list has loaded from public.branches.
-    // useBranch() seeds from lib/brandConfig.ts (e.g. "c24-thonburi-market")
-    // before the DB returns; submitting in that window would store the
-    // legacy seed slug in intake_drafts.branch_id, which the resolver
-    // can't map to a real branches row (codes are now "B01" etc.).
-    if (branchSource === "loading") {
-      setErrorMessage(
-        "กำลังโหลดข้อมูลสาขา กรุณารอสักครู่แล้วลองอีกครั้ง"
-      );
-      return;
-    }
-    if (branchSource === "fallback") {
-      setErrorMessage(
-        "ยังเชื่อมต่อข้อมูลสาขาไม่สำเร็จ กรุณาเช็คอินเทอร์เน็ตแล้วรีเฟรชหน้านี้ ก่อนบันทึกงาน"
-      );
-      return;
-    }
     // Final gate — the page must hold a real branches.id (uuid) before
     // submit, so the server never receives the static brandConfig.ts
     // slug. This is the permanent fix for "c24-thonburi-market" leaking
-    // into intake_drafts.branch_id.
+    // into intake_drafts.branch_id. branchSource is no longer consulted
+    // here: /api/public/branches-list is the authoritative source.
     if (!activeBranchUuid) {
+      if (needsBranchPick) {
+        setErrorMessage("กรุณาเลือกสาขาก่อนบันทึกงาน");
+        return;
+      }
       setErrorMessage(
         branchResolveError ??
-          "ยังจับคู่ข้อมูลสาขากับ public.branches ไม่สำเร็จ กรุณารอสักครู่แล้วลองอีกครั้ง"
+          "ยังโหลดข้อมูลสาขาไม่สำเร็จ กรุณาลองรีเฟรชหน้านี้อีกครั้ง"
       );
       return;
     }
@@ -363,17 +379,43 @@ export default function MobileIntakePage() {
           </p>
         </div>
 
-        {/* Branch-source banner. Bag-tag drafts must NOT save against the
-            legacy lib/brandConfig.ts seed; warn until the live branches
-            list lands AND the page has matched it to a real branches.id. */}
-        {(branchSource !== "db" || !activeBranchUuid) && (
+        {/* Branch resolution states. Bag-tag drafts must NOT save against
+            the legacy lib/brandConfig.ts seed — gate visibly until the
+            page has a real branches.id. */}
+        {needsBranchPick && apiBranches.length > 0 && (
+          <div className="space-y-2 rounded-2xl border-2 border-amber-400 bg-amber-50 p-3">
+            <label
+              htmlFor="branch-picker"
+              className="block text-xs font-extrabold text-amber-900"
+            >
+              เลือกสาขาก่อนบันทึกงาน
+            </label>
+            <select
+              id="branch-picker"
+              value={activeBranchUuid ?? ""}
+              onChange={(e) => {
+                const nextId = e.target.value || null;
+                setActiveBranchUuid(nextId);
+                if (nextId) {
+                  setNeedsBranchPick(false);
+                  setBranchResolveError(null);
+                }
+              }}
+              className="w-full rounded-xl border border-amber-400 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              <option value="">— เลือกสาขา —</option>
+              {apiBranches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label ?? b.name} ({b.code})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {!needsBranchPick && !activeBranchUuid && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-            {branchSource === "loading"
-              ? "กำลังโหลดข้อมูลสาขา..."
-              : branchSource === "fallback"
-                ? "ยังเชื่อมต่อข้อมูลสาขาไม่สำเร็จ — โปรดเช็คอินเทอร์เน็ตแล้วรีเฟรชก่อนบันทึกงาน"
-                : branchResolveError ??
-                  "กำลังจับคู่ข้อมูลสาขากับ public.branches..."}
+            {branchResolveError ??
+              "กำลังจับคู่ข้อมูลสาขากับ public.branches..."}
           </div>
         )}
 

@@ -1,12 +1,15 @@
 // GET /api/public/branches-list — public-facing list of active branches.
 //
-// Used by /quote (the customer picks which branch they want to use) and
-// any future public dropdown. Returns only the columns the customer
-// needs — no internal ids, no LINE channel tokens, no operational fields.
+// Used by /quote (customer picks which branch), /mobile-intake (front-
+// counter staff resolves the active branch's real UUID without needing
+// direct supabase access), and any future public dropdown.
 //
-// No auth, no rate-limit on this endpoint — it's read-only and the
-// payload is the same for everyone (the branches table contents are
-// already public information).
+// Returns only the columns a public caller needs. id is the branches.id
+// uuid — exposing it is safe: branches are public information and the
+// uuid is already returned by every order/customer endpoint that joins
+// against it. No LINE channel tokens, no operational fields.
+//
+// No auth, no rate-limit — read-only, identical payload for everyone.
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
@@ -16,7 +19,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type BranchRow = {
+  id: string;
   code: string;
+  short_code: string | null;
   short_label: string | null;
   short_name: string | null;
   name: string;
@@ -34,7 +39,7 @@ export async function GET() {
   const { data, error } = await admin
     .from("branches")
     .select(
-      "code, short_label, short_name, name, brand, is_active, operating_hours, manual_status, holiday_dates"
+      "id, code, short_code, short_label, short_name, name, brand, is_active, operating_hours, manual_status, holiday_dates"
     )
     .eq("is_active", true)
     .order("code", { ascending: true });
@@ -48,10 +53,16 @@ export async function GET() {
       holidayDates: b.holiday_dates,
     });
     return {
+      // Identifiers the mobile-intake page matches against — id is the
+      // canonical handle to send to /api/mobile-intake/draft, which
+      // converts it to branches.code for intake_drafts.branch_id.
+      id: b.id,
       code: b.code,
+      short_code: b.short_code,
+      name: b.name,
+      // Display + status fields preserved for the existing /quote consumer.
       label: b.short_label ?? b.short_name ?? b.name,
       brand: b.brand,
-      // Phase 27D: dynamic open/closed for the quote wizard selector.
       status: status.status,
       statusLabel: status.label,
     };
