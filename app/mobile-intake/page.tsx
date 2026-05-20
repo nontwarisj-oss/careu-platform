@@ -9,7 +9,7 @@
 //
 // It does NOT touch /intake, Pricing Master, or order creation.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
 import { useBranch } from "@/lib/branchContext";
 import { compressImage } from "@/lib/imageCompress";
@@ -33,7 +33,7 @@ function newId(): string {
 }
 
 export default function MobileIntakePage() {
-  const { branch } = useBranch();
+  const { branch, source: branchSource } = useBranch();
 
   // Front-counter queue number — REQUIRED. Continues the shop's running
   // queue, gets written on the bag tag, and becomes orders.job_id on
@@ -50,6 +50,75 @@ export default function MobileIntakePage() {
   // The exact code shown big on the success screen — what the staff
   // writes on the bag. Falls back to draftCode for legacy submits.
   const [savedJobCode, setSavedJobCode] = useState<string | null>(null);
+
+  // Permanent branch resolution — independent of useBranch()'s in-memory
+  // value. We hit public.branches at mount and cache the real row's UUID,
+  // so the submit payload carries an identifier that survives any stale
+  // brandConfig.ts seed slug (e.g. "c24-thonburi-market"). The server's
+  // resolveBranchIdentity converts UUID -> canonical branches.code, and
+  // that canonical code is what lands in intake_drafts.branch_id.
+  const [activeBranchUuid, setActiveBranchUuid] = useState<string | null>(
+    null
+  );
+  const [branchResolveError, setBranchResolveError] = useState<string | null>(
+    null
+  );
+
+  useEffect(() => {
+    // Only resolve once the branchContext has DB-loaded rows. While the
+    // context is in "loading" / "fallback", the in-memory branch.id may
+    // be the static lib/brandConfig.ts seed — we want a real DB row.
+    if (branchSource !== "db") return;
+    let cancelled = false;
+    void (async () => {
+      const candidate = branch.id;
+      // Try branches.code (the canonical join key — branchContext
+      // already maps row.code into branch.id when source === "db").
+      let row = await supabase
+        .from("branches")
+        .select("id, code")
+        .eq("code", candidate)
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+      // Fall back to short_code — older operators sometimes type the
+      // human prefix ("B01") in places where code was historically used.
+      if (!row.data) {
+        row = await supabase
+          .from("branches")
+          .select("id, code")
+          .eq("short_code", candidate)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+      }
+      // Last resort: first active branch. Keeps the form usable when the
+      // selected branch was deactivated or the slug is a legacy seed
+      // that doesn't exist in the DB anymore.
+      if (!row.data) {
+        row = await supabase
+          .from("branches")
+          .select("id, code")
+          .eq("is_active", true)
+          .order("code", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+      }
+      if (cancelled) return;
+      if (!row.data) {
+        setActiveBranchUuid(null);
+        setBranchResolveError(
+          "ไม่พบสาขาที่เปิดใช้งานในระบบ กรุณาแจ้งผู้ดูแลก่อนบันทึกงาน"
+        );
+        return;
+      }
+      setActiveBranchUuid(String((row.data as { id: string }).id));
+      setBranchResolveError(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branchSource, branch.id]);
 
   // One grouping token per capture session — clusters this draft's media.
   const groupingToken = useRef(newId());
@@ -174,13 +243,44 @@ export default function MobileIntakePage() {
       setErrorMessage("รอรูป/วิดีโออัปโหลดให้เสร็จก่อน");
       return;
     }
+    // Block submit until the branch list has loaded from public.branches.
+    // useBranch() seeds from lib/brandConfig.ts (e.g. "c24-thonburi-market")
+    // before the DB returns; submitting in that window would store the
+    // legacy seed slug in intake_drafts.branch_id, which the resolver
+    // can't map to a real branches row (codes are now "B01" etc.).
+    if (branchSource === "loading") {
+      setErrorMessage(
+        "กำลังโหลดข้อมูลสาขา กรุณารอสักครู่แล้วลองอีกครั้ง"
+      );
+      return;
+    }
+    if (branchSource === "fallback") {
+      setErrorMessage(
+        "ยังเชื่อมต่อข้อมูลสาขาไม่สำเร็จ กรุณาเช็คอินเทอร์เน็ตแล้วรีเฟรชหน้านี้ ก่อนบันทึกงาน"
+      );
+      return;
+    }
+    // Final gate — the page must hold a real branches.id (uuid) before
+    // submit, so the server never receives the static brandConfig.ts
+    // slug. This is the permanent fix for "c24-thonburi-market" leaking
+    // into intake_drafts.branch_id.
+    if (!activeBranchUuid) {
+      setErrorMessage(
+        branchResolveError ??
+          "ยังจับคู่ข้อมูลสาขากับ public.branches ไม่สำเร็จ กรุณารอสักครู่แล้วลองอีกครั้ง"
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       const res = await fetch("/api/mobile-intake/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          branchId: branch.id,
+          // UUID, not slug — server resolves to canonical branches.code
+          // for storage. This breaks the chain that previously let the
+          // legacy "c24-thonburi-market" slug land in the DB.
+          branchId: activeBranchUuid,
           manualJobCode: code,
           customerName: name.trim() || null,
           customerPhone: phone.trim() || null,
@@ -262,6 +362,20 @@ export default function MobileIntakePage() {
             สาขา {branch.shortLabel} · ถ่ายรูป + เขียนโน้ตสั้น ๆ แล้วกดบันทึก
           </p>
         </div>
+
+        {/* Branch-source banner. Bag-tag drafts must NOT save against the
+            legacy lib/brandConfig.ts seed; warn until the live branches
+            list lands AND the page has matched it to a real branches.id. */}
+        {(branchSource !== "db" || !activeBranchUuid) && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+            {branchSource === "loading"
+              ? "กำลังโหลดข้อมูลสาขา..."
+              : branchSource === "fallback"
+                ? "ยังเชื่อมต่อข้อมูลสาขาไม่สำเร็จ — โปรดเช็คอินเทอร์เน็ตแล้วรีเฟรชก่อนบันทึกงาน"
+                : branchResolveError ??
+                  "กำลังจับคู่ข้อมูลสาขากับ public.branches..."}
+          </div>
+        )}
 
         {/* Manual job code — REQUIRED. Self-sanitising on every keystroke
             (uppercase + drops spaces) via sanitizeJobIdInput, so what
