@@ -10,6 +10,7 @@
 // uses the existing /intake flow and then marks the draft converted.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { RouteGuard } from "@/components/RouteGuard";
 import {
   DRAFT_STATUS_BADGE,
@@ -18,6 +19,12 @@ import {
   type DraftStatus,
   type IntakeDraft,
 } from "@/lib/intakeDrafts";
+import {
+  calculateServiceQuote,
+  getActiveServicePrices,
+  type ServicePrice,
+} from "@/lib/servicePriceMaster";
+import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
 
 export default function IntakeDraftsPage() {
   return (
@@ -28,7 +35,9 @@ export default function IntakeDraftsPage() {
 }
 
 function IntakeDraftsInner() {
+  const router = useRouter();
   const [drafts, setDrafts] = useState<IntakeDraft[]>([]);
+  const [services, setServices] = useState<ServicePrice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<DraftStatus | "all">("all");
@@ -59,6 +68,63 @@ function IntakeDraftsInner() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Load active Pricing Master catalog once — the Approve panel binds its
+  // service select to this list, and `calculateServiceQuote` (pure) reads
+  // from these rows. Browser anon can read service_price_master.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await getActiveServicePrices();
+      if (cancelled) return;
+      setServices(res.services);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const convertDraft = useCallback(
+    async (
+      draftId: string,
+      payload: { serviceCode: string; qty: number; urgent: boolean }
+    ): Promise<{ orderId: string | null; error: string | null }> => {
+      setBusyId(draftId);
+      try {
+        const res = await fetch(
+          `/api/admin/intake-drafts/${encodeURIComponent(draftId)}/convert`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...getSimpleStaffAuthHeaders(),
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+        const json = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          orderId?: string;
+        };
+        if (!res.ok || !json.ok || !json.orderId) {
+          const reason = json.error ?? `อนุมัติไม่สำเร็จ (HTTP ${res.status})`;
+          setError(reason);
+          return { orderId: null, error: reason };
+        }
+        await load();
+        return { orderId: json.orderId, error: null };
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "อนุมัติไม่สำเร็จ — ลองอีกครั้ง";
+        setError(msg);
+        return { orderId: null, error: msg };
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
 
   const updateDraft = useCallback(
     async (
@@ -169,7 +235,16 @@ function IntakeDraftsInner() {
               key={draft.id}
               draft={draft}
               busy={busyId === draft.id}
+              services={services}
               onUpdate={updateDraft}
+              onConvert={async (payload) => {
+                const result = await convertDraft(draft.id, payload);
+                if (result.orderId) {
+                  // Jump straight to the new document so the reviewer can
+                  // hand it to the customer / mark paid.
+                  router.push(`/orders/${result.orderId}/document`);
+                }
+              }}
             />
           ))}
         </div>
@@ -181,16 +256,30 @@ function IntakeDraftsInner() {
 function DraftCard({
   draft,
   busy,
+  services,
   onUpdate,
+  onConvert,
 }: {
   draft: IntakeDraft;
   busy: boolean;
+  services: ServicePrice[];
   onUpdate: (
     draftId: string,
     patch: { status?: DraftStatus; adminReviewNote?: string }
   ) => void;
+  onConvert: (payload: {
+    serviceCode: string;
+    qty: number;
+    urgent: boolean;
+  }) => Promise<void>;
 }) {
   const [note, setNote] = useState(draft.adminReviewNote ?? "");
+  // Approve panel state — local to each card so changes don't leak.
+  const [approveServiceCode, setApproveServiceCode] = useState<string>("");
+  const [approveQty, setApproveQty] = useState<number>(1);
+  const [approveUrgent, setApproveUrgent] = useState<boolean>(
+    draft.urgentRequested
+  );
 
   const created = draft.createdAt
     ? new Date(draft.createdAt).toLocaleString("th-TH", {
@@ -199,13 +288,49 @@ function DraftCard({
       })
     : "-";
 
+  // Primary user-visible id is the manual code the staff wrote on the bag.
+  // draft_code is shown small as the system fallback id (audit only).
+  const primaryCode = draft.manualJobCode ?? draft.draftCode;
+
+  // Pricing Master row picked by the Approve panel — drives the live quote.
+  const pickedService = useMemo(
+    () => services.find((s) => s.serviceCode === approveServiceCode) ?? null,
+    [services, approveServiceCode]
+  );
+  const quote = useMemo(
+    () =>
+      pickedService
+        ? calculateServiceQuote(pickedService, approveQty, approveUrgent)
+        : null,
+    [pickedService, approveQty, approveUrgent]
+  );
+
+  const alreadyConverted =
+    draft.status === "CONVERTED_TO_ORDER" || !!draft.convertedOrderId;
+  const cancelled = draft.status === "CANCELLED";
+  // Convert is gated only by "ready to be a real order" — not by the
+  // manual queue status. AUTO_QUOTE picks are eligible; GUIDED/MANUAL ones
+  // are not (the convert route rejects them and tells the admin to use
+  // /intake instead).
+  const convertReady =
+    !alreadyConverted &&
+    !cancelled &&
+    !!quote &&
+    quote.total !== null &&
+    !!draft.manualJobCode;
+
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-      {/* Header */}
+      {/* Header — manual job code is the primary, big identifier. */}
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="font-mono text-lg font-extrabold text-gray-900">
-            {draft.draftCode}
+          <p className="font-mono text-2xl font-extrabold text-gray-900">
+            {primaryCode}
+          </p>
+          <p className="text-[11px] text-gray-500">
+            {draft.manualJobCode
+              ? `รหัสถุง · ระบบ: ${draft.draftCode}`
+              : `(ไม่มีรหัสรับงาน — ใช้ระบบ ${draft.draftCode})`}
           </p>
           <p className="text-[11px] text-gray-500">
             {created}
@@ -344,14 +469,117 @@ function DraftCard({
         />
       </div>
 
-      {/* Prepare order — opens /intake with this draft prefilled */}
+      {/* Approve & Create Order — fast path. Price comes from
+          Pricing Master via the pure quote engine; the admin only picks
+          service / qty / urgent. */}
+      <div className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50/60 px-3 py-2.5">
+        <p className="text-[11px] font-bold text-emerald-900">
+          อนุมัติและสร้างใบงาน (ใช้ราคาจาก Pricing Master)
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <select
+            value={approveServiceCode}
+            onChange={(e) => setApproveServiceCode(e.target.value)}
+            disabled={busy || alreadyConverted || cancelled}
+            className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="">— เลือกบริการ —</option>
+            {services.map((s) => (
+              <option key={s.serviceCode} value={s.serviceCode}>
+                {s.serviceNameTh} ({s.serviceCode})
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={approveQty}
+            onChange={(e) =>
+              setApproveQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))
+            }
+            disabled={busy || alreadyConverted || cancelled}
+            className="w-16 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-center text-xs outline-none focus:ring-2 focus:ring-emerald-500"
+            aria-label="จำนวน"
+          />
+          <button
+            type="button"
+            onClick={() => setApproveUrgent((u) => !u)}
+            disabled={busy || alreadyConverted || cancelled}
+            className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold ${
+              approveUrgent
+                ? "border-yellow-500 bg-yellow-100 text-yellow-800"
+                : "border-gray-300 bg-white text-gray-500"
+            }`}
+          >
+            ⚡ ด่วน
+          </button>
+        </div>
+        {/* Live price + mode-specific notice */}
+        {quote && (
+          <p className="mt-2 text-[11px] text-emerald-900">
+            {quote.total !== null ? (
+              <>
+                รวม{" "}
+                <span className="font-mono font-bold">
+                  ฿{quote.total.toFixed(2)}
+                </span>{" "}
+                · {quote.serviceNameTh}
+              </>
+            ) : (
+              <span className="text-amber-800">{quote.noticeTh}</span>
+            )}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={() =>
+            void onConvert({
+              serviceCode: approveServiceCode,
+              qty: approveQty,
+              urgent: approveUrgent,
+            })
+          }
+          disabled={busy || !convertReady}
+          className="mt-2 w-full rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-40"
+          title={
+            !draft.manualJobCode
+              ? "Draft นี้ไม่มีรหัสรับงาน — ใช้ /intake ด้านล่างแทน"
+              : alreadyConverted
+                ? "Draft นี้ถูกสร้างใบงานแล้ว"
+                : cancelled
+                  ? "Draft นี้ถูกยกเลิก"
+                  : !quote || quote.total === null
+                    ? "บริการนี้ต้องประเมินมือ — ใช้ /intake ด้านล่างแทน"
+                    : "อนุมัติและสร้างใบงาน"
+          }
+        >
+          {busy
+            ? "กำลังสร้างใบงาน…"
+            : alreadyConverted
+              ? "✓ สร้างใบงานแล้ว"
+              : "อนุมัติและสร้างใบงาน"}
+        </button>
+        {alreadyConverted && draft.convertedOrderId && (
+          <a
+            href={`/orders/${draft.convertedOrderId}/document`}
+            className="mt-1 block text-center text-[11px] font-semibold text-emerald-800 underline"
+          >
+            เปิดใบงาน →
+          </a>
+        )}
+      </div>
+
+      {/* Fallback / manual path — keep the existing /intake link for
+          drafts that need full manual entry (guided / manual quote, or
+          legacy drafts with no manual_job_code). */}
       <a
         href={`/intake?draftId=${encodeURIComponent(draft.id)}`}
         target="_blank"
         rel="noreferrer"
-        className="mt-2 block rounded-lg bg-green-700 px-3 py-2 text-center text-sm font-bold text-white hover:bg-green-800"
+        className="mt-2 block rounded-lg border border-gray-300 px-3 py-2 text-center text-xs font-semibold text-gray-700 hover:bg-gray-50"
       >
-        เปิด /intake เพื่อสร้างใบงานจริง →
+        หรือเปิด /intake (กรอกเอง) →
       </a>
       <p className="mt-1 text-[11px] text-gray-400">
         /intake จะกรอกชื่อ/เบอร์/โน้ต/รูป จาก Draft ให้อัตโนมัติ — กรอก Job ID

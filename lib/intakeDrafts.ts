@@ -77,7 +77,14 @@ export type IntakeDraftMedia = {
 
 export type IntakeDraft = {
   id: string;
+  /** System-internal short id (DYYMMDD-NNN). Auto-generated fallback only —
+   *  the user-facing identifier is `manualJobCode`, which the staff types
+   *  and writes on the bag tag. */
   draftCode: string;
+  /** The job code the front-counter staff typed at intake; carried into
+   *  orders.job_id on convert. Nullable for legacy drafts only — the
+   *  mobile-intake form requires it for every new draft. */
+  manualJobCode: string | null;
   branchId: string | null;
   customerName: string | null;
   customerPhone: string | null;
@@ -89,7 +96,13 @@ export type IntakeDraft = {
   aiSuggestedServiceCode: string | null;
   aiConfidence: number | null;
   adminReviewNote: string | null;
+  /** Set by the convert route once a real order is created. */
   convertedOrderId: string | null;
+  /** customers.id linked / created by the convert route. */
+  customerId: string | null;
+  /** Final price the admin approved (from service_price_master via the
+   *  pure quote engine). Phase A: written by the convert route itself. */
+  approvedPrice: number | null;
   createdAt: string;
   updatedAt: string;
   media: IntakeDraftMedia[];
@@ -104,6 +117,7 @@ export function rowToIntakeDraft(
   return {
     id: String(row.id ?? ""),
     draftCode: String(row.draft_code ?? ""),
+    manualJobCode: row.manual_job_code ? String(row.manual_job_code) : null,
     branchId: row.branch_id ? String(row.branch_id) : null,
     customerName: row.customer_name ? String(row.customer_name) : null,
     customerPhone: row.customer_phone ? String(row.customer_phone) : null,
@@ -127,6 +141,11 @@ export function rowToIntakeDraft(
     convertedOrderId: row.converted_order_id
       ? String(row.converted_order_id)
       : null,
+    customerId: row.customer_id ? String(row.customer_id) : null,
+    approvedPrice:
+      row.approved_price === null || row.approved_price === undefined
+        ? null
+        : Number(row.approved_price),
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
     media,

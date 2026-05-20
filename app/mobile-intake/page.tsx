@@ -13,6 +13,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
 import { useBranch } from "@/lib/branchContext";
 import { compressImage } from "@/lib/imageCompress";
+import { sanitizeJobIdInput } from "@/lib/jobId";
 
 type MediaItem = {
   localId: string;
@@ -34,6 +35,11 @@ function newId(): string {
 export default function MobileIntakePage() {
   const { branch } = useBranch();
 
+  // Front-counter queue number — REQUIRED. Continues the shop's running
+  // queue, gets written on the bag tag, and becomes orders.job_id on
+  // convert. Self-sanitising on every keystroke (drops spaces, uppercases)
+  // so staff never need to know the allowed alphabet.
+  const [manualJobCode, setManualJobCode] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [note, setNote] = useState("");
@@ -41,7 +47,9 @@ export default function MobileIntakePage() {
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [draftCode, setDraftCode] = useState<string | null>(null);
+  // The exact code shown big on the success screen — what the staff
+  // writes on the bag. Falls back to draftCode for legacy submits.
+  const [savedJobCode, setSavedJobCode] = useState<string | null>(null);
 
   // One grouping token per capture session — clusters this draft's media.
   const groupingToken = useRef(newId());
@@ -137,18 +145,27 @@ export default function MobileIntakePage() {
     setMedia((curr) => curr.filter((m) => m.localId !== localId));
 
   const resetForm = () => {
+    setManualJobCode("");
     setName("");
     setPhone("");
     setNote("");
     setUrgent(false);
     setMedia([]);
     setErrorMessage(null);
-    setDraftCode(null);
+    setSavedJobCode(null);
     groupingToken.current = newId();
   };
 
   const handleSubmit = async () => {
     setErrorMessage(null);
+    // Manual job code is the queue number written on the bag — required.
+    const code = manualJobCode.trim();
+    if (!code) {
+      setErrorMessage(
+        "กรอกรหัสรับงาน / เลขคิวที่จะเขียนติดถุงงานก่อน (ห้ามว่าง)"
+      );
+      return;
+    }
     if (!name.trim() && !phone.trim() && media.length === 0) {
       setErrorMessage("กรอกชื่อ/เบอร์ลูกค้า หรือถ่ายรูปอย่างน้อย 1 รูป");
       return;
@@ -164,6 +181,7 @@ export default function MobileIntakePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           branchId: branch.id,
+          manualJobCode: code,
           customerName: name.trim() || null,
           customerPhone: phone.trim() || null,
           staffNote: note.trim() || null,
@@ -177,12 +195,15 @@ export default function MobileIntakePage() {
         ok?: boolean;
         error?: string;
         draftCode?: string;
+        manualJobCode?: string;
       };
       if (!res.ok || !json.ok || !json.draftCode) {
         setErrorMessage(json.error ?? `บันทึกไม่สำเร็จ (HTTP ${res.status})`);
         return;
       }
-      setDraftCode(json.draftCode);
+      // Show the manual code on the success screen — that's the number
+      // staff actually writes on the bag. draftCode is only a fallback.
+      setSavedJobCode(json.manualJobCode ?? code ?? json.draftCode);
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : "บันทึกไม่สำเร็จ — ลองอีกครั้ง"
@@ -193,7 +214,7 @@ export default function MobileIntakePage() {
   };
 
   // ---- Success screen -----------------------------------------------------
-  if (draftCode) {
+  if (savedJobCode) {
     return (
       <div className="flex-1 min-h-screen bg-green-50 px-4 pt-20 pb-10">
         <div className="mx-auto w-full max-w-md">
@@ -202,12 +223,16 @@ export default function MobileIntakePage() {
               ✓
             </div>
             <p className="text-xl font-bold text-green-800">บันทึกแล้ว</p>
-            <p className="mt-4 text-sm text-gray-500">Draft ID</p>
+            <p className="mt-4 text-sm text-gray-500">รหัสรับงาน</p>
             <p className="mt-1 font-mono text-4xl font-extrabold tracking-wider text-gray-900">
-              {draftCode}
+              {savedJobCode}
             </p>
             <p className="mt-4 rounded-xl bg-yellow-50 border border-yellow-300 px-4 py-3 text-base font-semibold text-yellow-800">
-              ✏️ ให้เขียนเลขนี้ติดถุงงาน
+              ✏️ เขียนเลขนี้ติดถุงงาน
+            </p>
+            <p className="mt-3 rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm font-medium text-blue-900 text-left">
+              📷 ให้ลูกค้าถ่ายภาพรหัสรับงาน/ถุงงาน แล้วส่งเข้า LINE OA
+              เพื่อใช้เป็นหลักฐานตอนมารับงาน
             </p>
           </div>
           <button
@@ -235,6 +260,37 @@ export default function MobileIntakePage() {
           <h1 className="text-2xl font-extrabold text-gray-900">รับงานหน้าร้าน</h1>
           <p className="text-xs text-gray-500">
             สาขา {branch.shortLabel} · ถ่ายรูป + เขียนโน้ตสั้น ๆ แล้วกดบันทึก
+          </p>
+        </div>
+
+        {/* Manual job code — REQUIRED. Self-sanitising on every keystroke
+            (uppercase + drops spaces) via sanitizeJobIdInput, so what
+            staff types matches what the bag will say. */}
+        <div className="space-y-2 rounded-2xl border-2 border-green-400 bg-green-50/40 p-4">
+          <label
+            htmlFor="manual-job-code"
+            className="block text-sm font-extrabold text-green-900"
+          >
+            รหัสรับงาน / เลขคิวที่เขียนติดถุง
+            <span className="ml-1 text-red-600">*</span>
+          </label>
+          <input
+            id="manual-job-code"
+            type="text"
+            inputMode="text"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            value={manualJobCode}
+            onChange={(e) =>
+              setManualJobCode(sanitizeJobIdInput(e.target.value))
+            }
+            placeholder="เช่น 36XX"
+            className="w-full rounded-2xl border-2 border-green-500 bg-white p-4 text-center font-mono text-2xl font-extrabold tracking-wider text-gray-900 outline-none focus:ring-2 focus:ring-green-600"
+          />
+          <p className="text-[11px] text-green-900/80">
+            กรอกเลขคิวงานตามที่หน้าร้านรันต่อจากงานก่อนหน้า
+            แล้วเขียนเลขเดียวกันติดถุงงาน
           </p>
         </div>
 
