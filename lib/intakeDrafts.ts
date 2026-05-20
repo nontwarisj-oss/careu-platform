@@ -57,6 +57,39 @@ export function isDraftStatus(value: unknown): value is DraftStatus {
   );
 }
 
+// ---------- Review status (Phase B) ---------------------------------------
+// Independent from DraftStatus. DraftStatus is the workflow the staff sees
+// (NEW -> CANCELLED). ReviewStatus is the owner's verdict gate. The two
+// move on different cadences: status can be ADMIN_REVIEWING while
+// review_status is still needs_review, etc.
+
+export type ReviewStatus = "needs_review" | "reviewed" | "converted";
+
+export const REVIEW_STATUSES: ReviewStatus[] = [
+  "needs_review",
+  "reviewed",
+  "converted",
+];
+
+export const REVIEW_STATUS_LABELS_TH: Record<ReviewStatus, string> = {
+  needs_review: "ต้องตรวจสอบ",
+  reviewed: "เจ้าของร้านตรวจแล้ว",
+  converted: "แปลงเป็น Order จริงแล้ว",
+};
+
+export const REVIEW_STATUS_BADGE: Record<ReviewStatus, string> = {
+  needs_review: "border-amber-300 bg-amber-50 text-amber-800",
+  reviewed: "border-emerald-300 bg-emerald-50 text-emerald-800",
+  converted: "border-gray-300 bg-gray-100 text-gray-700",
+};
+
+export function isReviewStatus(value: unknown): value is ReviewStatus {
+  return (
+    typeof value === "string" &&
+    (REVIEW_STATUSES as string[]).includes(value)
+  );
+}
+
 // ---------- Media ----------------------------------------------------------
 
 export type DraftMediaType = "image" | "video" | "audio";
@@ -91,10 +124,33 @@ export type IntakeDraft = {
   staffNote: string | null;
   urgentRequested: boolean;
   status: DraftStatus;
+
+  // ---- AI suggestion block (Phase B) ----
+  /** 'pending' | 'classified' | 'failed'. Bumped by the classify route. */
+  aiStatus: string | null;
   aiSummary: string | null;
   aiSuggestedCategory: string | null;
   aiSuggestedServiceCode: string | null;
   aiConfidence: number | null;
+  aiGarmentType: string | null;
+  aiRepairCategory: string | null;
+  aiRepairArea: string | null;
+  aiDifficulty: string | null;
+  aiSuggestedPrice: number | null;
+  aiNeedsHumanReview: boolean;
+
+  // ---- Owner-confirmed block (Phase B) ----
+  confirmedGarmentType: string | null;
+  confirmedRepairCategory: string | null;
+  confirmedRepairArea: string | null;
+  confirmedDifficulty: string | null;
+  confirmedPrice: number | null;
+
+  // ---- Review gate (Phase B) ----
+  reviewStatus: ReviewStatus;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+
   adminReviewNote: string | null;
   /** Set by the convert route once a real order is created. */
   convertedOrderId: string | null;
@@ -114,6 +170,9 @@ export function rowToIntakeDraft(
   media: IntakeDraftMedia[] = []
 ): IntakeDraft {
   const statusRaw = String(row.status ?? "NEW");
+  const reviewStatusRaw = String(row.review_status ?? "needs_review");
+  const numOrNull = (v: unknown): number | null =>
+    v === null || v === undefined || v === "" ? null : Number(v);
   return {
     id: String(row.id ?? ""),
     draftCode: String(row.draft_code ?? ""),
@@ -124,6 +183,8 @@ export function rowToIntakeDraft(
     staffNote: row.staff_note ? String(row.staff_note) : null,
     urgentRequested: row.urgent_requested === true,
     status: isDraftStatus(statusRaw) ? statusRaw : "NEW",
+
+    aiStatus: row.ai_status ? String(row.ai_status) : null,
     aiSummary: row.ai_summary ? String(row.ai_summary) : null,
     aiSuggestedCategory: row.ai_suggested_category
       ? String(row.ai_suggested_category)
@@ -131,10 +192,36 @@ export function rowToIntakeDraft(
     aiSuggestedServiceCode: row.ai_suggested_service_code
       ? String(row.ai_suggested_service_code)
       : null,
-    aiConfidence:
-      row.ai_confidence === null || row.ai_confidence === undefined
-        ? null
-        : Number(row.ai_confidence),
+    aiConfidence: numOrNull(row.ai_confidence),
+    aiGarmentType: row.ai_garment_type ? String(row.ai_garment_type) : null,
+    aiRepairCategory: row.ai_repair_category
+      ? String(row.ai_repair_category)
+      : null,
+    aiRepairArea: row.ai_repair_area ? String(row.ai_repair_area) : null,
+    aiDifficulty: row.ai_difficulty ? String(row.ai_difficulty) : null,
+    aiSuggestedPrice: numOrNull(row.ai_suggested_price),
+    aiNeedsHumanReview: row.ai_needs_human_review !== false,
+
+    confirmedGarmentType: row.confirmed_garment_type
+      ? String(row.confirmed_garment_type)
+      : null,
+    confirmedRepairCategory: row.confirmed_repair_category
+      ? String(row.confirmed_repair_category)
+      : null,
+    confirmedRepairArea: row.confirmed_repair_area
+      ? String(row.confirmed_repair_area)
+      : null,
+    confirmedDifficulty: row.confirmed_difficulty
+      ? String(row.confirmed_difficulty)
+      : null,
+    confirmedPrice: numOrNull(row.confirmed_price),
+
+    reviewStatus: isReviewStatus(reviewStatusRaw)
+      ? reviewStatusRaw
+      : "needs_review",
+    reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
+    reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+
     adminReviewNote: row.admin_review_note
       ? String(row.admin_review_note)
       : null,
@@ -142,10 +229,7 @@ export function rowToIntakeDraft(
       ? String(row.converted_order_id)
       : null,
     customerId: row.customer_id ? String(row.customer_id) : null,
-    approvedPrice:
-      row.approved_price === null || row.approved_price === undefined
-        ? null
-        : Number(row.approved_price),
+    approvedPrice: numOrNull(row.approved_price),
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
     media,

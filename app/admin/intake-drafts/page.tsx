@@ -16,8 +16,11 @@ import {
   DRAFT_STATUS_BADGE,
   DRAFT_STATUS_LABELS_TH,
   DRAFT_STATUSES,
+  REVIEW_STATUS_BADGE,
+  REVIEW_STATUS_LABELS_TH,
   type DraftStatus,
   type IntakeDraft,
+  type ReviewStatus,
 } from "@/lib/intakeDrafts";
 import {
   calculateServiceQuote,
@@ -25,6 +28,28 @@ import {
   type ServicePrice,
 } from "@/lib/servicePriceMaster";
 import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
+
+type UpdatePatch = {
+  status?: DraftStatus;
+  adminReviewNote?: string;
+  reviewStatus?: ReviewStatus;
+  confirmedGarmentType?: string | null;
+  confirmedRepairCategory?: string | null;
+  confirmedRepairArea?: string | null;
+  confirmedDifficulty?: string | null;
+  confirmedPrice?: number | null;
+};
+
+type ClassifySuggestion = {
+  garment_type: string;
+  repair_category: string;
+  repair_area: string | null;
+  difficulty: string;
+  confidence: number;
+  summary: string;
+  suggested_price: number | null;
+  needs_human_review: boolean;
+};
 
 export default function IntakeDraftsPage() {
   return (
@@ -127,15 +152,15 @@ function IntakeDraftsInner() {
   );
 
   const updateDraft = useCallback(
-    async (
-      draftId: string,
-      patch: { status?: DraftStatus; adminReviewNote?: string }
-    ) => {
+    async (draftId: string, patch: UpdatePatch) => {
       setBusyId(draftId);
       try {
         const res = await fetch("/api/admin/intake-drafts/update", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...getSimpleStaffAuthHeaders(),
+          },
           body: JSON.stringify({ draftId, ...patch }),
         });
         const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -148,6 +173,41 @@ function IntakeDraftsInner() {
         setError(err instanceof Error ? err.message : "อัปเดตไม่สำเร็จ");
       }
       setBusyId(null);
+    },
+    [load]
+  );
+
+  const classifyDraft = useCallback(
+    async (draftId: string): Promise<ClassifySuggestion | null> => {
+      setBusyId(draftId);
+      try {
+        const res = await fetch(
+          `/api/admin/intake-drafts/${encodeURIComponent(draftId)}/classify`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...getSimpleStaffAuthHeaders(),
+            },
+          }
+        );
+        const json = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          suggestion?: ClassifySuggestion;
+        };
+        if (!res.ok || !json.ok || !json.suggestion) {
+          setError(json.error ?? `วิเคราะห์ไม่สำเร็จ (HTTP ${res.status})`);
+          return null;
+        }
+        await load();
+        return json.suggestion;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "วิเคราะห์ไม่สำเร็จ");
+        return null;
+      } finally {
+        setBusyId(null);
+      }
     },
     [load]
   );
@@ -237,6 +297,7 @@ function IntakeDraftsInner() {
               busy={busyId === draft.id}
               services={services}
               onUpdate={updateDraft}
+              onClassify={() => classifyDraft(draft.id)}
               onConvert={async (payload) => {
                 const result = await convertDraft(draft.id, payload);
                 if (result.orderId) {
@@ -258,15 +319,14 @@ function DraftCard({
   busy,
   services,
   onUpdate,
+  onClassify,
   onConvert,
 }: {
   draft: IntakeDraft;
   busy: boolean;
   services: ServicePrice[];
-  onUpdate: (
-    draftId: string,
-    patch: { status?: DraftStatus; adminReviewNote?: string }
-  ) => void;
+  onUpdate: (draftId: string, patch: UpdatePatch) => void;
+  onClassify: () => Promise<ClassifySuggestion | null>;
   onConvert: (payload: {
     serviceCode: string;
     qty: number;
@@ -279,6 +339,29 @@ function DraftCard({
   const [approveQty, setApproveQty] = useState<number>(1);
   const [approveUrgent, setApproveUrgent] = useState<boolean>(
     draft.urgentRequested
+  );
+
+  // Phase B - owner-confirmation editor. Seeds from the draft so that
+  // already-saved values render on remount; never auto-saves.
+  const [confirmedGarmentType, setConfirmedGarmentType] = useState<string>(
+    draft.confirmedGarmentType ?? draft.aiGarmentType ?? ""
+  );
+  const [confirmedRepairCategory, setConfirmedRepairCategory] =
+    useState<string>(
+      draft.confirmedRepairCategory ?? draft.aiRepairCategory ?? ""
+    );
+  const [confirmedRepairArea, setConfirmedRepairArea] = useState<string>(
+    draft.confirmedRepairArea ?? draft.aiRepairArea ?? ""
+  );
+  const [confirmedDifficulty, setConfirmedDifficulty] = useState<string>(
+    draft.confirmedDifficulty ?? draft.aiDifficulty ?? ""
+  );
+  const [confirmedPriceStr, setConfirmedPriceStr] = useState<string>(
+    draft.confirmedPrice !== null && draft.confirmedPrice !== undefined
+      ? String(draft.confirmedPrice)
+      : draft.aiSuggestedPrice !== null && draft.aiSuggestedPrice !== undefined
+        ? String(draft.aiSuggestedPrice)
+        : ""
   );
 
   const created = draft.createdAt
@@ -337,13 +420,23 @@ function DraftCard({
             {draft.branchId ? ` · ${draft.branchId}` : ""}
           </p>
         </div>
-        <span
-          className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold ${
-            DRAFT_STATUS_BADGE[draft.status]
-          }`}
-        >
-          {DRAFT_STATUS_LABELS_TH[draft.status]}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${
+              DRAFT_STATUS_BADGE[draft.status]
+            }`}
+          >
+            {DRAFT_STATUS_LABELS_TH[draft.status]}
+          </span>
+          <span
+            className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${
+              REVIEW_STATUS_BADGE[draft.reviewStatus]
+            }`}
+            title="สถานะการตรวจสอบของเจ้าของร้าน"
+          >
+            {REVIEW_STATUS_LABELS_TH[draft.reviewStatus]}
+          </span>
+        </div>
       </div>
 
       {/* Customer + note */}
@@ -405,14 +498,150 @@ function DraftCard({
         </div>
       )}
 
-      {/* AI placeholder block */}
-      <div className="mt-3 rounded-lg border border-dashed border-indigo-200 bg-indigo-50/50 px-3 py-2 text-[11px] text-indigo-700">
-        <span className="font-semibold">AI: </span>
-        {draft.aiSummary
-          ? draft.aiSummary
-          : "ยังไม่ประมวลผล — รองรับวิเคราะห์รูป/วิดีโอ/เสียงในเฟสถัดไป"}
-        {draft.aiSuggestedServiceCode && (
-          <span> · แนะนำ: {draft.aiSuggestedServiceCode}</span>
+      {/* ----- Phase B: AI Analysis Panel ---------------------------------
+          Mock/rule-based classifier (lib/intakeClassifier.ts). Never sets
+          price or order fields directly - just suggests; the owner must
+          confirm via the editor below before convert. */}
+      <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50/50 px-3 py-2">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
+            ผลวิเคราะห์เบื้องต้น (AI)
+          </p>
+          <button
+            type="button"
+            disabled={busy || !!draft.convertedOrderId}
+            onClick={() => void onClassify()}
+            className="rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
+            title={
+              draft.convertedOrderId
+                ? "Draft นี้แปลงเป็น Order แล้ว ไม่สามารถวิเคราะห์ซ้ำได้"
+                : "เรียก mock AI วิเคราะห์ staff_note"
+            }
+          >
+            {draft.aiStatus === "classified"
+              ? "วิเคราะห์ซ้ำ"
+              : "วิเคราะห์หมวดงาน"}
+          </button>
+        </div>
+        {draft.aiStatus !== "classified" ? (
+          <p className="mt-1 text-[11px] text-indigo-600">
+            ยังไม่ได้วิเคราะห์ — กดปุ่ม &quot;วิเคราะห์หมวดงาน&quot;
+          </p>
+        ) : (
+          <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-indigo-900">
+            <div>
+              <span className="text-indigo-500">ประเภทเสื้อผ้า: </span>
+              {draft.aiGarmentType ?? "-"}
+            </div>
+            <div>
+              <span className="text-indigo-500">หมวดงานซ่อม: </span>
+              {draft.aiRepairCategory ?? "-"}
+            </div>
+            <div>
+              <span className="text-indigo-500">จุดที่ซ่อม: </span>
+              {draft.aiRepairArea ?? "-"}
+            </div>
+            <div>
+              <span className="text-indigo-500">ความยาก: </span>
+              {draft.aiDifficulty ?? "-"}
+            </div>
+            <div>
+              <span className="text-indigo-500">ราคาแนะนำเบื้องต้น: </span>
+              {draft.aiSuggestedPrice !== null
+                ? `฿${draft.aiSuggestedPrice.toFixed(0)}`
+                : "-"}
+            </div>
+            <div>
+              <span className="text-indigo-500">ความมั่นใจ: </span>
+              {draft.aiConfidence !== null
+                ? `${Math.round((draft.aiConfidence ?? 0) * 100)}%`
+                : "-"}
+            </div>
+            {draft.aiSummary && (
+              <p className="col-span-2 mt-1 italic text-indigo-700">
+                {draft.aiSummary}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ----- Phase B: Owner confirmation editor ------------------------- */}
+      <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/40 px-3 py-2">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-blue-900">
+          หมวดงานที่ยืนยัน (เจ้าของร้าน)
+        </p>
+        <div className="mt-1 grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={confirmedGarmentType}
+            onChange={(e) => setConfirmedGarmentType(e.target.value)}
+            placeholder="ประเภทเสื้อผ้า"
+            className="rounded-md border border-blue-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <input
+            type="text"
+            value={confirmedRepairCategory}
+            onChange={(e) => setConfirmedRepairCategory(e.target.value)}
+            placeholder="หมวดงานซ่อม"
+            className="rounded-md border border-blue-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <input
+            type="text"
+            value={confirmedRepairArea}
+            onChange={(e) => setConfirmedRepairArea(e.target.value)}
+            placeholder="จุดที่ซ่อม"
+            className="rounded-md border border-blue-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <input
+            type="text"
+            value={confirmedDifficulty}
+            onChange={(e) => setConfirmedDifficulty(e.target.value)}
+            placeholder="ความยาก"
+            className="rounded-md border border-blue-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={confirmedPriceStr}
+            onChange={(e) => setConfirmedPriceStr(e.target.value)}
+            placeholder="ราคาเบื้องต้น"
+            className="col-span-2 rounded-md border border-blue-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={busy || !!draft.convertedOrderId}
+          onClick={() => {
+            const priceNum = confirmedPriceStr.trim()
+              ? Number(confirmedPriceStr)
+              : null;
+            onUpdate(draft.id, {
+              confirmedGarmentType: confirmedGarmentType.trim() || null,
+              confirmedRepairCategory: confirmedRepairCategory.trim() || null,
+              confirmedRepairArea: confirmedRepairArea.trim() || null,
+              confirmedDifficulty: confirmedDifficulty.trim() || null,
+              confirmedPrice:
+                priceNum !== null && Number.isFinite(priceNum)
+                  ? priceNum
+                  : null,
+              reviewStatus: "reviewed",
+            });
+          }}
+          className="mt-2 w-full rounded-md bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-40"
+        >
+          บันทึกผลตรวจ
+        </button>
+        {draft.reviewedAt && (
+          <p className="mt-1 text-[10px] text-blue-700">
+            ตรวจล่าสุด:{" "}
+            {new Date(draft.reviewedAt).toLocaleString("th-TH", {
+              dateStyle: "short",
+              timeStyle: "short",
+            })}
+            {draft.reviewedBy ? ` · ${draft.reviewedBy.slice(0, 8)}…` : ""}
+          </p>
         )}
       </div>
 

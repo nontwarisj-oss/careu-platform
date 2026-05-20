@@ -123,7 +123,7 @@ export async function POST(req: Request, { params }: Ctx) {
   const draftRes = await admin
     .from("intake_drafts")
     .select(
-      "id, draft_code, manual_job_code, branch_id, customer_name, customer_phone, staff_note, urgent_requested, admin_review_note, status, converted_order_id, customer_id"
+      "id, draft_code, manual_job_code, branch_id, customer_name, customer_phone, staff_note, urgent_requested, admin_review_note, status, converted_order_id, customer_id, confirmed_garment_type, confirmed_repair_category, confirmed_repair_area, confirmed_difficulty"
     )
     .eq("id", draftId)
     .maybeSingle();
@@ -153,6 +153,10 @@ export async function POST(req: Request, { params }: Ctx) {
     status: string;
     converted_order_id: string | null;
     customer_id: string | null;
+    confirmed_garment_type: string | null;
+    confirmed_repair_category: string | null;
+    confirmed_repair_area: string | null;
+    confirmed_difficulty: string | null;
   };
 
   // Branch isolation — a branch-scoped role only on its own branch.
@@ -408,8 +412,33 @@ export async function POST(req: Request, { params }: Ctx) {
   }
 
   // ---- Insert order (latest schema; matches createSmartOrder v4) ------
+  // Phase B: include the owner-confirmed classification block in the order
+  // notes when present. This carries the verified repair category into the
+  // order row WITHOUT touching pricing, service_code, payment_status, or
+  // any document-flow column. The convert route still drives price strictly
+  // from service_price_master via calculateServiceQuote (above).
+  const confirmedClassification = [
+    draft.confirmed_garment_type
+      ? `เสื้อผ้า: ${draft.confirmed_garment_type}`
+      : null,
+    draft.confirmed_repair_category
+      ? `หมวดงาน: ${draft.confirmed_repair_category}`
+      : null,
+    draft.confirmed_repair_area
+      ? `จุด: ${draft.confirmed_repair_area}`
+      : null,
+    draft.confirmed_difficulty
+      ? `ความยาก: ${draft.confirmed_difficulty}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   const combinedNote = [
     draft.staff_note ? `[หน้าร้าน] ${draft.staff_note}` : null,
+    confirmedClassification
+      ? `[ยืนยันโดยเจ้าของ] ${confirmedClassification}`
+      : null,
     draft.admin_review_note ? `[แอดมิน] ${draft.admin_review_note}` : null,
     jobIdFallback
       ? `[fallback] manual_job_code missing — used draft_code ${draft.draft_code}`
@@ -534,6 +563,9 @@ export async function POST(req: Request, { params }: Ctx) {
 
   // ---- Mark the draft converted (last so a failed convert leaves the
   //      draft re-runnable). ------------------------------------------
+  // Phase B: also stamp review_status = "converted" so the queue badge
+  // mirrors the order reality. The text "reviewed_by" remains whatever
+  // the /update route last set (the owner who approved the AI suggestion).
   const upd = await admin
     .from("intake_drafts")
     .update({
@@ -541,6 +573,7 @@ export async function POST(req: Request, { params }: Ctx) {
       converted_order_id: orderId,
       customer_id: customerId,
       approved_price: total,
+      review_status: "converted",
     })
     .eq("id", draftId);
   if (upd.error) {

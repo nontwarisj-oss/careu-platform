@@ -17,6 +17,7 @@ import {
   type IntakePrefill,
 } from "@/components/IntakeOrderForm";
 import type { IntakeDraft } from "@/lib/intakeDrafts";
+import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
 
 export default function IntakePage() {
   return (
@@ -177,7 +178,10 @@ function IntakePageInner() {
               if (draftId) {
                 void fetch("/api/admin/intake-drafts/update", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...getSimpleStaffAuthHeaders(),
+                  },
                   body: JSON.stringify({
                     draftId,
                     status: "CONVERTED_TO_ORDER",
