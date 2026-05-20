@@ -32,6 +32,10 @@ import {
 } from "@/lib/servicePriceMaster";
 import { normalizeJobId } from "@/lib/jobId";
 import { normalizePhone } from "@/lib/phone";
+import {
+  resolveBranchIdentity,
+  BRANCH_NOT_FOUND_TH,
+} from "@/lib/branchResolve";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -161,6 +165,23 @@ export async function POST(req: Request, { params }: Ctx) {
     return NextResponse.json(
       { ok: false, error: "draft อยู่คนละสาขา" },
       { status: 403 }
+    );
+  }
+
+  // ---- Resolve branch identity ---------------------------------------
+  // intake_drafts.branch_id stores the slug (e.g. "c24-thonburi-market")
+  // because the mobile UI carries the slug everywhere. customers.branch_id
+  // is uuid (verified against app/customers/page.tsx), so we MUST resolve
+  // the slug to branches.id before the customer insert. orders.branch_id
+  // is text slug system-wide (see createSmartOrder) — pass `code` there.
+  // A missing/unknown branch is a 400 with the standard Thai message.
+  const branchIdentity = draft.branch_id
+    ? await resolveBranchIdentity(admin, draft.branch_id)
+    : null;
+  if (draft.branch_id && !branchIdentity) {
+    return NextResponse.json(
+      { ok: false, error: BRANCH_NOT_FOUND_TH },
+      { status: 400 }
     );
   }
 
@@ -333,17 +354,24 @@ export async function POST(req: Request, { params }: Ctx) {
     .reduce((sum, l) => sum + l.amount, 0);
   const urgentFee = quote.urgentApplied ? quote.urgentFee : 0;
   const customerName = (draft.customer_name ?? "").trim() || "(ไม่ระบุชื่อ)";
-  const branchId = draft.branch_id ?? null;
+  // Two faces of the same branch — see lib/branchResolve.ts for the why.
+  //   branchSlug = orders.branch_id (text)
+  //   branchUuid = customers.branch_id (uuid)
+  const branchSlug = branchIdentity?.code ?? null;
+  const branchUuid = branchIdentity?.uuid ?? null;
 
   // ---- Find or create customer (inline; no project helper exists) -----
+  // customers.branch_id is uuid — we MUST pass branchUuid here, never the
+  // slug. This is the exact bug that surfaced as
+  //   "invalid input syntax for type uuid: \"c24-thonburi-market\""
   let customerId: string | null = draft.customer_id;
   const phoneNormalized = normalizePhone(draft.customer_phone);
-  if (!customerId && phoneNormalized && branchId) {
+  if (!customerId && phoneNormalized && branchUuid) {
     const existing = await admin
       .from("customers")
       .select("id")
       .eq("normalized_phone", phoneNormalized)
-      .eq("branch_id", branchId)
+      .eq("branch_id", branchUuid)
       .limit(1)
       .maybeSingle();
     if (existing.error) {
@@ -361,7 +389,7 @@ export async function POST(req: Request, { params }: Ctx) {
           name: customerName,
           phone: draft.customer_phone,
           normalized_phone: phoneNormalized,
-          branch_id: branchId,
+          branch_id: branchUuid,
         })
         .select("id")
         .single();
@@ -397,8 +425,8 @@ export async function POST(req: Request, { params }: Ctx) {
     item_name: service.serviceNameTh,
     price: total,
     status: "pending",
-    // v2 — intake extension
-    branch_id: branchId,
+    // v2 — intake extension. orders.branch_id stores the slug.
+    branch_id: branchSlug,
     urgent: urgentFinal,
     urgent_fee: urgentFee,
     notes: combinedNote || null,
@@ -441,9 +469,10 @@ export async function POST(req: Request, { params }: Ctx) {
   const orderId = String((orderRes.data as { id: string }).id);
 
   // ---- Insert order item (one line; multi-item flow stays on /intake) -
+  // order_items.branch_id mirrors orders.branch_id — text slug, not uuid.
   const itemInsert = {
     order_id: orderId,
-    branch_id: branchId,
+    branch_id: branchSlug,
     line_no: 1,
     category: service.categoryTh ?? null,
     service_code: service.serviceCode,

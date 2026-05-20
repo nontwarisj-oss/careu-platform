@@ -24,6 +24,10 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { buildDraftCode, draftDateStamp, parseDraftSeq } from "@/lib/draftCode";
 import { normalizeJobId } from "@/lib/jobId";
+import {
+  resolveBranchIdentity,
+  BRANCH_NOT_FOUND_TH,
+} from "@/lib/branchResolve";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -77,7 +81,25 @@ export async function POST(req: Request) {
     );
   }
 
-  const branchId = clean(body.branchId);
+  // ---- Branch: validate it resolves to a real branches row -----------
+  // The mobile UI sends branches.code (slug, e.g. "c24-thonburi-market"),
+  // which is what intake_drafts.branch_id and orders.branch_id store. The
+  // convert route later resolves the slug to the uuid form needed by
+  // customers.branch_id. We validate up front so a stale/typo'd slug is
+  // caught at draft create — long before the admin tries to convert.
+  const rawBranch = clean(body.branchId);
+  const branchIdentity = rawBranch
+    ? await resolveBranchIdentity(admin, rawBranch)
+    : null;
+  if (rawBranch && !branchIdentity) {
+    return NextResponse.json(
+      { ok: false, error: BRANCH_NOT_FOUND_TH },
+      { status: 400 }
+    );
+  }
+  // Store the slug — keeps every downstream join (orders, dup probes,
+  // RLS helpers) working unchanged.
+  const branchId = branchIdentity?.code ?? null;
 
   // ---- Manual job code: required + normalize ---------------------------
   const manualJobCode = normalizeJobId(body.manualJobCode);
