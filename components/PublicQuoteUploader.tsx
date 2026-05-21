@@ -11,7 +11,6 @@
 // the quote submission can carry them in `photos`.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import supabase from "@/lib/supabase";
 import { compressImage } from "@/lib/imageCompress";
 
 const MAX_FILES = 8;
@@ -104,10 +103,31 @@ export function PublicQuoteUploader({
         path: string | null;
         error: string | null;
       }> => {
+        // Stage labels are surfaced on the error card so the user (and
+        // we) can see exactly which step failed without DevTools:
+        //   [compress] | [sign-url] | [parse] | [PUT] | [PUT timeout] |
+        //   [outer timeout]
         try {
-          console.warn("[quote-upload] compress start", item.name, item.file.size, item.file.type);
-          const compressed = await compressImage(item.file);
-          console.warn("[quote-upload] compress ok", compressed.size, compressed.type);
+          console.warn("[quote-upload] [compress] start", {
+            name: item.name,
+            size: item.file.size,
+            type: item.file.type,
+          });
+          let compressed: File;
+          try {
+            compressed = await compressImage(item.file);
+          } catch (compressErr) {
+            const msg =
+              compressErr instanceof Error
+                ? compressErr.message
+                : "ย่อรูปไม่สำเร็จ";
+            console.warn("[quote-upload] [compress] threw", msg);
+            return { path: null, error: `[compress] ${msg}` };
+          }
+          console.warn("[quote-upload] [compress] ok", {
+            size: compressed.size,
+            type: compressed.type,
+          });
 
           let res: Response;
           try {
@@ -122,9 +142,15 @@ export function PublicQuoteUploader({
               }),
             });
           } catch (fetchErr) {
-            const msg = fetchErr instanceof Error ? fetchErr.message : "ขอ URL อัปโหลดไม่สำเร็จ";
-            console.warn("[quote-upload] sign URL fetch threw", fetchErr);
-            return { path: null, error: `เชื่อมเซิร์ฟเวอร์ไม่ได้: ${msg}` };
+            const msg =
+              fetchErr instanceof Error
+                ? fetchErr.message
+                : "ขอ URL อัปโหลดไม่สำเร็จ";
+            console.warn("[quote-upload] [sign-url] fetch threw", msg);
+            return {
+              path: null,
+              error: `[sign-url] เชื่อมเซิร์ฟเวอร์ไม่ได้: ${msg}`,
+            };
           }
 
           let json: {
@@ -133,46 +159,141 @@ export function PublicQuoteUploader({
             bucket?: string;
             path?: string;
             token?: string;
+            signedUrl?: string;
           };
           try {
             json = await res.json();
           } catch (parseErr) {
-            console.warn("[quote-upload] sign URL JSON parse failed", parseErr, "status", res.status);
+            console.warn("[quote-upload] [parse] JSON parse failed", {
+              status: res.status,
+              msg: parseErr instanceof Error ? parseErr.message : String(parseErr),
+            });
             return {
               path: null,
-              error: `ขอ URL อัปโหลดไม่สำเร็จ (HTTP ${res.status})`,
+              error: `[parse] ขอ URL อัปโหลดไม่สำเร็จ (HTTP ${res.status})`,
             };
           }
-          console.warn("[quote-upload] sign URL response", res.status, json);
+          // Redact secrets — never log token or signedUrl. Booleans only.
+          console.warn("[quote-upload] [sign-url] response", {
+            status: res.status,
+            ok: json.ok,
+            bucket: json.bucket,
+            path: json.path,
+            hasToken: Boolean(json.token),
+            hasSignedUrl: Boolean(json.signedUrl),
+            reason: json.reason,
+          });
 
           if (!res.ok || !json.ok || !json.bucket || !json.path || !json.token) {
             return {
               path: null,
-              error:
-                json.reason ??
-                `ขอ URL อัปโหลดไม่สำเร็จ (HTTP ${res.status})`,
+              error: `[sign-url] ${
+                json.reason ?? `HTTP ${res.status}`
+              }`,
             };
           }
 
-          console.warn("[quote-upload] PUT to storage", json.bucket, json.path);
-          const up = await supabase.storage
-            .from(json.bucket)
-            .uploadToSignedUrl(json.path, json.token, compressed);
-          if (up.error) {
-            console.warn("[quote-upload] storage error", up.error);
+          // Phase W3.1 — bypass supabase-js's uploadToSignedUrl and PUT
+          // directly to json.signedUrl. supabase-js's storage client has
+          // no AbortSignal support and swallows network details, so a
+          // CORS / DNS / bucket-policy failure looked like a silent
+          // hang. A direct fetch gives us:
+          //   - real HTTP status from Storage on failure
+          //   - AbortController so the 25s PUT timeout actually cancels
+          //   - the exact host we hit (useful when env vars are wrong)
+          // The signed URL returned by createSignedUploadUrl is a
+          // standard pre-signed PUT endpoint; no supabase-js magic
+          // is required to use it.
+          if (!json.signedUrl) {
             return {
               path: null,
-              error: `อัปโหลดไม่สำเร็จ: ${up.error.message ?? "Storage error"}`,
+              error: "[parse] เซิร์ฟเวอร์ไม่ส่ง signedUrl กลับมา",
             };
           }
-          console.warn("[quote-upload] PUT ok", json.path);
+
+          let putHost = "(unknown)";
+          try {
+            putHost = new URL(json.signedUrl).host;
+          } catch {
+            // bad URL — log it as-is below
+          }
+          // host is logged (no secret) so we can confirm the browser
+          // is hitting the expected Supabase project.
+          console.warn("[quote-upload] [PUT] start", {
+            bucket: json.bucket,
+            path: json.path,
+            host: putHost,
+            size: compressed.size,
+            type: compressed.type,
+          });
+
+          const putController = new AbortController();
+          const PUT_TIMEOUT_MS = 25000;
+          const putTimer = setTimeout(
+            () => putController.abort(),
+            PUT_TIMEOUT_MS
+          );
+          let putRes: Response;
+          try {
+            putRes = await fetch(json.signedUrl, {
+              method: "PUT",
+              headers: {
+                "Content-Type": compressed.type || "application/octet-stream",
+              },
+              body: compressed,
+              signal: putController.signal,
+            });
+          } catch (putErr) {
+            const aborted =
+              putErr instanceof DOMException && putErr.name === "AbortError";
+            const msg =
+              putErr instanceof Error
+                ? putErr.message
+                : "ส่งไฟล์ไป Storage ไม่สำเร็จ";
+            console.warn("[quote-upload] [PUT] threw", {
+              host: putHost,
+              aborted,
+              msg,
+            });
+            return {
+              path: null,
+              error: aborted
+                ? `[PUT timeout] เชื่อม Storage ไม่ได้ภายใน ${
+                    PUT_TIMEOUT_MS / 1000
+                  } วินาที (host=${putHost}) — ตรวจสอบ CORS / bucket`
+                : `[PUT] ส่งไฟล์ไป Storage ไม่ได้: ${msg}`,
+            };
+          } finally {
+            clearTimeout(putTimer);
+          }
+
+          if (!putRes.ok) {
+            let bodyText = "";
+            try {
+              bodyText = (await putRes.text()).slice(0, 200);
+            } catch {
+              // ignore
+            }
+            console.warn("[quote-upload] [PUT] failed", {
+              status: putRes.status,
+              body: bodyText,
+            });
+            return {
+              path: null,
+              error: `[PUT] Storage ปฏิเสธไฟล์ (HTTP ${putRes.status})${
+                bodyText ? ": " + bodyText : ""
+              }`,
+            };
+          }
+          console.warn("[quote-upload] [PUT] ok", {
+            path: json.path,
+            status: putRes.status,
+          });
           return { path: json.path, error: null };
         } catch (err) {
-          console.warn("[quote-upload] uploadOne exception", err);
-          return {
-            path: null,
-            error: err instanceof Error ? err.message : "อัปโหลดล้มเหลว",
-          };
+          const msg = err instanceof Error ? err.message : "อัปโหลดล้มเหลว";
+          console.warn("[quote-upload] uploadOne exception", msg);
+          return { path: null, error: `[unknown] ${msg}` };
         }
       };
 
@@ -184,7 +305,7 @@ export function PublicQuoteUploader({
           () =>
             resolve({
               path: null,
-              error: `อัปโหลดเกินเวลา ${Math.round(
+              error: `[outer timeout] อัปโหลดเกินเวลา ${Math.round(
                 HARD_TIMEOUT_MS / 1000
               )} วินาที — ลองใหม่หรือเลือกรูปอื่น`,
             }),
