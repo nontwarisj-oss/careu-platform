@@ -90,6 +90,38 @@ export function isReviewStatus(value: unknown): value is ReviewStatus {
   );
 }
 
+// ---------- Source (Phase W2) ---------------------------------------------
+// Where the draft originated. Drives the "ที่มา" badge in the admin queue
+// and the bag-tag editability rule (website drafts arrive with manual_job_code
+// = null and need the owner to fill it before convert).
+
+export type IntakeSource = "mobile_intake" | "website" | "line_oa";
+
+export const INTAKE_SOURCES: IntakeSource[] = [
+  "mobile_intake",
+  "website",
+  "line_oa",
+];
+
+export const INTAKE_SOURCE_LABELS_TH: Record<IntakeSource, string> = {
+  mobile_intake: "หน้าร้าน",
+  website: "เว็บไซต์",
+  line_oa: "LINE OA",
+};
+
+export const INTAKE_SOURCE_BADGE: Record<IntakeSource, string> = {
+  mobile_intake: "border-gray-300 bg-white text-gray-700",
+  website: "border-sky-300 bg-sky-50 text-sky-800",
+  line_oa: "border-green-300 bg-green-50 text-green-800",
+};
+
+export function isIntakeSource(value: unknown): value is IntakeSource {
+  return (
+    typeof value === "string" &&
+    (INTAKE_SOURCES as string[]).includes(value)
+  );
+}
+
 // ---------- Media ----------------------------------------------------------
 
 export type DraftMediaType = "image" | "video" | "audio";
@@ -150,6 +182,10 @@ export type IntakeDraft = {
   reviewStatus: ReviewStatus;
   reviewedBy: string | null;
   reviewedAt: string | null;
+
+  // ---- Source provenance (Phase W2) ----
+  intakeSource: IntakeSource;
+  quoteRequestId: string | null;
 
   adminReviewNote: string | null;
   /** Set by the convert route once a real order is created. */
@@ -221,6 +257,11 @@ export function rowToIntakeDraft(
       : "needs_review",
     reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
     reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+
+    intakeSource: isIntakeSource(row.intake_source)
+      ? row.intake_source
+      : "mobile_intake",
+    quoteRequestId: row.quote_request_id ? String(row.quote_request_id) : null,
 
     adminReviewNote: row.admin_review_note
       ? String(row.admin_review_note)

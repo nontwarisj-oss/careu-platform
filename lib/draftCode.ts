@@ -15,10 +15,17 @@ export function draftDateStamp(date: Date = new Date()): string {
   return `${yy}${mm}${dd}`;
 }
 
-/** Build a Draft ID from a YYMMDD stamp + a 1-based daily sequence. */
-export function buildDraftCode(stamp: string, seq: number): string {
+/** Build a Draft ID from a YYMMDD stamp + a 1-based daily sequence.
+ *  `prefix` defaults to 'D' for mobile-intake drafts. The website bridge
+ *  passes 'W' so a draft's source is visible at a glance in logs and the
+ *  admin queue (e.g. "W260520-001" = website-sourced 1st of the day). */
+export function buildDraftCode(
+  stamp: string,
+  seq: number,
+  prefix: string = "D"
+): string {
   const n = Math.max(1, Math.floor(seq));
-  return `D${stamp}-${String(n).padStart(3, "0")}`;
+  return `${prefix}${stamp}-${String(n).padStart(3, "0")}`;
 }
 
 /** Pull the numeric sequence out of a Draft ID. Returns null when unparsable. */

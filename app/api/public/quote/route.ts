@@ -24,6 +24,7 @@ import { callerIp, rateLimit } from "@/lib/rateLimit";
 import { normalizePhone } from "@/lib/phone";
 import { attributionFromUrl, type UtmParams } from "@/lib/utm";
 import { incrementFunnel } from "@/lib/campaignFunnel";
+import { bridgeQuoteToIntakeDraft } from "@/lib/intakeDraftBridge";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -183,6 +184,47 @@ export async function POST(req: Request) {
     );
   }
   const row = insertRes.data as { id: string; created_at: string };
+
+  // Phase W2: bridge the quote into central intake_drafts so the owner
+  // sees it in /admin/intake-drafts alongside mobile-intake drafts.
+  // Best-effort: any failure must NOT block the public success response.
+  try {
+    const bridge = await bridgeQuoteToIntakeDraft({
+      admin,
+      quoteRequestId: row.id,
+      branchCode,
+      customerName: name || null,
+      customerPhone: phone,
+      notes: notes || null,
+      urgency,
+      fulfilment: fulfilmentPreference,
+      contactMethod,
+      email: email || null,
+      photos,
+      clientIp: ip === "unknown" ? null : ip,
+      clientUserAgent: req.headers.get("user-agent"),
+    });
+    if (!bridge.ok) {
+      console.warn(
+        "[public-quote] intake-draft bridge failed:",
+        bridge.reason,
+        { quoteRequestId: row.id }
+      );
+    } else {
+      console.log("[public-quote] intake-draft bridge ok", {
+        quoteRequestId: row.id,
+        draftId: bridge.draftId,
+        draftCode: bridge.draftCode,
+        mediaSaved: bridge.mediaSaved,
+        idempotent: bridge.idempotent,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[public-quote] intake-draft bridge threw:",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 
   // Append to customer_activity. customer_id stays NULL — an admin links
   // the activity to a real customer when triaging. payload carries the

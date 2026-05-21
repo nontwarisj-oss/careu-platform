@@ -16,10 +16,13 @@ import {
   DRAFT_STATUS_BADGE,
   DRAFT_STATUS_LABELS_TH,
   DRAFT_STATUSES,
+  INTAKE_SOURCE_BADGE,
+  INTAKE_SOURCE_LABELS_TH,
   type DraftStatus,
   type IntakeDraft,
   type ReviewStatus,
 } from "@/lib/intakeDrafts";
+import { sanitizeJobIdInput } from "@/lib/jobId";
 
 // ---- Phase B UX: 4-phase progress badge ------------------------------
 // Collapses (ai_status, review_status, converted_order_id) into one big
@@ -71,6 +74,7 @@ type UpdatePatch = {
   confirmedRepairArea?: string | null;
   confirmedDifficulty?: string | null;
   confirmedPrice?: number | null;
+  manualJobCode?: string | null;
 };
 
 type ClassifySuggestion = {
@@ -397,6 +401,14 @@ function DraftCard({
         : ""
   );
 
+  // Phase W2 - owner attaches the bag-tag code to website-sourced drafts
+  // (the customer didn't have a bag when they submitted the form).
+  // Self-sanitising on keystroke (strip whitespace, uppercase) so the value
+  // typed here matches the value written on the bag.
+  const [manualJobCodeDraft, setManualJobCodeDraft] = useState<string>(
+    draft.manualJobCode ?? ""
+  );
+
   const created = draft.createdAt
     ? new Date(draft.createdAt).toLocaleString("th-TH", {
         dateStyle: "short",
@@ -474,6 +486,14 @@ function DraftCard({
           >
             {DRAFT_STATUS_LABELS_TH[draft.status]}
           </span>
+          {/* Phase W2: source provenance. "เว็บไซต์" for /quote-bridged
+              drafts, "หน้าร้าน" for /mobile-intake. */}
+          <span
+            className={`rounded-full border px-2 py-0 text-[10px] font-semibold ${INTAKE_SOURCE_BADGE[draft.intakeSource]}`}
+            title="ที่มาของ Draft"
+          >
+            ที่มา: {INTAKE_SOURCE_LABELS_TH[draft.intakeSource]}
+          </span>
         </div>
       </div>
 
@@ -485,8 +505,8 @@ function DraftCard({
           {draft.customerPhone ? ` · ${draft.customerPhone}` : ""}
         </p>
         {draft.staffNote && (
-          <p className="text-gray-700">
-            <span className="text-gray-500">โน้ตหน้าร้าน: </span>
+          <p className="text-gray-700 whitespace-pre-line">
+            <span className="text-gray-500">โน้ต: </span>
             {draft.staffNote}
           </p>
         )}
@@ -496,6 +516,60 @@ function DraftCard({
           </p>
         )}
       </div>
+
+      {/* Phase W2 - editable bag-tag code. Website drafts arrive with
+          manual_job_code = null and the owner attaches the real code
+          when the customer physically arrives. The Approve & Create
+          panel stays disabled until this is saved (convertReady below
+          requires !!draft.manualJobCode). */}
+      {!draft.convertedOrderId && (
+        <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50/40 px-3 py-2">
+          <label
+            htmlFor={`mjc-${draft.id}`}
+            className="block text-[11px] font-bold uppercase tracking-wider text-amber-900"
+          >
+            รหัสรับงาน (เลขคิวที่เขียนติดถุง)
+            {!draft.manualJobCode && (
+              <span className="ml-1 text-red-600">*</span>
+            )}
+          </label>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              id={`mjc-${draft.id}`}
+              type="text"
+              value={manualJobCodeDraft}
+              onChange={(e) =>
+                setManualJobCodeDraft(sanitizeJobIdInput(e.target.value))
+              }
+              autoCapitalize="characters"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="เช่น 36AB"
+              className="flex-1 rounded-md border border-amber-300 bg-white px-2 py-1 text-center font-mono text-base font-bold tracking-wider outline-none focus:ring-2 focus:ring-amber-500"
+            />
+            <button
+              type="button"
+              disabled={
+                busy ||
+                manualJobCodeDraft.trim() === (draft.manualJobCode ?? "")
+              }
+              onClick={() =>
+                onUpdate(draft.id, {
+                  manualJobCode: manualJobCodeDraft.trim() || null,
+                })
+              }
+              className="rounded-md bg-amber-700 px-3 py-1 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-40"
+            >
+              บันทึกรหัส
+            </button>
+          </div>
+          {!draft.manualJobCode && (
+            <p className="mt-1 text-[10px] text-amber-800">
+              จำเป็นต้องกรอกก่อนกด &quot;อนุมัติและสร้างใบงาน&quot;
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Media */}
       {draft.media.length > 0 && (

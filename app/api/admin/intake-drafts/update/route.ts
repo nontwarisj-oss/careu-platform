@@ -21,6 +21,15 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { resolveStaffActor } from "@/lib/staffActor";
 import { canViewAllBranches } from "@/lib/permissions";
 import { isDraftStatus, isReviewStatus } from "@/lib/intakeDrafts";
+import { normalizeJobId } from "@/lib/jobId";
+
+/** Same 45-day rolling window /api/mobile-intake/draft + /convert use.
+ *  Mirrored here so the owner can't type a code that the intake form
+ *  would still flag as duplicate. */
+const JOB_ID_DUPLICATE_WINDOW_DAYS = 45;
+
+const DUPLICATE_JOB_CODE_TH =
+  "รหัสรับงานนี้ถูกใช้แล้ว กรุณาตรวจสอบเลขคิวอีกครั้ง";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,6 +48,9 @@ type Body = {
   confirmedDifficulty?: string | null;
   confirmedPrice?: number | null;
   reviewStatus?: string;
+  // Phase W2 - owner attaches the real bag-tag code to a website-sourced
+  // draft. Branch-scoped duplicate check mirrors /api/mobile-intake/draft.
+  manualJobCode?: string | null;
 };
 
 function cleanText(value: string | null | undefined): string | null {
@@ -102,7 +114,7 @@ export async function POST(req: Request) {
   // Load the existing draft for branch-isolation + idempotency checks.
   const existing = await admin
     .from("intake_drafts")
-    .select("id, branch_id, converted_order_id")
+    .select("id, branch_id, converted_order_id, manual_job_code")
     .eq("id", draftId)
     .maybeSingle();
   if (existing.error) {
@@ -122,6 +134,7 @@ export async function POST(req: Request) {
     id: string;
     branch_id: string | null;
     converted_order_id: string | null;
+    manual_job_code: string | null;
   };
 
   if (
@@ -189,6 +202,84 @@ export async function POST(req: Request) {
   if (body.confirmedPrice !== undefined) {
     patch.confirmed_price = cleanNumber(body.confirmedPrice);
   }
+  // ---- Phase W2: owner attaches the bag-tag code ---------------------
+  if (body.manualJobCode !== undefined) {
+    const raw = body.manualJobCode;
+    if (raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      // Allow clearing (rare, but harmless). The convert route falls
+      // back to draft_code when manual_job_code is null.
+      patch.manual_job_code = null;
+    } else {
+      const normalized = normalizeJobId(raw);
+      if (!normalized) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "รหัสรับงานไม่ถูกต้อง (ใช้ได้ A-Z 0-9 - _ . / ความยาวสูงสุด 32)",
+          },
+          { status: 400 }
+        );
+      }
+      // Branch-scoped duplicate probes - mirrors /api/mobile-intake/draft
+      // so the owner can't pick a code that the intake form would flag.
+      // Skip when the new value equals the current value (no-op edit).
+      if (
+        normalized !== (draft.manual_job_code ?? null) &&
+        draft.branch_id
+      ) {
+        const draftDup = await admin
+          .from("intake_drafts")
+          .select("id", { head: true, count: "exact" })
+          .eq("branch_id", draft.branch_id)
+          .eq("manual_job_code", normalized)
+          .neq("status", "CANCELLED")
+          .neq("id", draftId);
+        if (draftDup.error) {
+          console.error(
+            "[intake-drafts/update] manualJobCode draft dup probe failed",
+            draftDup.error
+          );
+          return NextResponse.json(
+            { ok: false, error: "ตรวจสอบรหัสซ้ำไม่สำเร็จ ลองอีกครั้ง" },
+            { status: 500 }
+          );
+        }
+        if ((draftDup.count ?? 0) > 0) {
+          return NextResponse.json(
+            { ok: false, error: DUPLICATE_JOB_CODE_TH, state: "duplicate" },
+            { status: 409 }
+          );
+        }
+        const windowStart = new Date(
+          Date.now() - JOB_ID_DUPLICATE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+        ).toISOString();
+        const orderDup = await admin
+          .from("orders")
+          .select("id", { head: true, count: "exact" })
+          .eq("branch_id", draft.branch_id)
+          .eq("job_id", normalized)
+          .gte("created_at", windowStart);
+        if (orderDup.error) {
+          console.error(
+            "[intake-drafts/update] manualJobCode order dup probe failed",
+            orderDup.error
+          );
+          return NextResponse.json(
+            { ok: false, error: "ตรวจสอบรหัสซ้ำไม่สำเร็จ ลองอีกครั้ง" },
+            { status: 500 }
+          );
+        }
+        if ((orderDup.count ?? 0) > 0) {
+          return NextResponse.json(
+            { ok: false, error: DUPLICATE_JOB_CODE_TH, state: "duplicate" },
+            { status: 409 }
+          );
+        }
+      }
+      patch.manual_job_code = normalized;
+    }
+  }
+
   if (body.reviewStatus !== undefined) {
     if (!isReviewStatus(body.reviewStatus)) {
       return NextResponse.json(
