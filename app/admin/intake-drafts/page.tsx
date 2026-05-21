@@ -571,44 +571,79 @@ function DraftCard({
         </div>
       )}
 
-      {/* Media */}
-      {draft.media.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {draft.media.map((m) => (
-            <div
-              key={m.id}
-              className="h-20 w-20 overflow-hidden rounded-lg border border-gray-200 bg-gray-100"
-            >
-              {m.signedUrl ? (
-                m.mediaType === "image" ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <a href={m.signedUrl} target="_blank" rel="noreferrer">
-                    <img
-                      src={m.signedUrl}
-                      alt="งาน"
-                      className="h-full w-full object-cover"
-                    />
-                  </a>
-                ) : (
-                  <a
-                    href={m.signedUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex h-full w-full flex-col items-center justify-center text-[10px] text-gray-500"
-                  >
-                    <span className="text-xl">🎥</span>
-                    ดูวิดีโอ
-                  </a>
-                )
-              ) : (
-                <span className="flex h-full w-full items-center justify-center text-[10px] text-gray-400">
-                  สื่อ
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Media — Phase C preview. Admin route signs short-lived read URLs
+          (10-min TTL) server-side; the bucket itself remains private.
+          Image tiles render the thumbnail; video/audio/file show a
+          placeholder card with a download link. */}
+      <div className="mt-3">
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-gray-500">
+          ไฟล์แนบจากลูกค้า
+        </p>
+        {draft.media.length === 0 ? (
+          <p className="text-[11px] italic text-gray-400">ยังไม่มีไฟล์แนบ</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {draft.media.map((m) => {
+              const typeLabel =
+                m.mediaType === "image"
+                  ? "รูปภาพประกอบ"
+                  : m.mediaType === "video"
+                    ? "วิดีโอ"
+                    : m.mediaType === "audio"
+                      ? "เสียง"
+                      : "ไฟล์แนบ";
+              const icon =
+                m.mediaType === "video"
+                  ? "🎥"
+                  : m.mediaType === "audio"
+                    ? "🎵"
+                    : "📎";
+              return (
+                <div
+                  key={m.id}
+                  className="h-20 w-20 overflow-hidden rounded-lg border border-gray-200 bg-gray-100"
+                >
+                  {m.signedUrl && m.mediaType === "image" ? (
+                    <a
+                      href={m.signedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="เปิดดูรูป"
+                      className="block h-full w-full"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={m.signedUrl}
+                        alt={typeLabel}
+                        className="h-full w-full object-cover"
+                      />
+                    </a>
+                  ) : m.signedUrl ? (
+                    <a
+                      href={m.signedUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={typeLabel}
+                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] font-semibold text-gray-600 hover:bg-gray-200"
+                    >
+                      <span className="text-xl">{icon}</span>
+                      <span>{typeLabel}</span>
+                    </a>
+                  ) : (
+                    <div
+                      title={typeLabel}
+                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] text-gray-400"
+                    >
+                      <span className="text-xl">{icon}</span>
+                      <span>{typeLabel}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* ----- Phase B: AI Analysis Panel ---------------------------------
           Mock/rule-based classifier (lib/intakeClassifier.ts). Never sets
