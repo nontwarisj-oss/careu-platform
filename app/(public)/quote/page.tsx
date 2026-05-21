@@ -66,6 +66,11 @@ export default function QuoteWizardPage() {
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [draftFound, setDraftFound] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  // Phase W3 — true while any photo is queued or in-flight. Gates the
+  // "Next" + final submit buttons so the user cannot navigate past
+  // step 1 and unmount <PublicQuoteUploader> mid-PUT (which silently
+  // dropped the uploaded path → quote_requests.photos = []).
+  const [photosUploading, setPhotosUploading] = useState(false);
 
   // ----- Restore draft + query-param pre-fill -----
   useEffect(() => {
@@ -172,9 +177,11 @@ export default function QuoteWizardPage() {
   const canNext =
     step === 0
       ? form.notes.trim().length > 0 || form.serviceCategory !== ""
-      : step === 3
-        ? form.phone.trim().length > 0
-        : true;
+      : step === 1
+        ? !photosUploading
+        : step === 3
+          ? form.phone.trim().length > 0
+          : true;
 
   if (result?.ok) {
     return (
@@ -271,19 +278,27 @@ export default function QuoteWizardPage() {
             </div>
           )}
 
-          {/* ----- Step 1: photos ----- */}
-          {step === 1 && (
-            <div className="space-y-3">
-              <h2 className="font-bold text-gray-900">แนบรูปงาน (ถ้ามี)</h2>
-              <p className="text-sm text-gray-600">
-                รูปช่วยให้ช่างประเมินราคาได้แม่นยำขึ้น — ข้ามได้ถ้ายังไม่มี
+          {/* ----- Step 1: photos -----
+              Phase W3: the uploader stays mounted across step changes so
+              an in-flight PUT to Storage cannot be killed by the
+              component unmounting when the user navigates away. The
+              visual block is hidden with CSS on other steps. */}
+          <div className={step === 1 ? "space-y-3" : "hidden"}>
+            <h2 className="font-bold text-gray-900">แนบรูปงาน (ถ้ามี)</h2>
+            <p className="text-sm text-gray-600">
+              รูปช่วยให้ช่างประเมินราคาได้แม่นยำขึ้น — ข้ามได้ถ้ายังไม่มี
+            </p>
+            <PublicQuoteUploader
+              branchCode={form.branchCode || null}
+              onChange={(paths) => patch({ photos: paths })}
+              onProgress={(s) => setPhotosUploading(s.uploading)}
+            />
+            {photosUploading && (
+              <p className="text-[11px] font-semibold text-amber-700">
+                กำลังอัปโหลด — กรุณารอจนเสร็จก่อนกด &quot;ถัดไป&quot;
               </p>
-              <PublicQuoteUploader
-                branchCode={form.branchCode || null}
-                onChange={(paths) => patch({ photos: paths })}
-              />
-            </div>
-          )}
+            )}
+          </div>
 
           {/* ----- Step 2: details ----- */}
           {step === 2 && (
@@ -438,10 +453,19 @@ export default function QuoteWizardPage() {
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={submitting || !form.phone.trim()}
+              disabled={submitting || !form.phone.trim() || photosUploading}
               className={`rounded-xl px-6 py-2.5 text-sm font-semibold disabled:opacity-50 ${theme.primaryButtonClass}`}
+              title={
+                photosUploading
+                  ? "รออัปโหลดรูปให้เสร็จก่อนส่ง"
+                  : undefined
+              }
             >
-              {submitting ? "กำลังส่ง..." : "ส่งคำขอ"}
+              {submitting
+                ? "กำลังส่ง..."
+                : photosUploading
+                  ? "รออัปโหลด..."
+                  : "ส่งคำขอ"}
             </button>
           )}
         </div>

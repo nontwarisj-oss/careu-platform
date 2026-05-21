@@ -10,7 +10,7 @@
 // uploaded storage PATHS are surfaced to the parent via onChange so
 // the quote submission can carry them in `photos`.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
 import { compressImage } from "@/lib/imageCompress";
 
@@ -45,16 +45,40 @@ function accepted(file: File): string | null {
 export function PublicQuoteUploader({
   branchCode,
   onChange,
+  onProgress,
 }: {
   branchCode: string | null;
   /** Called with the list of successfully-uploaded storage paths. */
   onChange: (paths: string[]) => void;
+  /** Fires whenever upload state changes. Lets the parent gate "Next" /
+   *  submit while any file is queued or in-flight — otherwise the user
+   *  can race ahead, unmount this component mid-PUT, and the resolved
+   *  path is silently lost (Phase W3 bug fix). */
+  onProgress?: (state: {
+    uploading: boolean;
+    done: number;
+    total: number;
+    errors: number;
+  }) => void;
 }) {
   const [items, setItems] = useState<UploadItem[]>([]);
   const groupingToken = useRef(
     `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Mirror items → onProgress so the parent can gate navigation. Runs
+  // on every items mutation including mount; the parent treats
+  // total === 0 as "nothing in flight" (no false positive).
+  useEffect(() => {
+    if (!onProgress) return;
+    const uploading = items.some(
+      (i) => i.status === "uploading" || i.status === "queued"
+    );
+    const done = items.filter((i) => i.status === "done").length;
+    const errors = items.filter((i) => i.status === "error").length;
+    onProgress({ uploading, done, total: items.length, errors });
+  }, [items, onProgress]);
 
   const emit = useCallback(
     (list: UploadItem[]) => {
