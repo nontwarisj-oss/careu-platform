@@ -630,12 +630,22 @@ function DraftCard({
                       <span>{typeLabel}</span>
                     </a>
                   ) : (
+                    // W3.6 — signed-URL creation failed server-side
+                    // (issueReadUrl returned null). Surface a clear
+                    // error label instead of a silent gray box so the
+                    // operator knows the bucket / path / env is the
+                    // issue. The server-side log under
+                    // [read-url] createSignedUrl FAILED has the
+                    // exact reason.
                     <div
-                      title={typeLabel}
-                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] text-gray-400"
+                      title={`${typeLabel} — ไม่สามารถสร้าง URL ดูรูปได้ (ตรวจสอบ Storage / path)`}
+                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 border-2 border-dashed border-red-300 bg-red-50 px-1 text-center text-[9px] font-semibold leading-tight text-red-700"
                     >
-                      <span className="text-xl">{icon}</span>
-                      <span>{typeLabel}</span>
+                      <span className="text-base">⚠️</span>
+                      <span>ดูรูปไม่ได้</span>
+                      <span className="text-[8px] font-normal text-red-500">
+                        ตรวจ Storage
+                      </span>
                     </div>
                   )}
                 </div>

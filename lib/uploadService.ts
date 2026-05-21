@@ -179,20 +179,40 @@ export async function issueUploadUrl(input: {
 
 /**
  * Issue a short-lived signed READ URL for an existing object. Used by
- * the portal receipt viewer to render attached photos. Returns null
- * on error so callers can fall through to "photo unavailable".
+ * the portal receipt viewer + admin intake queue to render attached
+ * photos. Returns null on error so callers can fall through to
+ * "photo unavailable".
+ *
+ * W3.6 — emits server-side diagnostics on every failure so a blank
+ * thumbnail on /admin/intake-drafts has a corresponding line in
+ * Vercel function logs explaining WHY signing failed (missing path,
+ * missing admin client, object-not-found, etc.). No secrets logged.
  */
 export async function issueReadUrl(
   path: string,
   ttlSeconds = 60
 ): Promise<string | null> {
-  if (!path) return null;
+  if (!path) {
+    console.warn("[read-url] empty path — returning null");
+    return null;
+  }
   const admin = getSupabaseAdmin();
-  if (!admin) return null;
+  if (!admin) {
+    console.warn("[read-url] admin client unavailable — env not set");
+    return null;
+  }
   const { data, error } = await admin.storage
     .from(BUCKET)
     .createSignedUrl(path, ttlSeconds);
-  if (error || !data) return null;
+  if (error || !data) {
+    console.warn("[read-url] createSignedUrl FAILED", {
+      bucket: BUCKET,
+      path,
+      ttlSeconds,
+      error: error?.message ?? "no data returned",
+    });
+    return null;
+  }
   return data.signedUrl;
 }
 

@@ -86,6 +86,16 @@ export async function GET(req: Request) {
       const signed = await Promise.all(
         rows.map((r) => issueReadUrl(String(r.file_url ?? ""), 10 * 60))
       );
+      // W3.6 — summary log so we can confirm at a glance whether
+      // any media row's signed URL came back null. issueReadUrl
+      // itself logs each individual failure with the path.
+      const nullCount = signed.filter((u) => u == null).length;
+      if (nullCount > 0) {
+        console.warn("[admin/intake-drafts] signed-URL null count", {
+          totalMedia: rows.length,
+          nullCount,
+        });
+      }
       rows.forEach((r, i) => {
         const draftId = String(r.draft_id);
         const item = rowToIntakeDraftMedia(r, signed[i]);
