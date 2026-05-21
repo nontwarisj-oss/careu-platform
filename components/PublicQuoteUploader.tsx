@@ -93,41 +93,106 @@ export function PublicQuoteUploader({
 
   const uploadOne = useCallback(
     async (item: UploadItem): Promise<{ path: string | null; error: string | null }> => {
-      try {
-        const compressed = await compressImage(item.file);
-        const res = await fetch("/api/public/upload-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mime: compressed.type || "image/jpeg",
-            size: compressed.size,
-            branchCode: branchCode || null,
-            groupingToken: groupingToken.current,
-          }),
-        });
-        const json = (await res.json()) as {
-          ok?: boolean;
-          reason?: string;
-          bucket?: string;
-          path?: string;
-          token?: string;
-        };
-        if (!res.ok || !json.ok || !json.bucket || !json.path || !json.token) {
-          return { path: null, error: json.reason ?? "ขอ URL อัปโหลดไม่สำเร็จ" };
+      // Phase W3.1 — hard 45s budget. supabase-js's Storage client has
+      // no built-in timeout, so a hung PUT (bucket missing, CORS, slow
+      // network) would otherwise leave the card stuck at
+      // "กำลังอัปโหลด..." forever. Promise.race guarantees uploadOne
+      // resolves so the UI can flip to "error" + show the retry button.
+      const HARD_TIMEOUT_MS = 45000;
+
+      const doUpload = async (): Promise<{
+        path: string | null;
+        error: string | null;
+      }> => {
+        try {
+          console.warn("[quote-upload] compress start", item.name, item.file.size, item.file.type);
+          const compressed = await compressImage(item.file);
+          console.warn("[quote-upload] compress ok", compressed.size, compressed.type);
+
+          let res: Response;
+          try {
+            res = await fetch("/api/public/upload-url", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mime: compressed.type || "image/jpeg",
+                size: compressed.size,
+                branchCode: branchCode || null,
+                groupingToken: groupingToken.current,
+              }),
+            });
+          } catch (fetchErr) {
+            const msg = fetchErr instanceof Error ? fetchErr.message : "ขอ URL อัปโหลดไม่สำเร็จ";
+            console.warn("[quote-upload] sign URL fetch threw", fetchErr);
+            return { path: null, error: `เชื่อมเซิร์ฟเวอร์ไม่ได้: ${msg}` };
+          }
+
+          let json: {
+            ok?: boolean;
+            reason?: string;
+            bucket?: string;
+            path?: string;
+            token?: string;
+          };
+          try {
+            json = await res.json();
+          } catch (parseErr) {
+            console.warn("[quote-upload] sign URL JSON parse failed", parseErr, "status", res.status);
+            return {
+              path: null,
+              error: `ขอ URL อัปโหลดไม่สำเร็จ (HTTP ${res.status})`,
+            };
+          }
+          console.warn("[quote-upload] sign URL response", res.status, json);
+
+          if (!res.ok || !json.ok || !json.bucket || !json.path || !json.token) {
+            return {
+              path: null,
+              error:
+                json.reason ??
+                `ขอ URL อัปโหลดไม่สำเร็จ (HTTP ${res.status})`,
+            };
+          }
+
+          console.warn("[quote-upload] PUT to storage", json.bucket, json.path);
+          const up = await supabase.storage
+            .from(json.bucket)
+            .uploadToSignedUrl(json.path, json.token, compressed);
+          if (up.error) {
+            console.warn("[quote-upload] storage error", up.error);
+            return {
+              path: null,
+              error: `อัปโหลดไม่สำเร็จ: ${up.error.message ?? "Storage error"}`,
+            };
+          }
+          console.warn("[quote-upload] PUT ok", json.path);
+          return { path: json.path, error: null };
+        } catch (err) {
+          console.warn("[quote-upload] uploadOne exception", err);
+          return {
+            path: null,
+            error: err instanceof Error ? err.message : "อัปโหลดล้มเหลว",
+          };
         }
-        const up = await supabase.storage
-          .from(json.bucket)
-          .uploadToSignedUrl(json.path, json.token, compressed);
-        if (up.error) {
-          return { path: null, error: up.error.message };
-        }
-        return { path: json.path, error: null };
-      } catch (err) {
-        return {
-          path: null,
-          error: err instanceof Error ? err.message : "อัปโหลดล้มเหลว",
-        };
-      }
+      };
+
+      const timeoutPromise = new Promise<{
+        path: null;
+        error: string;
+      }>((resolve) => {
+        setTimeout(
+          () =>
+            resolve({
+              path: null,
+              error: `อัปโหลดเกินเวลา ${Math.round(
+                HARD_TIMEOUT_MS / 1000
+              )} วินาที — ลองใหม่หรือเลือกรูปอื่น`,
+            }),
+          HARD_TIMEOUT_MS
+        );
+      });
+
+      return Promise.race([doUpload(), timeoutPromise]);
     },
     [branchCode]
   );
@@ -226,11 +291,15 @@ export function PublicQuoteUploader({
                 alt={it.name}
                 className="w-full h-full object-cover"
               />
-              <div className="absolute inset-x-0 bottom-0 bg-black/55 px-1.5 py-1 text-[9px] text-white text-center">
+              <div
+                title={it.status === "error" ? it.error ?? "ผิดพลาด" : undefined}
+                className="absolute inset-x-0 bottom-0 bg-black/55 px-1.5 py-1 text-[9px] leading-tight text-white text-center break-words"
+              >
                 {it.status === "uploading" && "กำลังอัปโหลด..."}
                 {it.status === "queued" && "รอคิว"}
                 {it.status === "done" && "✓ สำเร็จ"}
-                {it.status === "error" && (it.error ?? "ผิดพลาด")}
+                {it.status === "error" &&
+                  (it.error ? it.error.slice(0, 80) : "ผิดพลาด")}
               </div>
               {it.status === "error" && (
                 <button
