@@ -135,15 +135,34 @@ export async function issueUploadUrl(input: {
   }
 
   const path = buildPath(input.scope, mime);
+  // Phase W3.1 diagnostic — confirm the server-side mint actually
+  // succeeds in production. Logs go to Vercel function logs only; no
+  // secrets are emitted (signedUrl/token are NOT logged).
+  const mintStart = Date.now();
   const { data, error } = await admin.storage
     .from(BUCKET)
     .createSignedUploadUrl(path);
+  const mintMs = Date.now() - mintStart;
   if (error || !data) {
+    console.warn("[upload-url] createSignedUploadUrl FAILED", {
+      bucket: BUCKET,
+      path,
+      mime,
+      mintMs,
+      error: error?.message ?? "no data returned",
+    });
     return {
       ok: false,
       reason: error?.message ?? "ออก signed URL ไม่สำเร็จ — bucket ตั้งค่าแล้วหรือยัง?",
     };
   }
+  console.log("[upload-url] createSignedUploadUrl ok", {
+    bucket: BUCKET,
+    path,
+    mime,
+    mintMs,
+    hasToken: Boolean(data.token),
+  });
   return {
     ok: true,
     bucket: BUCKET,
