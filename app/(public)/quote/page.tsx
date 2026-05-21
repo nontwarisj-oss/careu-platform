@@ -71,6 +71,12 @@ export default function QuoteWizardPage() {
   // step 1 and unmount <PublicQuoteUploader> mid-PUT (which silently
   // dropped the uploaded path → quote_requests.photos = []).
   const [photosUploading, setPhotosUploading] = useState(false);
+  // Phase W3.5 — `done` count reported by the uploader. Belt-and-
+  // suspenders check vs form.photos.length: if the uploader has
+  // finished uploads but the parent's photos array hasn't caught up
+  // yet (e.g. emit dropped under concurrent rendering — the very bug
+  // W3.5 fixes), the submit button stays disabled until they match.
+  const [photosUploadedCount, setPhotosUploadedCount] = useState(0);
 
   // ----- Restore draft + query-param pre-fill -----
   useEffect(() => {
@@ -290,12 +296,25 @@ export default function QuoteWizardPage() {
             </p>
             <PublicQuoteUploader
               branchCode={form.branchCode || null}
-              onChange={(paths) => patch({ photos: paths })}
-              onProgress={(s) => setPhotosUploading(s.uploading)}
+              onChange={(paths) => {
+                console.warn("[quote] photos received from uploader", {
+                  count: paths.length,
+                });
+                patch({ photos: paths });
+              }}
+              onProgress={(s) => {
+                setPhotosUploading(s.uploading);
+                setPhotosUploadedCount(s.done);
+              }}
             />
             {photosUploading && (
               <p className="text-[11px] font-semibold text-amber-700">
                 กำลังอัปโหลด — กรุณารอจนเสร็จก่อนกด &quot;ถัดไป&quot;
+              </p>
+            )}
+            {!photosUploading && photosUploadedCount > 0 && (
+              <p className="text-[11px] font-semibold text-green-700">
+                อัปโหลดสำเร็จ: {form.photos.length} / {photosUploadedCount} รูป
               </p>
             )}
           </div>
@@ -413,7 +432,14 @@ export default function QuoteWizardPage() {
                 <p className="font-semibold text-gray-900">สรุปคำขอ</p>
                 <ul className="mt-1 space-y-0.5 text-gray-600">
                   <li>บริการ: {categoryLabel(form.serviceCategory)}</li>
-                  <li>รูปแนบ: {form.photos.length} รูป</li>
+                  <li>
+                    รูปแนบ: {form.photos.length} รูป
+                    {photosUploadedCount > form.photos.length && (
+                      <span className="ml-1 text-amber-700">
+                        (รออัปเดต {photosUploadedCount - form.photos.length} รูป)
+                      </span>
+                    )}
+                  </li>
                   <li>
                     สาขา:{" "}
                     {branches.find((b) => b.code === form.branchCode)?.label ??
@@ -450,23 +476,38 @@ export default function QuoteWizardPage() {
               ถัดไป
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={submitting || !form.phone.trim() || photosUploading}
-              className={`rounded-xl px-6 py-2.5 text-sm font-semibold disabled:opacity-50 ${theme.primaryButtonClass}`}
-              title={
-                photosUploading
-                  ? "รออัปโหลดรูปให้เสร็จก่อนส่ง"
-                  : undefined
-              }
-            >
-              {submitting
-                ? "กำลังส่ง..."
-                : photosUploading
-                  ? "รออัปโหลด..."
-                  : "ส่งคำขอ"}
-            </button>
+            (() => {
+              const photosMismatch =
+                photosUploadedCount > form.photos.length;
+              const submitDisabled =
+                submitting ||
+                !form.phone.trim() ||
+                photosUploading ||
+                photosMismatch;
+              return (
+                <button
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={submitDisabled}
+                  className={`rounded-xl px-6 py-2.5 text-sm font-semibold disabled:opacity-50 ${theme.primaryButtonClass}`}
+                  title={
+                    photosUploading
+                      ? "รออัปโหลดรูปให้เสร็จก่อนส่ง"
+                      : photosMismatch
+                        ? "ระบบยังบันทึก path รูปไม่เสร็จ"
+                        : undefined
+                  }
+                >
+                  {submitting
+                    ? "กำลังส่ง..."
+                    : photosUploading
+                      ? "รออัปโหลด..."
+                      : photosMismatch
+                        ? "กำลังบันทึก..."
+                        : "ส่งคำขอ"}
+                </button>
+              );
+            })()
           )}
         </div>
         <p className="mt-2 text-[11px] text-gray-500 text-center">

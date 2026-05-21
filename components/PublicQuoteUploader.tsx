@@ -79,16 +79,27 @@ export function PublicQuoteUploader({
     onProgress({ uploading, done, total: items.length, errors });
   }, [items, onProgress]);
 
-  const emit = useCallback(
-    (list: UploadItem[]) => {
-      onChange(
-        list
-          .filter((i) => i.status === "done" && i.path)
-          .map((i) => i.path as string)
-      );
-    },
-    [onChange]
-  );
+  // Phase W3.5 — emit completed paths to the parent via a real effect,
+  // not from inside the setItems updater. React's docs require updater
+  // functions to be pure; calling setForm from inside one (via
+  // onChange → patch) is officially unsupported and can drop the
+  // side effect under concurrent rendering / batching. A ref-tracked
+  // diff prevents redundant onChange calls when the parent re-renders
+  // without an actual paths change (which would otherwise clobber any
+  // photos restored from localStorage on mount with an empty list).
+  const prevPathsRef = useRef<string>("");
+  useEffect(() => {
+    const paths = items
+      .filter((i) => i.status === "done" && i.path)
+      .map((i) => i.path as string);
+    const serialized = paths.join("|");
+    if (serialized === prevPathsRef.current) return;
+    prevPathsRef.current = serialized;
+    console.warn("[quote-upload] emit paths to parent", {
+      count: paths.length,
+    });
+    onChange(paths);
+  }, [items, onChange]);
 
   const uploadOne = useCallback(
     async (item: UploadItem): Promise<{ path: string | null; error: string | null }> => {
@@ -248,8 +259,9 @@ export function PublicQuoteUploader({
       const target = snapshot.find((i) => i.id === id);
       if (!target) return;
       const { path, error } = await uploadOne(target);
-      setItems((prev) => {
-        const next = prev.map((i) =>
+      // Pure updater — emit is handled by the items-effect above.
+      setItems((prev) =>
+        prev.map((i) =>
           i.id === id
             ? {
                 ...i,
@@ -258,12 +270,10 @@ export function PublicQuoteUploader({
                 error,
               }
             : i
-        );
-        emit(next);
-        return next;
-      });
+        )
+      );
     },
-    [uploadOne, emit]
+    [uploadOne]
   );
 
   const handleFiles = useCallback(
@@ -292,16 +302,10 @@ export function PublicQuoteUploader({
     [items.length, runUpload]
   );
 
-  const remove = useCallback(
-    (id: string) => {
-      setItems((prev) => {
-        const next = prev.filter((i) => i.id !== id);
-        emit(next);
-        return next;
-      });
-    },
-    [emit]
-  );
+  const remove = useCallback((id: string) => {
+    // Pure updater — emit is handled by the items-effect above.
+    setItems((prev) => prev.filter((i) => i.id !== id));
+  }, []);
 
   return (
     <div className="space-y-3">
