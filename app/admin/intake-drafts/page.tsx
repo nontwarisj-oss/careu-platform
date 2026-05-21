@@ -16,12 +16,45 @@ import {
   DRAFT_STATUS_BADGE,
   DRAFT_STATUS_LABELS_TH,
   DRAFT_STATUSES,
-  REVIEW_STATUS_BADGE,
-  REVIEW_STATUS_LABELS_TH,
   type DraftStatus,
   type IntakeDraft,
   type ReviewStatus,
 } from "@/lib/intakeDrafts";
+
+// ---- Phase B UX: 4-phase progress badge ------------------------------
+// Collapses (ai_status, review_status, converted_order_id) into one big
+// state for the queue card. Drives both the primary status pill and the
+// disabled/enabled state of the AI / review / convert buttons below.
+
+type AdminPhase =
+  | "not_classified"
+  | "classified_awaiting_review"
+  | "reviewed"
+  | "converted";
+
+const PHASE_LABEL_TH: Record<AdminPhase, string> = {
+  not_classified: "ยังไม่วิเคราะห์",
+  classified_awaiting_review: "วิเคราะห์แล้ว รอตรวจ",
+  reviewed: "เจ้าของร้านตรวจแล้ว",
+  converted: "สร้างใบงานแล้ว",
+};
+
+const PHASE_BADGE: Record<AdminPhase, string> = {
+  not_classified: "border-gray-300 bg-gray-50 text-gray-700",
+  classified_awaiting_review:
+    "border-indigo-300 bg-indigo-50 text-indigo-800",
+  reviewed: "border-emerald-300 bg-emerald-50 text-emerald-800",
+  converted: "border-gray-400 bg-gray-100 text-gray-700",
+};
+
+function derivePhase(draft: IntakeDraft): AdminPhase {
+  if (draft.reviewStatus === "converted" || draft.convertedOrderId) {
+    return "converted";
+  }
+  if (draft.reviewStatus === "reviewed") return "reviewed";
+  if (draft.aiStatus === "classified") return "classified_awaiting_review";
+  return "not_classified";
+}
 import {
   calculateServiceQuote,
   getActiveServicePrices,
@@ -375,6 +408,10 @@ function DraftCard({
   // draft_code is shown small as the system fallback id (audit only).
   const primaryCode = draft.manualJobCode ?? draft.draftCode;
 
+  // 4-phase progress — drives the primary badge and the AI-copy button
+  // disabled state.
+  const phase = derivePhase(draft);
+
   // Pricing Master row picked by the Approve panel — drives the live quote.
   const pickedService = useMemo(
     () => services.find((s) => s.serviceCode === approveServiceCode) ?? null,
@@ -421,20 +458,21 @@ function DraftCard({
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
+          {/* Primary 4-phase progress: not_classified → classified_awaiting_review
+              → reviewed → converted. Replaces the old review-status pill. */}
           <span
-            className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${
-              DRAFT_STATUS_BADGE[draft.status]
-            }`}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${PHASE_BADGE[phase]}`}
+            title="ความคืบหน้าตรวจสอบ"
+          >
+            {PHASE_LABEL_TH[phase]}
+          </span>
+          {/* Workflow status stays as a small secondary so NEED_CUSTOMER_INFO
+              etc. is still visible — distinct axis from the 4-phase pill. */}
+          <span
+            className={`rounded-full border px-2 py-0 text-[10px] font-semibold ${DRAFT_STATUS_BADGE[draft.status]}`}
+            title="สถานะคิวงาน"
           >
             {DRAFT_STATUS_LABELS_TH[draft.status]}
-          </span>
-          <span
-            className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${
-              REVIEW_STATUS_BADGE[draft.reviewStatus]
-            }`}
-            title="สถานะการตรวจสอบของเจ้าของร้าน"
-          >
-            {REVIEW_STATUS_LABELS_TH[draft.reviewStatus]}
           </span>
         </div>
       </div>
@@ -503,25 +541,58 @@ function DraftCard({
           price or order fields directly - just suggests; the owner must
           confirm via the editor below before convert. */}
       <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50/50 px-3 py-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-800">
             ผลวิเคราะห์เบื้องต้น (AI)
           </p>
-          <button
-            type="button"
-            disabled={busy || !!draft.convertedOrderId}
-            onClick={() => void onClassify()}
-            className="rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
-            title={
-              draft.convertedOrderId
-                ? "Draft นี้แปลงเป็น Order แล้ว ไม่สามารถวิเคราะห์ซ้ำได้"
-                : "เรียก mock AI วิเคราะห์ staff_note"
-            }
-          >
-            {draft.aiStatus === "classified"
-              ? "วิเคราะห์ซ้ำ"
-              : "วิเคราะห์หมวดงาน"}
-          </button>
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              disabled={busy || !!draft.convertedOrderId}
+              onClick={() => void onClassify()}
+              className="rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
+              title={
+                draft.convertedOrderId
+                  ? "Draft นี้แปลงเป็น Order แล้ว ไม่สามารถวิเคราะห์ซ้ำได้"
+                  : "เรียก mock AI วิเคราะห์ staff_note"
+              }
+            >
+              {draft.aiStatus === "classified"
+                ? "วิเคราะห์ซ้ำ"
+                : "วิเคราะห์หมวดงาน"}
+            </button>
+            {/* "ใช้ผล AI นี้เลย" — client-only copy of the AI block into
+                the confirmed-field editor state. The owner still has to
+                press "บันทึกผลตรวจ" to persist. */}
+            <button
+              type="button"
+              disabled={
+                busy ||
+                !!draft.convertedOrderId ||
+                draft.aiStatus !== "classified"
+              }
+              onClick={() => {
+                setConfirmedGarmentType(draft.aiGarmentType ?? "");
+                setConfirmedRepairCategory(draft.aiRepairCategory ?? "");
+                setConfirmedRepairArea(draft.aiRepairArea ?? "");
+                setConfirmedDifficulty(draft.aiDifficulty ?? "");
+                setConfirmedPriceStr(
+                  draft.aiSuggestedPrice !== null &&
+                    draft.aiSuggestedPrice !== undefined
+                    ? String(draft.aiSuggestedPrice)
+                    : ""
+                );
+              }}
+              className="rounded-md border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+              title={
+                draft.aiStatus !== "classified"
+                  ? "ต้องวิเคราะห์ก่อน"
+                  : "คัดลอกค่าจาก AI ลงในช่องที่ต้องยืนยัน — ยังไม่บันทึกจนกว่าจะกด 'บันทึกผลตรวจ'"
+              }
+            >
+              ใช้ผล AI นี้เลย
+            </button>
+          </div>
         </div>
         {draft.aiStatus !== "classified" ? (
           <p className="mt-1 text-[11px] text-indigo-600">
@@ -700,11 +771,23 @@ function DraftCard({
 
       {/* Approve & Create Order — fast path. Price comes from
           Pricing Master via the pure quote engine; the admin only picks
-          service / qty / urgent. */}
+          service / qty / urgent. The confirmed_price the owner saved in
+          the review block is shown here as a reference number so the
+          Pricing Master pick can be sanity-checked against it. */}
       <div className="mt-3 rounded-xl border border-emerald-300 bg-emerald-50/60 px-3 py-2.5">
-        <p className="text-[11px] font-bold text-emerald-900">
-          อนุมัติและสร้างใบงาน (ใช้ราคาจาก Pricing Master)
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[11px] font-bold text-emerald-900">
+            อนุมัติและสร้างใบงาน (ใช้ราคาจาก Pricing Master)
+          </p>
+          {draft.confirmedPrice !== null && draft.confirmedPrice !== undefined && (
+            <span
+              className="rounded-md bg-blue-100 border border-blue-300 px-2 py-0.5 text-[11px] font-bold text-blue-900"
+              title="ราคาเบื้องต้นที่เจ้าของร้านยืนยัน — เปรียบเทียบกับราคา Pricing Master ด้านล่าง"
+            >
+              ราคาเบื้องต้น: ฿{draft.confirmedPrice.toFixed(0)}
+            </span>
+          )}
+        </div>
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
           <select
             value={approveServiceCode}
