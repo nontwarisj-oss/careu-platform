@@ -220,20 +220,18 @@ export function PublicQuoteUploader({
   );
 
   const runUpload = useCallback(
-    async (id: string) => {
+    async (id: string, file: File) => {
       const update = (status: UploadStatus, patch: Partial<UploadItem> = {}) =>
         setItems((prev) =>
           prev.map((i) => (i.id === id ? { ...i, status, ...patch } : i))
         );
 
-      // Grab the current item (synchronous functional read).
-      let snapshot: UploadItem[] = [];
-      setItems((prev) => {
-        snapshot = prev;
-        return prev;
-      });
-      const target = snapshot.find((i) => i.id === id);
-      if (!target) return;
+      // W3.11: the File is passed in directly. The previous version read
+      // it back from state via a setItems-snapshot trick — but a state
+      // updater does NOT run synchronously when another update is already
+      // pending (which it always is, from handleFiles' append), so the
+      // snapshot stayed empty, `target` was undefined, and runUpload
+      // bailed out instantly — freezing the card at "เตรียมไฟล์...".
 
       // ---- compressing ----
       update("compressing", { error: null });
@@ -241,7 +239,7 @@ export function PublicQuoteUploader({
       let compressed: File;
       try {
         compressed = await withTimeout(
-          compressImage(target.file),
+          compressImage(file),
           COMPRESS_TIMEOUT_MS,
           "compress"
         );
@@ -249,7 +247,7 @@ export function PublicQuoteUploader({
         // Compression hung/timed out — fall back to the original and let
         // the HEIC / size checks below decide.
         console.warn("[quote-upload] stage=compressing status=timeout_fallback");
-        compressed = target.file;
+        compressed = file;
       }
 
       // HEIC that couldn't be converted in-browser.
@@ -303,7 +301,7 @@ export function PublicQuoteUploader({
       });
       setItems((prev) => [...prev, ...fresh]);
       for (const it of fresh) {
-        if (it.status === "preparing") void runUpload(it.id);
+        if (it.status === "preparing") void runUpload(it.id, it.file);
       }
       if (inputRef.current) inputRef.current.value = "";
     },
@@ -373,7 +371,7 @@ export function PublicQuoteUploader({
                 {it.status === "error" && (
                   <button
                     type="button"
-                    onClick={() => void runUpload(it.id)}
+                    onClick={() => void runUpload(it.id, it.file)}
                     className="absolute top-1 left-1 rounded bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-white"
                   >
                     ลองใหม่
