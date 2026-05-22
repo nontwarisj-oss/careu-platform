@@ -137,7 +137,12 @@ export function PublicQuoteUploader({
     onChange(paths);
   }, [items, onChange]);
 
-  /** POST the compressed file. Bounded by AbortController + parse race.
+  /** POST the compressed file via XMLHttpRequest. W3.10: fetch +
+   *  AbortController is replaced because the LINE in-app browser can
+   *  silently ignore the abort, leaving the card stuck at "กำลังอัปโหลด"
+   *  forever. XHR's native .timeout is enforced by the webview's network
+   *  layer on every device; an outer withTimeout race is the final
+   *  guarantee the promise always settles — the card can never hang.
    *  Returns a Thai error string (with a short tech code) on failure. */
   const doUpload = useCallback(
     async (file: File): Promise<{ path: string | null; error: string | null }> => {
@@ -146,45 +151,70 @@ export function PublicQuoteUploader({
       if (branchCode) fd.append("branchCode", branchCode);
       fd.append("groupingToken", groupingToken.current);
 
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), UPLOAD_TIMEOUT_MS);
-      let res: Response;
-      try {
-        res = await fetch("/api/public/upload", {
-          method: "POST",
-          body: fd,
-          signal: ctl.signal,
-        });
-      } catch (err) {
-        const aborted = err instanceof DOMException && err.name === "AbortError";
-        return {
-          path: null,
-          error: `อัปโหลดไม่สำเร็จ กรุณาลองใหม่ (${
-            aborted ? "upload_timeout" : "network_error"
-          })`,
-        };
-      } finally {
-        clearTimeout(timer);
-      }
+      const send = new Promise<{ path: string | null; error: string | null }>(
+        (resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/public/upload");
+          xhr.timeout = UPLOAD_TIMEOUT_MS;
+          xhr.responseType = "text";
 
-      let json: { ok?: boolean; reason?: string; path?: string };
+          const fail = (code: string) =>
+            resolve({
+              path: null,
+              error: `อัปโหลดไม่สำเร็จ กรุณาลองใหม่ (${code})`,
+            });
+
+          xhr.ontimeout = () => fail("upload_timeout");
+          xhr.onerror = () => fail("network_error");
+          xhr.onabort = () => fail("upload_aborted");
+          xhr.onload = () => {
+            let json: { ok?: boolean; reason?: string; path?: string };
+            try {
+              json = JSON.parse(xhr.responseText || "{}") as typeof json;
+            } catch {
+              fail(`parse_${xhr.status}`);
+              return;
+            }
+            if (
+              xhr.status < 200 ||
+              xhr.status >= 300 ||
+              !json.ok ||
+              !json.path
+            ) {
+              const reason = json.reason
+                ? `${json.reason} `
+                : "อัปโหลดไม่สำเร็จ ";
+              resolve({
+                path: null,
+                error: `${reason}(server_${xhr.status})`,
+              });
+              return;
+            }
+            resolve({ path: json.path, error: null });
+          };
+
+          try {
+            xhr.send(fd);
+          } catch {
+            fail("send_failed");
+          }
+        }
+      );
+
+      // Final guarantee: even if no XHR event ever fires, this race
+      // settles the promise so the upload card can never hang.
       try {
-        json = await withTimeout(res.json(), PARSE_TIMEOUT_MS, "parse");
+        return await withTimeout(
+          send,
+          UPLOAD_TIMEOUT_MS + PARSE_TIMEOUT_MS,
+          "upload"
+        );
       } catch {
         return {
           path: null,
-          error: `อัปโหลดไม่สำเร็จ กรุณาลองใหม่ (parse_${res.status})`,
+          error: "อัปโหลดไม่สำเร็จ กรุณาลองใหม่ (upload_timeout)",
         };
       }
-
-      if (!res.ok || !json.ok || !json.path) {
-        const reason = json.reason ? `${json.reason} ` : "อัปโหลดไม่สำเร็จ ";
-        return {
-          path: null,
-          error: `${reason}(server_${res.status})`,
-        };
-      }
-      return { path: json.path, error: null };
     },
     [branchCode]
   );
