@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { SERVICE_CATEGORIES } from "@/lib/pricing";
 import { defaultBrandTheme } from "@/lib/publicTheme";
 import { SERVICE_CONTENT } from "@/lib/serviceContent";
 import { canonical } from "@/lib/publicSeo";
+
+// W-B Pricing Source Alignment:
+// The public catalogue reads the SAME master the order/convert flow uses —
+// public.service_price_master, the table the owner maintains via the Google
+// Sheet "Service_Prices" tab. The legacy public.service_prices table is no
+// longer read here, so the website and the real order price can never drift.
 
 export const metadata: Metadata = {
   title: "บริการของเรา",
@@ -15,27 +20,51 @@ export const metadata: Metadata = {
 
 type CatalogRow = {
   service_code: string;
-  display_name: string;
-  description: string | null;
-  category: string;
-  business_type: string;
+  service_name_th: string;
+  category_th: string;
+  quote_mode: string | null;
   base_price: number | string | null;
-  pricing_type: string;
+  min_price: number | string | null;
+  max_price: number | string | null;
+  customer_note_th: string | null;
 };
 
 async function loadServices(): Promise<CatalogRow[]> {
   const admin = getSupabaseAdmin();
   if (!admin) return [];
   const { data } = await admin
-    .from("service_prices")
+    .from("service_price_master")
     .select(
-      "service_code, display_name, description, category, business_type, base_price, pricing_type, is_active, effective_to"
+      "service_code, service_name_th, category_th, quote_mode, base_price, min_price, max_price, customer_note_th, sort_order, active"
     )
-    .eq("is_active", true)
-    .order("category", { ascending: true })
+    .eq("active", true)
+    .order("category_th", { ascending: true })
     .order("sort_order", { ascending: true })
-    .limit(200);
+    .limit(300);
   return (data as CatalogRow[] | null) ?? [];
+}
+
+function toNum(v: number | string | null): number | null {
+  if (v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Customer-facing price label, derived from the master's quote mode. */
+function priceLabel(s: CatalogRow): { text: string; estimate: boolean } {
+  const mode = (s.quote_mode ?? "").toUpperCase();
+  const base = toNum(s.base_price);
+  const min = toNum(s.min_price);
+  const max = toNum(s.max_price);
+  if (mode === "GUIDED_QUOTE" && min !== null && max !== null) {
+    return min === max
+      ? { text: `฿${min.toFixed(0)}`, estimate: false }
+      : { text: `฿${min.toFixed(0)}–${max.toFixed(0)}`, estimate: false };
+  }
+  if (base !== null) {
+    return { text: `เริ่มต้น ฿${base.toFixed(0)}`, estimate: false };
+  }
+  return { text: "ราคาประเมินหน้าร้าน", estimate: true };
 }
 
 export default async function ServicesPage() {
@@ -43,10 +72,12 @@ export default async function ServicesPage() {
   const theme = defaultBrandTheme();
   const byCategory = new Map<string, CatalogRow[]>();
   for (const s of services) {
-    const list = byCategory.get(s.category) ?? [];
+    const cat = s.category_th?.trim() || "อื่น ๆ";
+    const list = byCategory.get(cat) ?? [];
     list.push(s);
-    byCategory.set(s.category, list);
+    byCategory.set(cat, list);
   }
+
   return (
     <div>
       <section className={`bg-gradient-to-r ${theme.accentClass} text-white`}>
@@ -59,7 +90,9 @@ export default async function ServicesPage() {
       </section>
 
       <section className="max-w-6xl mx-auto px-4 py-8 space-y-6">
-        {/* Featured services — link to the SEO detail pages. */}
+        {/* Featured services — link to the SEO detail pages. Price is shown
+            on the catalogue below (live, from the master) — the card keeps
+            only the turnaround so no stale price can appear here. */}
         <div className="rounded-2xl border border-gray-200 bg-white p-5">
           <h2 className="text-lg font-bold text-gray-900">บริการแนะนำ</h2>
           <p className="text-xs text-gray-500 mt-0.5">
@@ -76,7 +109,7 @@ export default async function ServicesPage() {
                   {s.titleTh}
                 </p>
                 <p className="mt-0.5 text-xs text-green-700 font-semibold">
-                  ฿{s.priceRangeThb} · {s.turnaround}
+                  {s.turnaround}
                 </p>
               </Link>
             ))}
@@ -88,50 +121,45 @@ export default async function ServicesPage() {
             ยังไม่มีรายการบริการพร้อมแสดงในขณะนี้
           </div>
         ) : (
-          SERVICE_CATEGORIES.map((cat) => {
-            const items = byCategory.get(cat.code) ?? [];
-            if (items.length === 0) return null;
-            return (
-              <div
-                key={cat.code}
-                className="rounded-2xl border border-gray-200 bg-white p-5"
-              >
-                <h2 className="text-lg font-bold text-gray-900">
-                  {cat.labelTh}
-                </h2>
-                <p className="text-xs text-gray-500 mt-0.5">{cat.labelEn}</p>
-                <ul className="mt-3 grid sm:grid-cols-2 gap-2">
-                  {items.map((s) => (
+          [...byCategory.entries()].map(([category, items]) => (
+            <div
+              key={category}
+              className="rounded-2xl border border-gray-200 bg-white p-5"
+            >
+              <h2 className="text-lg font-bold text-gray-900">{category}</h2>
+              <ul className="mt-3 grid sm:grid-cols-2 gap-2">
+                {items.map((s) => {
+                  const price = priceLabel(s);
+                  return (
                     <li
                       key={s.service_code}
                       className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2"
                     >
                       <p className="font-semibold text-gray-900 text-sm">
-                        {s.display_name}
+                        {s.service_name_th}
                       </p>
-                      {s.description && (
+                      {s.customer_note_th && (
                         <p className="text-xs text-gray-600 mt-0.5 truncate">
-                          {s.description}
+                          {s.customer_note_th}
                         </p>
                       )}
                       <p className="mt-1 text-xs">
-                        {s.pricing_type === "estimate_required" ||
-                        s.base_price === null ? (
-                          <span className="text-yellow-700 font-semibold">
-                            ราคาประเมินหน้าร้าน
-                          </span>
-                        ) : (
-                          <span className="text-green-700 font-semibold">
-                            เริ่มต้น ฿{Number(s.base_price).toFixed(0)}
-                          </span>
-                        )}
+                        <span
+                          className={
+                            price.estimate
+                              ? "text-yellow-700 font-semibold"
+                              : "text-green-700 font-semibold"
+                          }
+                        >
+                          {price.text}
+                        </span>
                       </p>
                     </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })
+                  );
+                })}
+              </ul>
+            </div>
+          ))
         )}
 
         <div className="rounded-2xl border border-green-200 bg-green-50 p-5 text-center">
