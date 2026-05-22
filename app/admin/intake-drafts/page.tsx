@@ -20,6 +20,7 @@ import {
   INTAKE_SOURCE_LABELS_TH,
   type DraftStatus,
   type IntakeDraft,
+  type IntakeDraftMedia,
   type ReviewStatus,
 } from "@/lib/intakeDrafts";
 import { sanitizeJobIdInput } from "@/lib/jobId";
@@ -351,6 +352,108 @@ function IntakeDraftsInner() {
   );
 }
 
+// ---- Media thumbnail (Phase W3.8) ------------------------------------
+// One tile per intake_draft_media row. Image thumbnails are served
+// through the server-side proxy /api/admin/intake-drafts/media/<id>
+// (service-role download, no browser ↔ Storage hop, no signed URL).
+// Render paths:
+//   1. image + proxy loads ........ thumbnail + "เปิดรูป" (opens proxy in new tab)
+//   2. image + onError fires ...... red "โหลดรูปไม่ได้" (links to proxy to read the error)
+//   3. video / audio / file ....... icon + download link (still via signed URL)
+// The proxy URL is the same for <img src> and the new-tab link, so the
+// admin never receives a raw storage path or signed URL for images.
+function MediaThumb({ m }: { m: IntakeDraftMedia }) {
+  const [imgError, setImgError] = useState(false);
+
+  const typeLabel =
+    m.mediaType === "image"
+      ? "รูปภาพประกอบ"
+      : m.mediaType === "video"
+        ? "วิดีโอ"
+        : m.mediaType === "audio"
+          ? "เสียง"
+          : "ไฟล์แนบ";
+  const icon =
+    m.mediaType === "video"
+      ? "🎥"
+      : m.mediaType === "audio"
+        ? "🎵"
+        : "📎";
+
+  // Server-side proxy endpoint for image bytes. Independent of signedUrl.
+  const proxyUrl = `/api/admin/intake-drafts/media/${m.id}`;
+
+  return (
+    <div className="relative h-20 w-20 overflow-hidden rounded-lg border border-gray-200 bg-gray-100">
+      {m.mediaType === "image" && !imgError ? (
+        <a
+          href={proxyUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="เปิดรูป"
+          className="block h-full w-full"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={proxyUrl}
+            alt={typeLabel}
+            loading="lazy"
+            onError={() => {
+              console.warn("[intake-media] proxy image failed to load", {
+                id: m.id,
+                mediaType: m.mediaType,
+              });
+              setImgError(true);
+            }}
+            className="h-full w-full object-cover"
+          />
+          <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-semibold text-white">
+            เปิดรูป
+          </span>
+        </a>
+      ) : m.mediaType === "image" && imgError ? (
+        // Path 2 — proxy couldn't serve the bytes. The link opens the
+        // proxy directly so the operator sees the JSON error body
+        // (404 / 400 / 500 with a Thai reason).
+        <a
+          href={proxyUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="โหลดรูปไม่ได้ — กดเพื่อดูสาเหตุจากเซิร์ฟเวอร์"
+          className="flex h-full w-full flex-col items-center justify-center gap-0.5 border-2 border-dashed border-red-300 bg-red-50 px-1 text-center text-[9px] font-semibold leading-tight text-red-700"
+        >
+          <span className="text-base">⚠️</span>
+          <span>โหลดรูปไม่ได้</span>
+          <span className="text-[8px] font-normal text-red-500 underline">
+            ดูสาเหตุ
+          </span>
+        </a>
+      ) : m.signedUrl ? (
+        // Path 3 — video / audio / file still use the signed read URL.
+        <a
+          href={m.signedUrl}
+          target="_blank"
+          rel="noreferrer"
+          title={typeLabel}
+          className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] font-semibold text-gray-600 hover:bg-gray-200"
+        >
+          <span className="text-xl">{icon}</span>
+          <span>{typeLabel}</span>
+        </a>
+      ) : (
+        // Non-image with no signed URL — nothing to link to.
+        <div
+          title={`${typeLabel} — ไม่สามารถเปิดได้`}
+          className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] text-gray-400"
+        >
+          <span className="text-xl">{icon}</span>
+          <span>{typeLabel}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DraftCard({
   draft,
   busy,
@@ -583,74 +686,9 @@ function DraftCard({
           <p className="text-[11px] italic text-gray-400">ยังไม่มีไฟล์แนบ</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {draft.media.map((m) => {
-              const typeLabel =
-                m.mediaType === "image"
-                  ? "รูปภาพประกอบ"
-                  : m.mediaType === "video"
-                    ? "วิดีโอ"
-                    : m.mediaType === "audio"
-                      ? "เสียง"
-                      : "ไฟล์แนบ";
-              const icon =
-                m.mediaType === "video"
-                  ? "🎥"
-                  : m.mediaType === "audio"
-                    ? "🎵"
-                    : "📎";
-              return (
-                <div
-                  key={m.id}
-                  className="h-20 w-20 overflow-hidden rounded-lg border border-gray-200 bg-gray-100"
-                >
-                  {m.signedUrl && m.mediaType === "image" ? (
-                    <a
-                      href={m.signedUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="เปิดดูรูป"
-                      className="block h-full w-full"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={m.signedUrl}
-                        alt={typeLabel}
-                        className="h-full w-full object-cover"
-                      />
-                    </a>
-                  ) : m.signedUrl ? (
-                    <a
-                      href={m.signedUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={typeLabel}
-                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 text-[10px] font-semibold text-gray-600 hover:bg-gray-200"
-                    >
-                      <span className="text-xl">{icon}</span>
-                      <span>{typeLabel}</span>
-                    </a>
-                  ) : (
-                    // W3.6 — signed-URL creation failed server-side
-                    // (issueReadUrl returned null). Surface a clear
-                    // error label instead of a silent gray box so the
-                    // operator knows the bucket / path / env is the
-                    // issue. The server-side log under
-                    // [read-url] createSignedUrl FAILED has the
-                    // exact reason.
-                    <div
-                      title={`${typeLabel} — ไม่สามารถสร้าง URL ดูรูปได้ (ตรวจสอบ Storage / path)`}
-                      className="flex h-full w-full flex-col items-center justify-center gap-0.5 border-2 border-dashed border-red-300 bg-red-50 px-1 text-center text-[9px] font-semibold leading-tight text-red-700"
-                    >
-                      <span className="text-base">⚠️</span>
-                      <span>ดูรูปไม่ได้</span>
-                      <span className="text-[8px] font-normal text-red-500">
-                        ตรวจ Storage
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {draft.media.map((m) => (
+              <MediaThumb key={m.id} m={m} />
+            ))}
           </div>
         )}
       </div>
