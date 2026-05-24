@@ -21,6 +21,11 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { resolveStaffActor } from "@/lib/staffActor";
 import { canViewAllBranches } from "@/lib/permissions";
 import { classifyIntake } from "@/lib/intakeClassifier";
+import { routeService } from "@/lib/serviceRouter";
+import {
+  buildChecklist,
+  renderAdminChecklist,
+} from "@/lib/guidedQuestionEngine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -132,6 +137,36 @@ export async function POST(req: Request, { params }: Ctx) {
   // Round confidence to 2dp for storage (ai_confidence is numeric(5,2)).
   const confidence2dp = Math.round(suggestion.confidence * 100) / 100;
 
+  // ---- L5: AI Service Router (7-domain) — ADDITIVE to Phase B ----------
+  // Phase B's classifyIntake covers clothing-repair sub-categories only.
+  // The Router classifies the draft into one of the 7 service domains and
+  // writes the result into the *separate* ai_suggested_* columns, so a
+  // non-clothing draft (shoe / watch / luggage / car key) still gets a
+  // correct domain suggestion. Text-only for now; the bot's vision labels
+  // can be fed in as an extra signal in a later step. AI suggests only —
+  // a human still confirms in /admin/intake-drafts (F3).
+  const route = routeService({ text: draft.staff_note });
+
+  // ---- L6: Guided Question Engine — missing-info checklist ------------
+  // Count photos already on the draft so the checklist "have" summary is
+  // accurate. Best-effort: a failed count just yields photoCount 0.
+  let photoCount = 0;
+  const mediaCountRes = await admin
+    .from("intake_draft_media")
+    .select("id", { count: "exact", head: true })
+    .eq("draft_id", draftId);
+  if (!mediaCountRes.error && typeof mediaCountRes.count === "number") {
+    photoCount = mediaCountRes.count;
+  }
+  // filled* slots stay empty here — per-slot tagging is an L7 admin-UI
+  // step. A fresh draft therefore lists every gap (design doc §4).
+  const checklist = buildChecklist(route.serviceDomain, {
+    hasText: Boolean(draft.staff_note && draft.staff_note.trim().length > 0),
+    photoCount,
+    filledFields: [],
+    filledMedia: [],
+  });
+
   const updateRes = await admin
     .from("intake_drafts")
     .update({
@@ -143,6 +178,8 @@ export async function POST(req: Request, { params }: Ctx) {
       ai_difficulty: suggestion.difficulty,
       ai_confidence: confidence2dp,
       ai_suggested_price: suggestion.suggestedPrice,
+      ai_suggested_service_code: route.serviceDomain,
+      ai_suggested_category: route.repairCategory,
       ai_needs_human_review: true,
     })
     .eq("id", draftId);
@@ -162,6 +199,11 @@ export async function POST(req: Request, { params }: Ctx) {
     rule: suggestion.matchedRule,
     category: suggestion.repairCategory,
     confidence: confidence2dp,
+    routerDomain: route.serviceDomain,
+    routerConfidence: route.confidence,
+    routerBand: route.band,
+    checklistMissing: checklist.missing.length,
+    requiredComplete: checklist.requiredComplete,
     actor: actor.uid,
   });
 
@@ -176,6 +218,27 @@ export async function POST(req: Request, { params }: Ctx) {
       summary: suggestion.summary,
       suggested_price: suggestion.suggestedPrice,
       needs_human_review: true,
+    },
+    router: {
+      service_domain: route.serviceDomain,
+      repair_category: route.repairCategory,
+      confidence: route.confidence,
+      band: route.band,
+      signals_used: route.signalsUsed,
+      alternatives: route.alternatives,
+      matched_keywords: route.matchedKeywords,
+    },
+    checklist: {
+      service_domain: checklist.serviceDomain,
+      display_name_th: checklist.displayNameTh,
+      have: checklist.have,
+      missing: checklist.missing,
+      customer_questions: checklist.customerQuestions,
+      required_complete: checklist.requiredComplete,
+      admin_text: renderAdminChecklist(checklist, {
+        draftCode: draft.manual_job_code ?? undefined,
+        confidence: route.confidence,
+      }),
     },
   });
 }

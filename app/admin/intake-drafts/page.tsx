@@ -65,6 +65,10 @@ import {
   type ServicePrice,
 } from "@/lib/servicePriceMaster";
 import { getSimpleStaffAuthHeaders } from "@/lib/simpleStaffSession";
+import {
+  extractLineUserId,
+  composeGuidedQuestionMessage,
+} from "@/lib/lineReplyDraft";
 
 type UpdatePatch = {
   status?: DraftStatus;
@@ -87,6 +91,52 @@ type ClassifySuggestion = {
   summary: string;
   suggested_price: number | null;
   needs_human_review: boolean;
+};
+
+// ---- L5 / L6 / L7: Service Router + Guided Question Engine response ----
+// The classify route returns these blocks alongside `suggestion`. They are
+// not persisted on the draft row — held in card-local state after a
+// classify call so the L7 reply panel can render the checklist + draft the
+// customer questions.
+
+type RouterBlock = {
+  service_domain: string;
+  repair_category: string | null;
+  confidence: number;
+  band: string;
+  signals_used: string[];
+  alternatives: { serviceDomain: string; confidence: number }[];
+  matched_keywords: string[];
+};
+
+type ChecklistItemView = {
+  kind: string;
+  key: string;
+  labelTh: string;
+  required: boolean;
+  questionTh: string;
+};
+
+type ChecklistBlock = {
+  service_domain: string;
+  display_name_th: string;
+  have: string[];
+  missing: ChecklistItemView[];
+  customer_questions: string[];
+  required_complete: boolean;
+  admin_text: string;
+};
+
+type ClassifyResult = {
+  suggestion: ClassifySuggestion;
+  router: RouterBlock | null;
+  checklist: ChecklistBlock | null;
+};
+
+const BAND_LABEL_TH: Record<string, string> = {
+  high: "มั่นใจสูง",
+  medium: "มั่นใจปานกลาง",
+  low: "มั่นใจต่ำ",
 };
 
 export default function IntakeDraftsPage() {
@@ -216,7 +266,7 @@ function IntakeDraftsInner() {
   );
 
   const classifyDraft = useCallback(
-    async (draftId: string): Promise<ClassifySuggestion | null> => {
+    async (draftId: string): Promise<ClassifyResult | null> => {
       setBusyId(draftId);
       try {
         const res = await fetch(
@@ -233,13 +283,19 @@ function IntakeDraftsInner() {
           ok?: boolean;
           error?: string;
           suggestion?: ClassifySuggestion;
+          router?: RouterBlock;
+          checklist?: ChecklistBlock;
         };
         if (!res.ok || !json.ok || !json.suggestion) {
           setError(json.error ?? `วิเคราะห์ไม่สำเร็จ (HTTP ${res.status})`);
           return null;
         }
         await load();
-        return json.suggestion;
+        return {
+          suggestion: json.suggestion,
+          router: json.router ?? null,
+          checklist: json.checklist ?? null,
+        };
       } catch (err) {
         setError(err instanceof Error ? err.message : "วิเคราะห์ไม่สำเร็จ");
         return null;
@@ -248,6 +304,86 @@ function IntakeDraftsInner() {
       }
     },
     [load]
+  );
+
+  // L7 — send an admin-reviewed reply to the customer's LINE. The route
+  // resolves the LINE userId from the draft + audits every attempt.
+  const sendLineReply = useCallback(
+    async (
+      draftId: string,
+      text: string
+    ): Promise<{ ok: boolean; reason: string | null }> => {
+      setBusyId(draftId);
+      try {
+        const res = await fetch(
+          `/api/admin/intake-drafts/${encodeURIComponent(draftId)}/send-line-reply`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...getSimpleStaffAuthHeaders(),
+            },
+            body: JSON.stringify({ text }),
+          }
+        );
+        const json = (await res.json()) as { ok?: boolean; reason?: string };
+        if (!res.ok || !json.ok) {
+          return {
+            ok: false,
+            reason: json.reason ?? `ส่งไม่สำเร็จ (HTTP ${res.status})`,
+          };
+        }
+        return { ok: true, reason: null };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : "ส่งไม่สำเร็จ",
+        };
+      } finally {
+        setBusyId(null);
+      }
+    },
+    []
+  );
+
+  // L8 — send the approved quote (Flex) to the customer's LINE. The price
+  // is whatever the admin typed/reviewed on the card (F3 — AI never prices).
+  const sendQuote = useCallback(
+    async (
+      draftId: string,
+      payload: { price: number; serviceText: string; validityText: string }
+    ): Promise<{ ok: boolean; reason: string | null }> => {
+      setBusyId(draftId);
+      try {
+        const res = await fetch(
+          `/api/admin/intake-drafts/${encodeURIComponent(draftId)}/send-quote`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...getSimpleStaffAuthHeaders(),
+            },
+            body: JSON.stringify(payload),
+          }
+        );
+        const json = (await res.json()) as { ok?: boolean; reason?: string };
+        if (!res.ok || !json.ok) {
+          return {
+            ok: false,
+            reason: json.reason ?? `ส่งไม่สำเร็จ (HTTP ${res.status})`,
+          };
+        }
+        return { ok: true, reason: null };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : "ส่งไม่สำเร็จ",
+        };
+      } finally {
+        setBusyId(null);
+      }
+    },
+    []
   );
 
   const filtered = useMemo(
@@ -336,6 +472,8 @@ function IntakeDraftsInner() {
               services={services}
               onUpdate={updateDraft}
               onClassify={() => classifyDraft(draft.id)}
+              onSendLineReply={(text) => sendLineReply(draft.id, text)}
+              onSendQuote={(payload) => sendQuote(draft.id, payload)}
               onConvert={async (payload) => {
                 const result = await convertDraft(draft.id, payload);
                 if (result.orderId) {
@@ -460,13 +598,23 @@ function DraftCard({
   services,
   onUpdate,
   onClassify,
+  onSendLineReply,
+  onSendQuote,
   onConvert,
 }: {
   draft: IntakeDraft;
   busy: boolean;
   services: ServicePrice[];
   onUpdate: (draftId: string, patch: UpdatePatch) => void;
-  onClassify: () => Promise<ClassifySuggestion | null>;
+  onClassify: () => Promise<ClassifyResult | null>;
+  onSendLineReply: (
+    text: string
+  ) => Promise<{ ok: boolean; reason: string | null }>;
+  onSendQuote: (payload: {
+    price: number;
+    serviceText: string;
+    validityText: string;
+  }) => Promise<{ ok: boolean; reason: string | null }>;
   onConvert: (payload: {
     serviceCode: string;
     qty: number;
@@ -474,6 +622,15 @@ function DraftCard({
   }) => Promise<void>;
 }) {
   const [note, setNote] = useState(draft.adminReviewNote ?? "");
+  // L5/L6/L7 — full classify response (Router + Guided checklist). Held in
+  // card state after a classify call; drives the L7 reply panel below.
+  const [classifyResult, setClassifyResult] = useState<ClassifyResult | null>(
+    null
+  );
+  const runClassify = useCallback(async () => {
+    const result = await onClassify();
+    if (result) setClassifyResult(result);
+  }, [onClassify]);
   // Approve panel state — local to each card so changes don't leak.
   const [approveServiceCode, setApproveServiceCode] = useState<string>("");
   const [approveQty, setApproveQty] = useState<number>(1);
@@ -706,7 +863,7 @@ function DraftCard({
             <button
               type="button"
               disabled={busy || !!draft.convertedOrderId}
-              onClick={() => void onClassify()}
+              onClick={() => void runClassify()}
               className="rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-40"
               title={
                 draft.convertedOrderId
@@ -794,6 +951,20 @@ function DraftCard({
         )}
       </div>
 
+      {/* ----- Phase C / L7: Guided Question + Reply-to-LINE panel --------
+          Renders after a classify call. Shows the L5 Router verdict + the
+          L6 missing-info checklist, and lets the admin send the drafted
+          questions to the customer's LINE (F3 — admin presses send). */}
+      {classifyResult?.checklist && (
+        <GuidedReplyPanel
+          draft={draft}
+          router={classifyResult.router}
+          checklist={classifyResult.checklist}
+          busy={busy}
+          onSendLineReply={onSendLineReply}
+        />
+      )}
+
       {/* ----- Phase B: Owner confirmation editor ------------------------- */}
       <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/40 px-3 py-2">
         <p className="text-[11px] font-bold uppercase tracking-wider text-blue-900">
@@ -872,6 +1043,9 @@ function DraftCard({
           </p>
         )}
       </div>
+
+      {/* ----- Phase C / L8: Send quote (Flex) to LINE ------------------- */}
+      <SendQuotePanel draft={draft} busy={busy} onSendQuote={onSendQuote} />
 
       {/* Review note */}
       <div className="mt-3">
@@ -1054,6 +1228,305 @@ function DraftCard({
         /intake จะกรอกชื่อ/เบอร์/โน้ต/รูป จาก Draft ให้อัตโนมัติ — กรอก Job ID
         + บริการ/ราคา แล้วบันทึก ระบบจะทำเครื่องหมาย “สร้างใบงานแล้ว” ให้เอง
       </p>
+    </div>
+  );
+}
+
+// ---- Phase C / L7: Guided Question + Reply-to-LINE panel ---------------
+// Shows the L5 Service Router verdict + the L6 missing-info checklist, and
+// gives the admin a pre-drafted (editable) message to send to the
+// customer's LINE. F3: the engine only DRAFTS — the admin reviews the text
+// and presses send.
+function GuidedReplyPanel({
+  draft,
+  router,
+  checklist,
+  busy,
+  onSendLineReply,
+}: {
+  draft: IntakeDraft;
+  router: RouterBlock | null;
+  checklist: ChecklistBlock;
+  busy: boolean;
+  onSendLineReply: (
+    text: string
+  ) => Promise<{ ok: boolean; reason: string | null }>;
+}) {
+  // The LINE OA bot records the customer's LINE userId inside staff_note.
+  // No userId → this draft has no LINE thread to reply to.
+  const lineUserId = useMemo(
+    () => extractLineUserId(draft.staffNote),
+    [draft.staffNote]
+  );
+  const [text, setText] = useState<string>(() =>
+    composeGuidedQuestionMessage(
+      draft.customerName,
+      checklist.customer_questions
+    )
+  );
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
+
+  const hasQuestions = checklist.customer_questions.length > 0;
+  const canSend =
+    !busy && !sending && !!lineUserId && text.trim().length > 0;
+
+  const doSend = async () => {
+    setSending(true);
+    setResult(null);
+    const r = await onSendLineReply(text.trim());
+    setResult({
+      ok: r.ok,
+      text: r.ok
+        ? "ส่งคำถามให้ลูกค้าทาง LINE แล้ว ✓"
+        : r.reason ?? "ส่งไม่สำเร็จ",
+    });
+    setSending(false);
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-teal-300 bg-teal-50/50 px-3 py-2">
+      <p className="text-[11px] font-bold uppercase tracking-wider text-teal-800">
+        🧵 AI สั่งงาน Intake — ถาม/ตอบ LINE (L6 · L7)
+      </p>
+
+      {/* L5 Router verdict */}
+      {router && (
+        <p className="mt-1 text-[11px] text-teal-900">
+          <span className="text-teal-500">หมวดบริการ: </span>
+          {checklist.display_name_th}{" "}
+          <span className="text-teal-500">({router.service_domain})</span>
+          {router.repair_category ? ` · ${router.repair_category}` : ""}
+          {" · "}
+          {BAND_LABEL_TH[router.band] ?? router.band} (
+          {router.confidence.toFixed(2)})
+        </p>
+      )}
+
+      {/* L6 checklist */}
+      <div className="mt-1.5 text-[11px] text-teal-900">
+        <p>
+          <span className="text-teal-500">✅ มีแล้ว: </span>
+          {checklist.have.length > 0 ? checklist.have.join(" · ") : "—"}
+        </p>
+        {checklist.missing.length === 0 ? (
+          <p className="font-semibold text-emerald-700">
+            ✔️ ข้อมูลครบสำหรับประเมินราคาแล้ว
+          </p>
+        ) : (
+          <ul className="mt-0.5 space-y-0.5">
+            {checklist.missing.map((it) => (
+              <li key={`${it.kind}:${it.key}`}>
+                {it.required ? "⬜ ยังขาด: " : "▫️ ขอเพิ่ม: "}
+                {it.labelTh}
+              </li>
+            ))}
+          </ul>
+        )}
+        {!checklist.required_complete && (
+          <p className="mt-0.5 text-[10px] text-amber-700">
+            ⚠️ ข้อมูลยังไม่พอตั้งราคา — ส่งคำถามด้านล่างให้ลูกค้าก่อน
+          </p>
+        )}
+      </div>
+
+      {/* L7 reply-to-LINE */}
+      <div className="mt-2 border-t border-teal-200 pt-2">
+        <label
+          htmlFor={`reply-${draft.id}`}
+          className="block text-[11px] font-bold text-teal-800"
+        >
+          ข้อความถึงลูกค้า (แก้ไขได้ก่อนส่ง)
+        </label>
+        <textarea
+          id={`reply-${draft.id}`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={hasQuestions ? 6 : 3}
+          placeholder={
+            hasQuestions
+              ? "ข้อความถึงลูกค้า"
+              : "ไม่มีคำถามที่ AI ร่างไว้ — พิมพ์ข้อความถึงลูกค้าเองได้"
+          }
+          className="mt-1 w-full rounded-md border border-teal-300 bg-white p-2 text-[12px] outline-none focus:ring-2 focus:ring-teal-500"
+        />
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!canSend}
+            onClick={() => void doSend()}
+            className="rounded-md bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-40"
+            title={
+              !lineUserId
+                ? "draft นี้ไม่มี LINE userId — ส่งทาง LINE ไม่ได้"
+                : text.trim().length === 0
+                  ? "ยังไม่มีข้อความ"
+                  : "ส่งข้อความนี้ไปที่ LINE ของลูกค้า"
+            }
+          >
+            {sending ? "กำลังส่ง…" : "ส่งคำถามให้ลูกค้า (LINE)"}
+          </button>
+          {!lineUserId && (
+            <span className="text-[10px] text-gray-500">
+              draft นี้ไม่มี LINE userId — ตอบกลับทาง LINE ไม่ได้
+            </span>
+          )}
+        </div>
+        {result && (
+          <p
+            className={`mt-1 text-[11px] font-semibold ${
+              result.ok ? "text-emerald-700" : "text-red-600"
+            }`}
+          >
+            {result.text}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Phase C / L8: Send quote (Flex) to LINE --------------------------
+// The Owner/Admin enters the approved price + service text and sends the
+// customer a Flex "ใบเสนอราคา". F1/F3: the price is human-entered (pre-fills
+// from the owner-confirmed price, never the AI suggestion) and a human
+// presses send. AI never prices.
+function SendQuotePanel({
+  draft,
+  busy,
+  onSendQuote,
+}: {
+  draft: IntakeDraft;
+  busy: boolean;
+  onSendQuote: (payload: {
+    price: number;
+    serviceText: string;
+    validityText: string;
+  }) => Promise<{ ok: boolean; reason: string | null }>;
+}) {
+  const lineUserId = useMemo(
+    () => extractLineUserId(draft.staffNote),
+    [draft.staffNote]
+  );
+  // Price pre-fills from the OWNER-confirmed price only (F3 — never the AI's).
+  const [priceStr, setPriceStr] = useState<string>(
+    draft.confirmedPrice !== null && draft.confirmedPrice !== undefined
+      ? String(draft.confirmedPrice)
+      : ""
+  );
+  const [serviceText, setServiceText] = useState<string>(
+    draft.confirmedRepairCategory ??
+      draft.confirmedGarmentType ??
+      draft.aiRepairCategory ??
+      ""
+  );
+  const [validityText, setValidityText] = useState<string>(
+    "ราคานี้ยืนยัน 7 วัน"
+  );
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
+    null
+  );
+
+  const priceNum = Number(priceStr);
+  const priceOk =
+    priceStr.trim().length > 0 && Number.isFinite(priceNum) && priceNum >= 0;
+  const canSend =
+    !busy && !sending && !!lineUserId && priceOk && serviceText.trim().length > 0;
+
+  const doSend = async () => {
+    setSending(true);
+    setResult(null);
+    const r = await onSendQuote({
+      price: priceNum,
+      serviceText: serviceText.trim(),
+      validityText: validityText.trim(),
+    });
+    setResult({
+      ok: r.ok,
+      text: r.ok
+        ? "ส่งใบเสนอราคาให้ลูกค้าทาง LINE แล้ว ✓"
+        : r.reason ?? "ส่งไม่สำเร็จ",
+    });
+    setSending(false);
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50/50 px-3 py-2">
+      <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
+        💰 ส่งใบเสนอราคา (Flex) ให้ลูกค้า — L8
+      </p>
+      <div className="mt-1.5 grid grid-cols-1 gap-2">
+        <input
+          type="text"
+          value={serviceText}
+          onChange={(e) => setServiceText(e.target.value)}
+          placeholder="บริการที่เสนอราคา เช่น ตัดขากางเกงยีนส์"
+          className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-amber-500"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={priceStr}
+            onChange={(e) => setPriceStr(e.target.value)}
+            placeholder="ราคา (บาท)"
+            className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-amber-500"
+          />
+          <input
+            type="text"
+            value={validityText}
+            onChange={(e) => setValidityText(e.target.value)}
+            placeholder="เงื่อนไข/อายุราคา"
+            className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[12px] outline-none focus:ring-2 focus:ring-amber-500"
+          />
+        </div>
+      </div>
+      {priceOk && serviceText.trim().length > 0 && (
+        <p className="mt-1.5 text-[11px] text-amber-900">
+          ตัวอย่าง: 💰 ใบเสนอราคา — {serviceText.trim()} ·{" "}
+          <span className="font-bold">{priceNum.toLocaleString()} บาท</span>
+        </p>
+      )}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={!canSend}
+          onClick={() => void doSend()}
+          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-800 disabled:opacity-40"
+          title={
+            !lineUserId
+              ? "draft นี้ไม่มี LINE userId — ส่งทาง LINE ไม่ได้"
+              : !priceOk
+                ? "กรอกราคาให้ถูกต้องก่อน"
+                : serviceText.trim().length === 0
+                  ? "กรอกบริการก่อน"
+                  : "ส่งใบเสนอราคา Flex ไปที่ LINE ของลูกค้า"
+          }
+        >
+          {sending ? "กำลังส่ง…" : "ส่งใบเสนอราคาให้ลูกค้า (LINE)"}
+        </button>
+        {!lineUserId && (
+          <span className="text-[10px] text-gray-500">
+            draft นี้ไม่มี LINE userId — ส่งทาง LINE ไม่ได้
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-[10px] text-amber-700">
+        ราคานี้เป็นราคาที่เจ้าของร้านกรอกเอง — AI ไม่ตั้งราคา (F3)
+      </p>
+      {result && (
+        <p
+          className={`mt-1 text-[11px] font-semibold ${
+            result.ok ? "text-emerald-700" : "text-red-600"
+          }`}
+        >
+          {result.text}
+        </p>
+      )}
     </div>
   );
 }
