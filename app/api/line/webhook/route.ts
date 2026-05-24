@@ -32,7 +32,7 @@ import {
   verifyLineSignature,
   type LineWebhookBody,
 } from "@/lib/lineWebhook";
-import { recordWebhookReceipt } from "@/lib/webhookAudit";
+import { isWebhookReplay, recordWebhookReceipt } from "@/lib/webhookAudit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -73,6 +73,24 @@ export async function POST(req: Request) {
       ok: false,
       reason: "invalid JSON body",
       signatureVerified,
+    });
+  }
+
+  // Replay protection: if this verified event id has already been
+  // ACCEPTED before, LINE re-delivered it (it retries on slow/failed
+  // responses). Acknowledge 200 but do NOT reprocess — re-running the
+  // handler would double-insert audit rows / customer_line_links work.
+  if (signatureVerified && (await isWebhookReplay("line", eventId))) {
+    await recordWebhookReceipt({
+      provider: "line",
+      eventId,
+      signatureValid: true,
+      outcome: "replay",
+    });
+    return NextResponse.json({
+      ok: true,
+      replay: true,
+      signatureVerified: true,
     });
   }
 
